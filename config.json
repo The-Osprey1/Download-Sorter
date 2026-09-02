@@ -47,6 +47,12 @@
     ".dxf"
   ],
   "documents_ignore_dirs": [
+    "Sorter Recovery",
+    "Arduino",
+    "KiCad",
+    "MAXON",
+    ".git",
+    "node_modules",
     "My Games",
     "Saved Games",
     "Steam",

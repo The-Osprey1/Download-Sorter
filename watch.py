@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -14,6 +15,7 @@ from watchdog.observers import Observer
 from sorter import (
     document_roots,
     is_paused,
+    is_quarantined,
     is_under,
     keep_in_documents,
     load_config,
@@ -98,9 +100,10 @@ class DocumentsHandler(FileSystemEventHandler):
             self._queue(event.src_path)
 
 
-def drain(config: dict) -> None:
+def drain(config: dict) -> int:
+    moved_count = 0
     if is_paused():
-        return
+        return moved_count
     if PENDING_DOWNLOADS:
         batch = list(PENDING_DOWNLOADS)
         PENDING_DOWNLOADS.clear()
@@ -108,7 +111,9 @@ def drain(config: dict) -> None:
         for path in batch:
             try:
                 dest = move_file(path, config, batch_id=batch_id)
-                if dest is None and path.exists() and path.is_file():
+                if dest is not None:
+                    moved_count += 1
+                elif path.exists() and path.is_file() and not is_quarantined(path):
                     PENDING_DOWNLOADS.add(path)
             except Exception:
                 logging.exception("Failed sorting %s", path)
@@ -118,18 +123,19 @@ def drain(config: dict) -> None:
         batch_id = uuid.uuid4().hex[:8]
         for path in batch:
             try:
-                relocate_from_documents(path, config, batch_id=batch_id)
+                if relocate_from_documents(path, config, batch_id=batch_id) is not None:
+                    moved_count += 1
             except Exception:
                 logging.exception("Failed relocating %s", path)
+    return moved_count
 
 
-def main() -> int:
-    setup_logging()
-    lock = acquire_single_instance_lock()
-    if not lock:
-        logging.warning("Another instance of DownloadSorter is already running. Exiting.")
-        return 0
+def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
+    """Watch the folders until stop is set. Safe to call from a background thread.
 
+    on_sorted, if given, is called with the number of files moved each time a
+    batch is drained, so a host like the tray app can report activity.
+    """
     config = load_config()
     root = watch_root(config)
     batch_id = uuid.uuid4().hex[:8]
@@ -162,13 +168,29 @@ def main() -> int:
 
     observer.start()
     try:
-        while True:
+        while not (stop is not None and stop.is_set()):
             time.sleep(0.5)
-            drain(config)
+            moved = drain(config)
+            if moved and on_sorted is not None:
+                try:
+                    on_sorted(moved)
+                except Exception:
+                    logging.exception("Activity callback failed")
     except KeyboardInterrupt:
+        pass
+    finally:
         observer.stop()
     observer.join()
     return 0
+
+
+def main() -> int:
+    setup_logging()
+    lock = acquire_single_instance_lock()
+    if not lock:
+        logging.warning("Another instance of DownloadSorter is already running. Exiting.")
+        return 0
+    return run()
 
 
 if __name__ == "__main__":

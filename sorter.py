@@ -19,6 +19,10 @@ LOG_DIR = Path(os.environ.get("LOCALAPPDATA", ROOT)) / "download-sorter"
 LOG_FILE = LOG_DIR / "sorter.log"
 HISTORY_FILE = LOG_DIR / "history.jsonl"
 PAUSE_FILE = LOG_DIR / "paused"
+FAILURE_FILE = LOG_DIR / "failures.json"
+
+# How many times a single file may fail to move before it is left alone.
+MAX_MOVE_ATTEMPTS = 2
 
 def split_folder(folder: str) -> tuple[str, ...]:
     return tuple(part for part in folder.replace("/", "\\").split("\\") if part)
@@ -69,6 +73,98 @@ def record_history(src: Path, dest: Path, batch_id: str = "") -> None:
             f.write(json.dumps(record) + "\n")
     except Exception as exc:
         logging.warning("Failed to write history record: %s", exc)
+
+
+_failure_cache: dict | None = None
+
+
+def load_failures() -> dict:
+    """Files that could not be moved, so we stop retrying them every sweep."""
+    global _failure_cache
+    if _failure_cache is None:
+        try:
+            with FAILURE_FILE.open(encoding="utf-8") as handle:
+                data = json.load(handle)
+            _failure_cache = data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            _failure_cache = {}
+    return _failure_cache
+
+
+def save_failures() -> None:
+    if _failure_cache is None:
+        return
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with FAILURE_FILE.open("w", encoding="utf-8") as handle:
+            json.dump(_failure_cache, handle, indent=2)
+    except OSError as exc:
+        logging.debug("Could not save failure list: %s", exc)
+
+
+def failure_key(path: Path) -> str:
+    try:
+        return str(path.resolve()).lower()
+    except OSError:
+        return str(path).lower()
+
+
+def file_signature(path: Path) -> str:
+    """Cheap fingerprint so an edited file gets a fresh set of attempts."""
+    try:
+        stat = path.stat()
+        return f"{stat.st_size}:{int(stat.st_mtime)}"
+    except OSError:
+        return ""
+
+
+def is_quarantined(path: Path) -> bool:
+    entry = load_failures().get(failure_key(path))
+    if not entry:
+        return False
+    if entry.get("signature") != file_signature(path):
+        clear_failure(path)
+        return False
+    return int(entry.get("count", 0)) >= MAX_MOVE_ATTEMPTS
+
+
+def note_failure(path: Path, exc: Exception) -> int:
+    failures = load_failures()
+    key = failure_key(path)
+    entry = failures.get(key) or {}
+    if entry.get("signature") != file_signature(path):
+        entry = {}
+    count = int(entry.get("count", 0)) + 1
+    failures[key] = {
+        "path": str(path),
+        "count": count,
+        "error": str(exc),
+        "signature": file_signature(path),
+        "last_seen": datetime.now(timezone.utc).isoformat(),
+    }
+    save_failures()
+    return count
+
+
+def clear_failure(path: Path) -> None:
+    failures = load_failures()
+    if failures.pop(failure_key(path), None) is not None:
+        save_failures()
+
+
+def record_move_failure(path: Path, exc: Exception) -> None:
+    """Log a failed move once, then stop retrying it on every future sweep."""
+    count = note_failure(path, exc)
+    if isinstance(exc, OSError) and is_cloud_error(exc):
+        reason = "OneDrive owns this file and is not running"
+    else:
+        reason = str(exc)
+    if count >= MAX_MOVE_ATTEMPTS:
+        logging.warning(
+            "Could not move %s: %s -- leaving it alone until it changes", path, reason
+        )
+    else:
+        logging.warning("Could not move %s: %s", path, reason)
 
 
 def is_old_enough(path: Path, min_age_minutes: float) -> bool:
@@ -145,18 +241,38 @@ FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
 FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
 
 
+# Errors Windows raises for files owned by a cloud sync provider (OneDrive) that
+# is stopped, paused, or otherwise unable to hydrate the file right now.
+CLOUD_PROVIDER_ERRNOS = {362, 363, 364, 365, 366, 367, 368, 369, 370, 371, 372,
+                         373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383,
+                         384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394,
+                         395, 396, 397, 398, 399}
+
+
+def is_cloud_error(exc: OSError) -> bool:
+    """Return True if exc is Windows telling us a cloud provider owns the file."""
+    return getattr(exc, "winerror", None) in CLOUD_PROVIDER_ERRNOS
+
+
 def is_cloud_placeholder(path: Path) -> bool:
-    """Return True if path is an unhydrated cloud-only file on Windows."""
+    """Return True if path is an unhydrated cloud-only file on Windows.
+
+    When OneDrive is paused or not running, os.stat raises instead of reporting
+    attributes. Anything we cannot inspect is treated as untouchable: guessing
+    wrong means moving a file the sync engine still owns.
+    """
     try:
         attrs = os.stat(path).st_file_attributes
-        mask = (
-            FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
-            | FILE_ATTRIBUTE_RECALL_ON_OPEN
-            | FILE_ATTRIBUTE_OFFLINE
-        )
-        return bool(attrs & mask)
-    except (OSError, AttributeError):
+    except AttributeError:
         return False
+    except OSError:
+        return True
+    mask = (
+        FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+        | FILE_ATTRIBUTE_RECALL_ON_OPEN
+        | FILE_ATTRIBUTE_OFFLINE
+    )
+    return bool(attrs & mask)
 
 
 def is_ignored_directory(path: Path, config: dict) -> bool:
@@ -174,6 +290,8 @@ def should_relocate_from_documents(path: Path, config: dict) -> bool:
     if is_incomplete(path, config):
         return False
     if is_cloud_placeholder(path):
+        return False
+    if is_quarantined(path):
         return False
     if is_ignored_directory(path.parent, config):
         return False
@@ -363,6 +481,8 @@ def move_file(
         return None
     if is_cloud_placeholder(path):
         return None
+    if is_quarantined(path):
+        return None
     if is_managed_path(path, from_root, folders) and path.parent != from_root:
         return None
     if path.parent != from_root:
@@ -375,7 +495,8 @@ def move_file(
 
     settle = float(config.get("watch", {}).get("settle_seconds", 2))
     if not dry_run and not wait_until_stable(path, settle):
-        logging.warning("Gave up waiting for %s to finish writing", path.name)
+        note_failure(path, OSError("still being written"))
+        logging.warning("Gave up waiting for %s to finish writing", path)
         return None
 
     folder, reason = explain_classification(path, config)
@@ -403,13 +524,15 @@ def move_file(
         return destination
 
     destination_dir.mkdir(parents=True, exist_ok=True)
+    source = path.resolve()
     try:
         shutil.move(str(path), str(destination))
     except OSError as exc:
-        logging.warning("Could not move %s: %s", path.name, exc)
+        record_move_failure(path, exc)
         return None
-    record_history(path, destination, batch_id)
-    logging.info("Moved %s -> %s", path.name, destination.relative_to(downloads))
+    clear_failure(path)
+    record_history(source, destination, batch_id)
+    logging.info("Moved %s -> %s", source, destination.relative_to(downloads))
     return destination
 
 
@@ -429,7 +552,8 @@ def relocate_from_documents(
 
     settle = float(config.get("watch", {}).get("settle_seconds", 2))
     if not dry_run and not wait_until_stable(path, settle):
-        logging.warning("Gave up waiting for %s to finish writing", path.name)
+        note_failure(path, OSError("still being written"))
+        logging.warning("Gave up waiting for %s to finish writing", path)
         return None
 
     folder, reason = explain_classification(path, config)
@@ -448,15 +572,17 @@ def relocate_from_documents(
         return destination
 
     destination_dir.mkdir(parents=True, exist_ok=True)
+    source = path.resolve()
     try:
         shutil.move(str(path), str(destination))
     except OSError as exc:
-        logging.warning("Could not move %s: %s", path.name, exc)
+        record_move_failure(path, exc)
         return None
-    record_history(path, destination, batch_id)
+    clear_failure(path)
+    record_history(source, destination, batch_id)
     logging.info(
         "Moved from Documents %s -> %s",
-        path.name,
+        source,
         destination.relative_to(downloads),
     )
     return destination
