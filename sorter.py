@@ -382,6 +382,22 @@ def move_file(
     destination_dir = folder_path(downloads, folder)
     destination = unique_destination(destination_dir, path.name)
 
+    if path.suffix.lower() == ".zip" and config.get("watch", {}).get("auto_unpack_3d_zips", True):
+        try:
+            from unzip_3d import is_3d_archive, unpack_3d_archive
+            model_files = is_3d_archive(path)
+            if model_files:
+                if dry_run:
+                    logging.info("[DRY-RUN] Would auto-unpack %d 3D model(s) from %s into 3D Models", len(model_files), path.name)
+                    return destination
+                extracted = unpack_3d_archive(path, config)
+                if extracted:
+                    logging.info("Auto-unpacked %d 3D model file(s) from %s", len(extracted), path.name)
+                    record_history(path, extracted[0], batch_id)
+                    return extracted[0]
+        except Exception as exc:
+            logging.warning("Auto-unpack check failed for %s: %s", path.name, exc)
+
     if dry_run:
         logging.info("[DRY-RUN] Would move %s -> %s (%s)", path.name, destination.relative_to(downloads), reason)
         return destination
