@@ -24,22 +24,8 @@ function Set-RegKey {
 
 Write-Host "Registering Explorer context menus in HKCU..."
 
-# 1. Folder Right-Click: "Sort with DownloadSorter"
-$folderKey = "HKCU:\Software\Classes\Directory\shell\DownloadSorter"
-Set-RegKey -Path $folderKey -Value "Sort with DownloadSorter"
-Set-RegKey -Path $folderKey -Name "Icon" -Value "shell32.dll,43"
-Set-RegKey -Path "$folderKey\command" -Value "`"$python`" `"$sortOnce`" --target `"%1`""
-
-# 2. Folder Background Right-Click: "Sort This Folder" & "Undo Last Sort"
-$bgSortKey = "HKCU:\Software\Classes\Directory\Background\shell\DownloadSorter"
-Set-RegKey -Path $bgSortKey -Value "Sort this folder with DownloadSorter"
-Set-RegKey -Path $bgSortKey -Name "Icon" -Value "shell32.dll,43"
-Set-RegKey -Path "$bgSortKey\command" -Value "`"$python`" `"$sortOnce`" --target `"%V`""
-
-$bgUndoKey = "HKCU:\Software\Classes\Directory\Background\shell\DownloadSorterUndo"
-Set-RegKey -Path $bgUndoKey -Value "Undo Last Sort"
-Set-RegKey -Path $bgUndoKey -Name "Icon" -Value "shell32.dll,238"
-Set-RegKey -Path "$bgUndoKey\command" -Value "powershell.exe -NoExit -Command & '`"$python`"' '`"$undoSort`"'"
+# Context menus are strictly scoped to specific file types (.3mf, .gcode, .bgcode, .zip)
+# to avoid cluttering Windows Explorer or risking accidental clicks on non-download folders.
 
 # 3. .3mf / .gcode / .bgcode: "Inspect 3D Print Info"
 foreach ($ext in @(".3mf", ".gcode", ".bgcode")) {

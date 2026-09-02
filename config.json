@@ -2,8 +2,8 @@
   "watch": {
     "folder": "${USERPROFILE}\\Downloads",
     "settle_seconds": 2.0,
-    "min_age_minutes": 0,
-    "auto_unpack_3d_zips": true
+    "min_age_minutes": 2,
+    "auto_unpack_3d_zips": false
   },
   "document_sources": [
     "${USERPROFILE}\\Documents",
