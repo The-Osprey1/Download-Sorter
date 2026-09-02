@@ -1,0 +1,108 @@
+{
+  "watch": {
+    "folder": "${USERPROFILE}\\Downloads",
+    "settle_seconds": 2.0,
+    "min_age_minutes": 0
+  },
+  "document_sources": [
+    "${USERPROFILE}\\Documents",
+    "${USERPROFILE}\\OneDrive\\Documents"
+  ],
+  "documents_keep_extensions": [
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".xlsm",
+    ".csv",
+    ".odt",
+    ".ods",
+    ".rtf"
+  ],
+  "documents_relocate_extensions": [
+    ".stl",
+    ".3mf",
+    ".obj",
+    ".step",
+    ".stp",
+    ".iges",
+    ".igs",
+    ".gcode",
+    ".bgcode",
+    ".3ds",
+    ".fbx",
+    ".blend",
+    ".glb",
+    ".gltf",
+    ".f3d",
+    ".f3z",
+    ".ipt",
+    ".iam",
+    ".sldprt",
+    ".sldasm",
+    ".slddrw",
+    ".dwg",
+    ".dxf"
+  ],
+  "documents_ignore_dirs": [
+    "My Games",
+    "Saved Games",
+    "Steam",
+    "Electronic Arts",
+    "EA Games",
+    "Paradox Interactive",
+    "Rockstar Games",
+    "Adobe",
+    "PowerToys",
+    "SOLIDCast",
+    "SOLIDCast Projects"
+  ],
+  "ignore_extensions": [
+    ".crdownload",
+    ".part",
+    ".partial",
+    ".tmp",
+    ".download",
+    ".opdownload"
+  ],
+  "ignore_names": [
+    "desktop.ini",
+    "thumbs.db"
+  ],
+  "keyword_rules": [
+    {
+      "folder": "Documents\\School",
+      "match": [
+        "transcript",
+        "homework",
+        "assignment",
+        "syllabus",
+        "calpoly",
+        "cal poly",
+        "pomona"
+      ],
+      "extensions": [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt"]
+    }
+  ],
+  "extension_rules": [
+    { "folder": "3D Models\\STL", "extensions": [".stl"] },
+    { "folder": "3D Models\\3MF", "extensions": [".3mf"] },
+    { "folder": "3D Models\\OBJ", "extensions": [".obj"] },
+    { "folder": "3D Models\\STEP", "extensions": [".step", ".stp", ".iges", ".igs"] },
+    { "folder": "3D Models\\Print files", "extensions": [".gcode", ".bgcode"] },
+    { "folder": "3D Models\\Other", "extensions": [".3ds", ".fbx", ".blend", ".glb", ".gltf"] },
+    { "folder": "3D Models\\CAD", "extensions": [".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf"] },
+    { "folder": "Documents\\PDFs", "extensions": [".pdf"] },
+    { "folder": "Documents\\Word", "extensions": [".doc", ".docx", ".odt", ".rtf"] },
+    { "folder": "Documents\\Text", "extensions": [".txt", ".md"] },
+    { "folder": "Spreadsheets", "extensions": [".xls", ".xlsx", ".csv", ".ods"] },
+    { "folder": "Images", "extensions": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".svg", ".bmp", ".tif", ".tiff"] },
+    { "folder": "Videos", "extensions": [".mp4", ".mov", ".mkv", ".avi", ".webm"] },
+    { "folder": "Audio", "extensions": [".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"] },
+    { "folder": "Archives", "extensions": [".zip", ".rar", ".7z", ".tar", ".gz"] },
+    { "folder": "Installers", "extensions": [".exe", ".msi", ".msix"] },
+    { "folder": "Code", "extensions": [".py", ".js", ".ts", ".cpp", ".h", ".cs", ".json", ".html", ".css"] }
+  ],
+  "default_folder": "Other"
+}
