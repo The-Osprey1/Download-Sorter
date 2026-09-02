@@ -61,6 +61,66 @@ Restore moved files back to their original locations:
 .\.venv\Scripts\python.exe toggle_pause.py --status
 ```
 
+### Sort any specific folder
+
+```powershell
+.\.venv\Scripts\python.exe sort_once.py --target "C:\path\to\folder"
+```
+
+## Power Tools & Companion Utilities
+
+### 1. 3D Print / Slicer File Inspector (`gcode_peek.py`)
+Quickly inspect `.3mf`, `.gcode`, and `.bgcode` files from the terminal or right-click:
+
+```powershell
+# Inspect latest 3D file in Downloads
+.\.venv\Scripts\python.exe gcode_peek.py --latest
+
+# Inspect a specific file
+.\.venv\Scripts\python.exe gcode_peek.py "path\to\model.3mf"
+
+# Extract and view embedded thumbnail render
+.\.venv\Scripts\python.exe gcode_peek.py "path\to\model.3mf" --thumb
+```
+
+### 2. 3D Zip Flattener (`unzip_3d.py`)
+Unpack MakerWorld / Printables / Thingiverse archives without nested folder clutter:
+
+```powershell
+# Unpack a specific 3D model zip
+.\.venv\Scripts\python.exe unzip_3d.py "path\to\model.zip"
+
+# Unpack all 3D model zips sitting in Downloads
+.\.venv\Scripts\python.exe unzip_3d.py --all
+```
+
+### 3. Safe Janitor (`clean_old.py`)
+Clean out old installers and archives by sending them to your **Windows Recycle Bin** (never permanent deletion):
+
+```powershell
+# Preview what would be recycled (older than 30 days)
+.\.venv\Scripts\python.exe clean_old.py --dry-run
+
+# Run cleanup for files older than 60 days
+.\.venv\Scripts\python.exe clean_old.py --days 60
+```
+
+### 4. Windows File Explorer Context Menu Shortcuts
+Add right-click options in Windows Explorer (installed in user profile, no admin needed):
+
+```powershell
+# Install right-click shortcuts
+powershell -ExecutionPolicy Bypass -File .\install_context_menu.ps1
+
+# Remove right-click shortcuts
+powershell -ExecutionPolicy Bypass -File .\uninstall_context_menu.ps1
+```
+
+* Right-click any folder $\to$ **"Sort with DownloadSorter"**
+* Right-click folder background $\to$ **"Undo Last Sort"**
+* Right-click `.3mf` / `.gcode` $\to$ **"Inspect 3D Print Info (gcode-peek)"**
+* Right-click `.zip` $\to$ **"Extract 3D Models to Downloads"**
+
 ## Background Watch + Auto-start at Login
 
 ```powershell
@@ -73,4 +133,5 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_startup.ps1
 
 * Logs: `%LOCALAPPDATA%\download-sorter\sorter.log` (automatically rotated)
 * History: `%LOCALAPPDATA%\download-sorter\history.jsonl`
+
 

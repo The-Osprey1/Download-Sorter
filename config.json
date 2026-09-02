@@ -72,6 +72,18 @@
   ],
   "keyword_rules": [
     {
+      "folder": "Documents\\School\\IME 3311",
+      "match": [
+        "ime3311",
+        "ime 3311",
+        "solidcast",
+        "casting congress",
+        "metal casting",
+        "foundry"
+      ],
+      "extensions": [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".rtf", ".odt"]
+    },
+    {
       "folder": "Documents\\School",
       "match": [
         "transcript",

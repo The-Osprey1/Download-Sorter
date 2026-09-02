@@ -352,8 +352,10 @@ def move_file(
     dry_run: bool = False,
     batch_id: str = "",
     check_age: bool = True,
+    source_root: Path | None = None,
 ) -> Path | None:
-    root = watch_root(config)
+    downloads = watch_root(config)
+    from_root = source_root or downloads
     folders = collect_category_folders(config)
     if not path.exists() or not path.is_file():
         return None
@@ -361,9 +363,9 @@ def move_file(
         return None
     if is_cloud_placeholder(path):
         return None
-    if is_managed_path(path, root, folders) and path.parent != root:
+    if is_managed_path(path, from_root, folders) and path.parent != from_root:
         return None
-    if path.parent != root:
+    if path.parent != from_root:
         return None
 
     if check_age:
@@ -377,11 +379,11 @@ def move_file(
         return None
 
     folder, reason = explain_classification(path, config)
-    destination_dir = folder_path(root, folder)
+    destination_dir = folder_path(downloads, folder)
     destination = unique_destination(destination_dir, path.name)
 
     if dry_run:
-        logging.info("[DRY-RUN] Would move %s -> %s (%s)", path.name, destination.relative_to(root), reason)
+        logging.info("[DRY-RUN] Would move %s -> %s (%s)", path.name, destination.relative_to(downloads), reason)
         return destination
 
     destination_dir.mkdir(parents=True, exist_ok=True)
@@ -391,7 +393,7 @@ def move_file(
         logging.warning("Could not move %s: %s", path.name, exc)
         return None
     record_history(path, destination, batch_id)
-    logging.info("Moved %s -> %s", path.name, destination.relative_to(root))
+    logging.info("Moved %s -> %s", path.name, destination.relative_to(downloads))
     return destination
 
 
@@ -444,17 +446,22 @@ def relocate_from_documents(
     return destination
 
 
-def sort_existing(config: dict, dry_run: bool = False, batch_id: str = "") -> int:
+def sort_existing(
+    config: dict,
+    dry_run: bool = False,
+    batch_id: str = "",
+    target_dir: Path | None = None,
+) -> int:
+    downloads = watch_root(config)
     if not dry_run:
-        root = ensure_tree(config)
-    else:
-        root = watch_root(config)
+        ensure_tree(config)
+    root = target_dir.resolve() if target_dir else downloads
     if not root.exists():
         return 0
     moved = 0
     for item in list(root.iterdir()):
         if item.is_file():
-            if move_file(item, config, dry_run=dry_run, batch_id=batch_id, check_age=False):
+            if move_file(item, config, dry_run=dry_run, batch_id=batch_id, check_age=False, source_root=root):
                 moved += 1
     return moved
 
