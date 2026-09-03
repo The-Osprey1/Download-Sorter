@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 import os
 import re
 import shutil
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -396,6 +397,23 @@ def explain_classification(path: Path, config: dict) -> tuple[str, str]:
     return default, "default rule"
 
 
+def are_files_identical(src: Path, target: Path) -> bool:
+    """Compare file size and content to detect exact duplicate downloads."""
+    try:
+        if not src.is_file() or not target.is_file():
+            return False
+        if src.stat().st_size != target.stat().st_size:
+            return False
+        with open(src, "rb") as f1, open(target, "rb") as f2:
+            while chunk1 := f1.read(65536):
+                chunk2 = f2.read(65536)
+                if chunk1 != chunk2:
+                    return False
+        return True
+    except OSError:
+        return False
+
+
 def unique_destination(directory: Path, name: str) -> Path:
     candidate = directory / name
     if not candidate.exists():
@@ -412,6 +430,32 @@ def unique_destination(directory: Path, name: str) -> Path:
 
 def is_file_locked(path: Path) -> bool:
     """Return True if another process holds an exclusive write/share lock on path."""
+    if sys.platform == "win32":
+        import ctypes
+        GENERIC_READ = 0x80000000
+        GENERIC_WRITE = 0x40000000
+        OPEN_EXISTING = 3
+        FILE_SHARE_NONE = 0
+        INVALID_HANDLE = ctypes.c_void_p(-1).value
+        try:
+            handle = ctypes.windll.kernel32.CreateFileW(
+                str(path.resolve()),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_NONE,
+                None,
+                OPEN_EXISTING,
+                0,
+                None,
+            )
+            if handle == INVALID_HANDLE or handle == -1:
+                err = ctypes.windll.kernel32.GetLastError()
+                if err in (5, 32, 33):  # Access denied, Sharing violation, Lock violation
+                    return True
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return False
+        except Exception:
+            return False
     try:
         with open(path, "r+b"):
             return False
@@ -421,47 +465,19 @@ def is_file_locked(path: Path) -> bool:
         return False
 
 
-def wait_until_stable(path: Path, settle_seconds: float) -> bool:
+def is_file_ready_to_move(path: Path, settle_seconds: float) -> bool:
+    """Non-blocking check: True only if file is stable and not actively being written."""
+    if not path.exists() or not path.is_file():
+        return False
     if is_cloud_placeholder(path):
         return False
     if is_file_locked(path):
-        time.sleep(0.25)
-    else:
-        try:
-            age = time.time() - path.stat().st_mtime
-            if age >= settle_seconds:
-                return True
-        except OSError:
-            pass
-
-    last_size = -1
-    stable_since: float | None = None
-    deadline = time.time() + 120
-    while time.time() < deadline:
-        if not path.exists() or not path.is_file():
-            return False
-        if is_cloud_placeholder(path):
-            return False
-        if is_file_locked(path):
-            time.sleep(0.5)
-            stable_since = None
-            continue
-        try:
-            size = path.stat().st_size
-        except OSError:
-            time.sleep(0.25)
-            continue
-        now = time.time()
-        if size == last_size:
-            if stable_since is None:
-                stable_since = now
-            elif now - stable_since >= settle_seconds:
-                return True
-        else:
-            last_size = size
-            stable_since = None
-        time.sleep(0.25)
-    return False
+        return False
+    try:
+        age = time.time() - path.stat().st_mtime
+        return age >= settle_seconds
+    except OSError:
+        return False
 
 
 def move_file(
@@ -493,14 +509,26 @@ def move_file(
         if not is_old_enough(path, min_age):
             return None
 
-    settle = float(config.get("watch", {}).get("settle_seconds", 2))
-    if not dry_run and not wait_until_stable(path, settle):
-        note_failure(path, OSError("still being written"))
-        logging.warning("Gave up waiting for %s to finish writing", path)
+    settle = float(config.get("watch", {}).get("settle_seconds", 1.5))
+    if not dry_run and not is_file_ready_to_move(path, settle):
         return None
 
     folder, reason = explain_classification(path, config)
     destination_dir = folder_path(downloads, folder)
+    primary_target = destination_dir / path.name
+
+    # Intelligent Deduplication: if exact duplicate already exists in target folder, prune redundant download
+    if primary_target.exists() and are_files_identical(path, primary_target):
+        if dry_run:
+            logging.info("[DRY-RUN] Exact duplicate already exists in %s; would delete download %s", folder, path.name)
+            return primary_target
+        try:
+            path.unlink()
+            logging.info("Exact duplicate already exists at %s; removed download %s", primary_target, path.name)
+            return primary_target
+        except OSError as exc:
+            logging.warning("Could not remove redundant duplicate %s: %s", path.name, exc)
+
     destination = unique_destination(destination_dir, path.name)
 
     if path.suffix.lower() == ".zip" and config.get("watch", {}).get("auto_unpack_3d_zips", True):
@@ -550,10 +578,8 @@ def relocate_from_documents(
     if not any(is_under(path, source) for source in document_roots(config)):
         return None
 
-    settle = float(config.get("watch", {}).get("settle_seconds", 2))
-    if not dry_run and not wait_until_stable(path, settle):
-        note_failure(path, OSError("still being written"))
-        logging.warning("Gave up waiting for %s to finish writing", path)
+    settle = float(config.get("watch", {}).get("settle_seconds", 1.5))
+    if not dry_run and not is_file_ready_to_move(path, settle):
         return None
 
     folder, reason = explain_classification(path, config)
@@ -618,3 +644,89 @@ def sort_existing_documents(config: dict, dry_run: bool = False, batch_id: str =
             if relocate_from_documents(item, config, dry_run=dry_run, batch_id=batch_id):
                 moved += 1
     return moved
+
+
+def reclassify_misplaced_file(
+    path: Path,
+    config: dict,
+    dry_run: bool = False,
+    batch_id: str = "",
+) -> Path | None:
+    """Auto-correct a file saved or exported directly into the wrong managed category bucket."""
+    downloads = watch_root(config)
+    if not path.exists() or not path.is_file():
+        return None
+    if is_incomplete(path, config):
+        return None
+    if is_cloud_placeholder(path):
+        return None
+    if is_quarantined(path):
+        return None
+
+    try:
+        rel = path.resolve().relative_to(downloads)
+    except ValueError:
+        return None
+
+    # Determine current folder relative to Downloads
+    parent_rel = path.parent.resolve().relative_to(downloads)
+    current_folder = str(parent_rel).replace("/", "\\")
+
+    target_folder, reason = explain_classification(path, config)
+    target_folder = target_folder.replace("/", "\\")
+
+    # Check if current parent is a managed category folder
+    category_folders = [f.replace("/", "\\").lower() for f in collect_category_folders(config)]
+    default_folder = config.get("default_folder", "Other").lower()
+
+    if current_folder.lower() not in category_folders:
+        # If a recognized file landed directly in an unmanaged subfolder (e.g. browser remembered an old folder), rescue it!
+        if len(rel.parts) == 2 and target_folder.lower() != default_folder:
+            pass
+        else:
+            return None
+
+    # If already in the right folder, nothing to do
+    if current_folder.lower() == target_folder.lower():
+        return None
+
+    settle = float(config.get("watch", {}).get("settle_seconds", 1.5))
+    if not dry_run and not is_file_ready_to_move(path, settle):
+        return None
+
+    destination_dir = folder_path(downloads, target_folder)
+    destination = unique_destination(destination_dir, path.name)
+
+    if dry_run:
+        logging.info("[DRY-RUN] Would reclassify %s -> %s (%s)", path.name, destination.relative_to(downloads), reason)
+        return destination
+
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    source = path.resolve()
+    try:
+        shutil.move(str(source), str(destination))
+    except OSError as exc:
+        record_move_failure(path, exc)
+        return None
+
+    clear_failure(path)
+    record_history(source, destination, batch_id)
+    logging.info("Auto-corrected misplaced file: %s from '%s' -> '%s'", source.name, current_folder, target_folder)
+    return destination
+
+
+def sort_existing_misplaced(config: dict, dry_run: bool = False, batch_id: str = "") -> int:
+    """Sweep direct children of all managed category folders for misplaced files."""
+    downloads = watch_root(config)
+    category_folders = collect_category_folders(config)
+    moved = 0
+    for rel_folder in category_folders:
+        folder = folder_path(downloads, rel_folder)
+        if folder.exists() and folder.is_dir():
+            for item in list(folder.iterdir()):
+                if item.is_file():
+                    if reclassify_misplaced_file(item, config, dry_run=dry_run, batch_id=batch_id):
+                        moved += 1
+    return moved
+
+

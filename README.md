@@ -121,6 +121,17 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_context_menu.ps1
 * Right-click `.3mf` / `.gcode` $\to$ **"Inspect 3D Print Info (gcode-peek)"**
 * Right-click `.zip` $\to$ **"Extract 3D Models to Downloads"**
 
+### 5. Interactive Top-Right Notification Ribbon (`ribbon_popup.py`)
+Whenever an incoming download lands and organizes into its target folder, a sleek notification card pops up at the top-right of your screen:
+* **One-Click Reveal:** Click anywhere on the ribbon to open Windows File Explorer with that exact file highlighted.
+* **Vertical Stacking:** Simultaneous downloads automatically stack neatly down the right margin without overlapping.
+* **Per-Monitor High-DPI:** Crystal-sharp subpixel typography matching Windows scaling.
+* **Dynamic Category Accents:** Colors adjust to file types based on the **Devyn Personal Suite** theme tokens (`suite_theme.py`).
+* **Test ribbon manually:**
+  ```powershell
+  .\.venv\Scripts\python.exe ribbon_popup.py --test
+  ```
+
 ## Background Watch + Auto-start at Login
 
 ```powershell

@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 import uuid
 
-from sorter import load_config, setup_logging, sort_existing, sort_existing_documents
+from sorter import (
+    load_config,
+    setup_logging,
+    sort_existing,
+    sort_existing_documents,
+    sort_existing_misplaced,
+)
 
 
 def main() -> int:
@@ -32,12 +39,14 @@ def main() -> int:
     target_dir = Path(args.target) if args.target else None
     downloads_moved = sort_existing(config, dry_run=args.dry_run, batch_id=batch_id, target_dir=target_dir)
     documents_moved = 0 if target_dir else sort_existing_documents(config, dry_run=args.dry_run, batch_id=batch_id)
+    misplaced_moved = 0 if target_dir else sort_existing_misplaced(config, dry_run=args.dry_run, batch_id=batch_id)
 
+    total = downloads_moved + documents_moved + misplaced_moved
     if args.dry_run:
-        print(f"\n[DRY-RUN] Simulated sort: Would move {downloads_moved} Downloads file(s) and {documents_moved} Documents file(s).")
+        print(f"\n[DRY-RUN] Simulated sort: Would move {downloads_moved} Downloads file(s), {documents_moved} Documents file(s), and {misplaced_moved} misplaced category file(s).")
     else:
-        print(f"Moved {downloads_moved} Downloads file(s) and {documents_moved} Documents file(s). [Batch: {batch_id}]")
-        if downloads_moved + documents_moved > 0:
+        print(f"Moved {downloads_moved} Downloads file(s), {documents_moved} Documents file(s), and {misplaced_moved} misplaced file(s). [Batch: {batch_id}]")
+        if total > 0:
             print("Tip: To undo these moves, run: python sort_undo.py")
     return 0
 

@@ -1,8 +1,8 @@
 {
   "watch": {
     "folder": "${USERPROFILE}\\Downloads",
-    "settle_seconds": 2.0,
-    "min_age_minutes": 2,
+    "settle_seconds": 1.5,
+    "min_age_minutes": 0,
     "auto_unpack_3d_zips": false
   },
   "document_sources": [
@@ -44,10 +44,14 @@
     ".sldasm",
     ".slddrw",
     ".dwg",
-    ".dxf"
+    ".dxf",
+    ".nc",
+    ".tap",
+    ".ngc"
   ],
   "documents_ignore_dirs": [
     "Sorter Recovery",
+    "CAD & 3D Projects",
     "Arduino",
     "KiCad",
     "MAXON",
@@ -109,9 +113,9 @@
     { "folder": "3D Models\\3MF", "extensions": [".3mf"] },
     { "folder": "3D Models\\OBJ", "extensions": [".obj"] },
     { "folder": "3D Models\\STEP", "extensions": [".step", ".stp", ".iges", ".igs"] },
-    { "folder": "3D Models\\Print files", "extensions": [".gcode", ".bgcode"] },
     { "folder": "3D Models\\Other", "extensions": [".3ds", ".fbx", ".blend", ".glb", ".gltf"] },
     { "folder": "3D Models\\CAD", "extensions": [".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf"] },
+    { "folder": "Code\\Gcode", "extensions": [".nc", ".tap", ".ngc", ".gcode", ".bgcode"] },
     { "folder": "Documents\\PDFs", "extensions": [".pdf"] },
     { "folder": "Documents\\Word", "extensions": [".doc", ".docx", ".odt", ".rtf"] },
     { "folder": "Documents\\Text", "extensions": [".txt", ".md"] },
