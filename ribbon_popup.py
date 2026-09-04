@@ -287,10 +287,26 @@ class RibbonPopup:
         self.root.attributes("-topmost", True)
         self.root.config(bg=BORDER_COLOR)
 
-        try:
-            self.root.attributes("-alpha", float(RIBBON.get("opacity", 0.88)))
-        except tk.TclError:
-            pass
+        # Enable DWM rounded corners + native drop shadow on Windows 11
+        if sys.platform == "win32":
+            try:
+                self.root.update_idletasks()
+                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+                # DWMWA_WINDOW_CORNER_PREFERENCE (33) = DWMWCP_ROUND (2)
+                pref = ctypes.c_int(2)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+                # Enable DWM shadow via DwmExtendFrameIntoClientArea
+                class MARGINS(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_int), ("right", ctypes.c_int),
+                                ("top", ctypes.c_int), ("bottom", ctypes.c_int)]
+                m = MARGINS(1, 1, 1, 1)
+                ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(m))
+            except Exception:
+                pass
+
+        # Keep window fully opaque for crisp text rendering
+        # (previous alpha=0.88 washed out ALL content including text)
 
         # Calculate DPI-scaled dimensions
         try:
@@ -334,7 +350,7 @@ class RibbonPopup:
 
     def _build_ui(self, scale: float) -> None:
         pad_x = int(14 * scale)
-        pad_y = int(9 * scale)
+        pad_y = int(10 * scale)
         stripe_w = max(4, int(4 * scale))
 
         self.container = tk.Frame(self.root, bg=BG_COLOR, cursor="hand2")
@@ -349,7 +365,7 @@ class RibbonPopup:
         self.status = tk.Label(
             self.container,
             text="✓",
-            font=(FONT_FAMILY, 15, "bold"),
+            font=(FONT_FAMILY, 14, "bold"),
             fg=self.accent_color,
             bg=BG_COLOR,
             width=2,
@@ -366,14 +382,15 @@ class RibbonPopup:
         self.top_row.pack(fill="x")
 
         folder_upper = self.folder_disp.upper()
-        tag_text = f"DOWNLOAD SORTER  ·  {folder_upper}"
+        # Streamlined tag: avoid repeating folder name
+        tag_text = f"SORTED  ·  {folder_upper}"
         if len(tag_text) > 34:
-            tag_text = "DOWNLOAD SORTER  ·  SORTED"
+            tag_text = "SORTED"
 
         self.tag_lbl = tk.Label(
             self.top_row,
             text=tag_text,
-            font=(FONT_FAMILY, 8, "bold"),
+            font=(FONT_FAMILY, 9, "bold"),
             fg=self.accent_color,
             bg=BG_COLOR,
             anchor="w",
@@ -402,7 +419,7 @@ class RibbonPopup:
         self.name_lbl = tk.Label(
             self.content,
             text=fname,
-            font=(FONT_FAMILY, 10, "bold"),
+            font=(FONT_FAMILY, 11, "bold"),
             fg=TEXT_MAIN,
             bg=BG_COLOR,
             anchor="w",
@@ -412,8 +429,8 @@ class RibbonPopup:
         # Bottom row: Click action hint
         self.action_lbl = tk.Label(
             self.content,
-            text=f"Filed in {self.folder_disp}  ·  Click to reveal ›",
-            font=(FONT_FAMILY, 8),
+            text=f"Click to open in Explorer ›",
+            font=(FONT_FAMILY, 9),
             fg=TEXT_MUTED,
             bg=BG_COLOR,
             anchor="w",
@@ -426,7 +443,8 @@ class RibbonPopup:
             widget.bind("<Enter>", self.on_enter)
             widget.bind("<Leave>", self.on_leave)
 
-        self.progress = tk.Frame(self.container, bg=self.accent_color, height=max(2, int(2 * scale)))
+        # Rounded progress bar with proper height
+        self.progress = tk.Frame(self.container, bg=self.accent_color, height=max(3, int(3 * scale)))
         self.progress.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
 
     def _schedule_dismiss(self) -> None:
