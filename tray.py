@@ -40,9 +40,10 @@ ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 _HISTORY_READER = IncrementalHistoryReader(HISTORY_FILE)
 
-ACCENT = (14, 110, 107)      # the folder body
-ACCENT_LIGHT = (76, 194, 182)
-PAUSED_GREY = (122, 138, 134)
+# Align with Devyn Personal Suite design tokens: ACCENTS['downloadSorter'] = #69E6AD
+ACCENT = (23, 27, 36)            # dark surface body
+ACCENT_LIGHT = (105, 230, 173)   # suite mint tab & arrow
+PAUSED_GREY = (101, 112, 132)    # textFaint
 
 
 def make_icon(paused: bool) -> Image.Image:
@@ -51,14 +52,14 @@ def make_icon(paused: bool) -> Image.Image:
     tab = PAUSED_GREY if paused else ACCENT_LIGHT
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((6, 18, 58, 54), radius=6, fill=body)
+    draw.rounded_rectangle((6, 18, 58, 54), radius=6, fill=body, outline=tab, width=2)
     draw.rounded_rectangle((6, 11, 28, 22), radius=3, fill=tab)
     if paused:
         draw.rectangle((24, 28, 30, 46), fill=(255, 255, 255))
         draw.rectangle((34, 28, 40, 46), fill=(255, 255, 255))
     else:
-        draw.polygon([(32, 46), (21, 33), (43, 33)], fill=(255, 255, 255))
-        draw.rectangle((28, 24, 36, 34), fill=(255, 255, 255))
+        draw.polygon([(32, 46), (21, 33), (43, 33)], fill=tab)
+        draw.rectangle((28, 24, 36, 34), fill=tab)
     return image
 
 

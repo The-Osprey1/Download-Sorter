@@ -333,8 +333,8 @@ class RibbonPopup:
         return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
 
     def _build_ui(self, scale: float) -> None:
-        pad_x = int(12 * scale)
-        pad_y = int(8 * scale)
+        pad_x = int(14 * scale)
+        pad_y = int(9 * scale)
         stripe_w = max(4, int(4 * scale))
 
         self.container = tk.Frame(self.root, bg=BG_COLOR, cursor="hand2")
@@ -349,7 +349,7 @@ class RibbonPopup:
         self.status = tk.Label(
             self.container,
             text="✓",
-            font=(FONT_FAMILY, 14, "bold"),
+            font=(FONT_FAMILY, 15, "bold"),
             fg=self.accent_color,
             bg=BG_COLOR,
             width=2,
@@ -365,11 +365,15 @@ class RibbonPopup:
         self.top_row = tk.Frame(self.content, bg=BG_COLOR)
         self.top_row.pack(fill="x")
 
-        tag_text = "DOWNLOAD SORTER  ·  COMPLETE"
+        folder_upper = self.folder_disp.upper()
+        tag_text = f"DOWNLOAD SORTER  ·  {folder_upper}"
+        if len(tag_text) > 34:
+            tag_text = "DOWNLOAD SORTER  ·  SORTED"
+
         self.tag_lbl = tk.Label(
             self.top_row,
             text=tag_text,
-            font=(FONT_FAMILY, 9, "bold"),
+            font=(FONT_FAMILY, 8, "bold"),
             fg=self.accent_color,
             bg=BG_COLOR,
             anchor="w",
@@ -408,7 +412,7 @@ class RibbonPopup:
         # Bottom row: Click action hint
         self.action_lbl = tk.Label(
             self.content,
-            text=f"Moved to {self.folder_disp}  ·  Click to reveal",
+            text=f"Filed in {self.folder_disp}  ·  Click to reveal ›",
             font=(FONT_FAMILY, 8),
             fg=TEXT_MUTED,
             bg=BG_COLOR,
