@@ -8,14 +8,12 @@ thing to start at login and one icon to click.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import subprocess
 import sys
 import threading
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -24,8 +22,10 @@ import pystray
 import watch
 from sorter import (
     HISTORY_FILE,
+    IncrementalHistoryReader,
     LOG_DIR,
     LOG_FILE,
+    SERVICE_DISABLED_FILE,
     is_paused,
     load_config,
     set_paused,
@@ -33,10 +33,12 @@ from sorter import (
     sort_existing,
     sort_existing_documents,
     watch_root,
+    write_runtime_state,
 )
 
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+_HISTORY_READER = IncrementalHistoryReader(HISTORY_FILE)
 
 ACCENT = (14, 110, 107)      # the folder body
 ACCENT_LIGHT = (76, 194, 182)
@@ -62,32 +64,7 @@ def make_icon(paused: bool) -> Image.Image:
 
 def moves_today() -> int:
     """How many files the sorter has filed since midnight."""
-    if not HISTORY_FILE.exists():
-        return 0
-    today = datetime.now(timezone.utc).astimezone().date()
-    count = 0
-    try:
-        with HISTORY_FILE.open(encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if record.get("action") == "undo":
-                    continue
-                stamp = record.get("timestamp", "")
-                try:
-                    when = datetime.fromisoformat(stamp).astimezone().date()
-                except ValueError:
-                    continue
-                if when == today:
-                    count += 1
-    except OSError:
-        return 0
-    return count
+    return _HISTORY_READER.moves_today()
 
 
 def open_in_explorer(path: Path) -> None:
@@ -115,6 +92,7 @@ class SorterTray:
         self.config = load_config()
         self.downloads = watch_root(self.config)
         self.stop_event = threading.Event()
+        self.watcher_failed = False
         self.icon = pystray.Icon(
             "download-sorter",
             icon=make_icon(is_paused()),
@@ -162,6 +140,7 @@ class SorterTray:
     def on_toggle_pause(self, _icon=None, _item=None) -> None:
         paused = not is_paused()
         set_paused(paused)
+        watch.WAKE_EVENT.set()
         logging.info("Sorting %s from the tray", "paused" if paused else "resumed")
         self.refresh()
         self.notify("Sorting paused." if paused else "Sorting resumed.")
@@ -194,7 +173,10 @@ class SorterTray:
 
     def on_quit(self, _icon=None, _item=None) -> None:
         logging.info("Tray quit requested; stopping the watcher")
+        SERVICE_DISABLED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SERVICE_DISABLED_FILE.touch(exist_ok=True)
         self.stop_event.set()
+        watch.WAKE_EVENT.set()
         self.icon.stop()
 
     # ---- lifecycle ----
@@ -206,16 +188,22 @@ class SorterTray:
         def work() -> None:
             try:
                 watch.run(stop=self.stop_event, on_sorted=self.on_sorted)
-            except Exception:
+                if not self.stop_event.is_set():
+                    raise RuntimeError("Watcher returned without a shutdown request")
+            except Exception as exc:
+                self.watcher_failed = True
                 logging.exception("Watcher stopped unexpectedly")
+                write_runtime_state("crashed", f"{type(exc).__name__}: {exc}")
                 self.notify("The watcher stopped. See the log for details.")
+                self.icon.stop()
         threading.Thread(target=work, daemon=True, name="sorter-watch").start()
 
     def run(self) -> int:
         self.start_watcher()
         self.icon.run()
         self.stop_event.set()
-        return 0
+        watch.WAKE_EVENT.set()
+        return 1 if self.watcher_failed else 0
 
 
 def main() -> int:
@@ -224,7 +212,19 @@ def main() -> int:
     if not lock:
         logging.warning("Download Sorter is already running. Exiting.")
         return 0
-    return SorterTray().run()
+    SERVICE_DISABLED_FILE.unlink(missing_ok=True)
+    logging.info("Download Sorter tray starting (PID %s)", os.getpid())
+    write_runtime_state("starting", "tray initializing")
+    try:
+        result = SorterTray().run()
+    except BaseException as exc:
+        logging.exception("Download Sorter tray crashed")
+        write_runtime_state("crashed", f"{type(exc).__name__}: {exc}")
+        raise
+    if result == 0:
+        logging.info("Download Sorter tray stopped cleanly")
+        write_runtime_state("stopped", "clean shutdown")
+    return result
 
 
 if __name__ == "__main__":

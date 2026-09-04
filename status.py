@@ -5,14 +5,50 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sorter import (
+    FAILURE_FILE,
     HISTORY_FILE,
+    RUNTIME_STATE_FILE,
     is_paused,
     load_config,
     watch_root,
 )
+
+
+def format_local_time(value: str | None) -> str:
+    if not value:
+        return "unknown"
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %I:%M %p")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def get_runtime_health() -> tuple[str, float | None, str]:
+    try:
+        data = json.loads(RUNTIME_STATE_FILE.read_text(encoding="utf-8"))
+        updated = datetime.fromisoformat(data.get("updated_at", ""))
+        age = max(0.0, (datetime.now(timezone.utc) - updated.astimezone(timezone.utc)).total_seconds())
+        return str(data.get("status", "unknown")), age, str(data.get("detail", ""))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError, AttributeError):
+        return "unknown", None, "no runtime record"
+
+
+def get_failure_summary() -> tuple[int, str | None, str | None]:
+    try:
+        data = json.loads(FAILURE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return 0, None, None
+        entries = [value for value in data.values() if isinstance(value, dict)]
+        if not entries:
+            return 0, None, None
+        latest = max(entries, key=lambda item: str(item.get("last_seen", "")))
+        return len(entries), str(latest.get("path", "")) or None, str(latest.get("last_seen", "")) or None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return 0, None, None
 
 
 def get_watcher_process() -> tuple[int | None, float | None]:
@@ -111,6 +147,8 @@ def main() -> int:
     menu_installed = check_context_menu()
     reclaim_count, reclaim_bytes = get_reclaimable_space(downloads, 30.0)
     cat_counts = count_category_files(downloads)
+    runtime_status, heartbeat_age, runtime_detail = get_runtime_health()
+    failure_count, latest_failure, latest_failure_time = get_failure_summary()
 
     print("\n" + "=" * 55)
     print("           DOWNLOAD-SORTER SYSTEM DASHBOARD")
@@ -124,19 +162,31 @@ def main() -> int:
     print(f"  Background Service:  {status_str}")
     print(f"  Active Mode:         {'PAUSED' if paused else 'ACTIVE (Organizing)'}")
     print(f"  Explorer Menus:      {'Installed (HKCU)' if menu_installed else 'Not installed'}")
+    if heartbeat_age is None:
+        print(f"  Runtime Health:      {runtime_status.upper()} ({runtime_detail})")
+    else:
+        print(f"  Runtime Health:      {runtime_status.upper()} (heartbeat {round(heartbeat_age)}s ago)")
 
     # Watcher Settings
     min_age = config.get("watch", {}).get("min_age_minutes", 0)
     auto_3d = config.get("watch", {}).get("auto_unpack_3d_zips", True)
+    auto_unzip = config.get("watch", {}).get("auto_unzip", config.get("auto_unzip", True))
+    extracted_dest = config.get("extracted_destination", "Extracted")
     print(f"  Grace Period:        {min_age} minute(s)")
     print(f"  3D Zip Auto-Unpack:  {'Enabled' if auto_3d else 'Disabled'}")
+    print(f"  Auto-Unzipper:       {'Enabled (' + extracted_dest + ')' if auto_unzip else 'Disabled'}")
 
     # History
     print("-" * 55)
     print(f"  All-Time Moves:      {total_moves} file(s) recorded in history")
     if last_batch:
-        clean_time = last_time.split("T")[0] if last_time else ""
+        clean_time = format_local_time(last_time)
         print(f"  Last Batch:          {last_batch} ({clean_time})")
+    if failure_count:
+        print(f"  Move Failures:       {failure_count} tracked; latest {format_local_time(latest_failure_time)}")
+        print(f"                       {latest_failure}")
+    else:
+        print("  Move Failures:       None")
 
     # Categories
     print("-" * 55)

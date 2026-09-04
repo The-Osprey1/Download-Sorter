@@ -1,9 +1,9 @@
-"""Generated from personal-ui tokens v1.0.0. Do not edit."""
+"""Generated from personal-ui tokens v1.1.0. Do not edit."""
 from __future__ import annotations
 
 TOKENS = {
     "$schema": "./tokens.schema.json",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "name": "Devyn Personal Suite",
     "color": {
         "canvas": "#0B0D12",
@@ -31,7 +31,8 @@ TOKENS = {
         "printLibrary": "#E8833A",
         "haasStudio": "#D74A4A",
         "broncoBites": "#10B981",
-        "broncoGold": "#FFB500"
+        "broncoGold": "#FFB500",
+        "semesterDeck": "#A67BEF"
     },
     "space": {
         "1": 4,

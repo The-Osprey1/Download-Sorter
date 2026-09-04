@@ -250,6 +250,22 @@ def release_slot(slot: int, pid: int) -> None:
             pass
 
 
+def scaled_ribbon_geometry(
+    scale: float,
+    slot: int,
+    work_area: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """Return width, height, x and y for a DPI-scaled work area."""
+    scale = max(1.0, float(scale))
+    width = round(BASE_WIDTH * scale)
+    height = round(BASE_HEIGHT * scale)
+    offset_x = round(BASE_OFFSET_X * scale)
+    offset_y = round(BASE_OFFSET_Y * scale)
+    gap = round(BASE_GAP * scale)
+    _left, top, right, _bottom = work_area
+    return width, height, right - width - offset_x, top + offset_y + slot * (height + gap)
+
+
 class RibbonPopup:
     def __init__(self, dest_path: Path, downloads_root: Path | None = None) -> None:
         self.dest_path = dest_path.resolve()
@@ -283,15 +299,7 @@ class RibbonPopup:
         except Exception:
             scale = 1.0
 
-        width = int(BASE_WIDTH * scale)
-        height = int(BASE_HEIGHT * scale)
-        offset_x = int(BASE_OFFSET_X * scale)
-        offset_y = int(BASE_OFFSET_Y * scale)
-        gap = int(BASE_GAP * scale)
-
-        work_left, work_top, work_right, _work_bottom = self._work_area()
-        pos_x = work_right - width - offset_x
-        pos_y = work_top + offset_y + self.slot * (height + gap)
+        width, height, pos_x, pos_y = scaled_ribbon_geometry(scale, self.slot, self._work_area())
         self.root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
 
         self.dismiss_job: str | None = None
@@ -335,6 +343,19 @@ class RibbonPopup:
         # Left accent stripe
         self.stripe = tk.Frame(self.container, bg=self.accent_color, width=stripe_w)
         self.stripe.pack(side="left", fill="y")
+
+        # A text glyph remains legible in high-contrast mode and gives success a
+        # second signal beyond color alone.
+        self.status = tk.Label(
+            self.container,
+            text="✓",
+            font=(FONT_FAMILY, 14, "bold"),
+            fg=self.accent_color,
+            bg=BG_COLOR,
+            width=2,
+            anchor="center",
+        )
+        self.status.pack(side="left", fill="y")
 
         # Content area
         self.content = tk.Frame(self.container, bg=BG_COLOR, padx=pad_x, pady=pad_y)
@@ -396,7 +417,7 @@ class RibbonPopup:
         self.action_lbl.pack(fill="x")
 
         # Bind hover and click events across interactive widgets
-        for widget in [self.container, self.content, self.top_row, self.tag_lbl, self.name_lbl, self.action_lbl, self.stripe]:
+        for widget in [self.container, self.content, self.top_row, self.tag_lbl, self.name_lbl, self.action_lbl, self.stripe, self.status]:
             widget.bind("<Button-1>", self.on_click)
             widget.bind("<Enter>", self.on_enter)
             widget.bind("<Leave>", self.on_leave)
@@ -455,6 +476,7 @@ class RibbonPopup:
         self.tag_lbl.config(bg=color)
         self.name_lbl.config(bg=color)
         self.action_lbl.config(bg=color)
+        self.status.config(bg=color)
 
     def on_click(self, _event=None) -> None:
         try:

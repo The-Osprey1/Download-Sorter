@@ -17,6 +17,7 @@ Downloads/
   Videos
   Audio
   Archives
+  Extracted
   Installers
   Code
   Other
@@ -94,7 +95,28 @@ Unpack MakerWorld / Printables / Thingiverse archives without nested folder clut
 .\.venv\Scripts\python.exe unzip_3d.py --all
 ```
 
-### 3. Safe Janitor (`clean_old.py`)
+### 3. General Auto-Unzipper (`unzip_archive.py`)
+Automatically or manually unpack `.zip` archives into isolated landing folders under `Downloads\Extracted\<archive_name>\` while moving original archives safely to `Downloads\Archives`:
+
+```powershell
+# Unpack a specific zip archive
+.\.venv\Scripts\python.exe unzip_archive.py "path\to\archive.zip"
+
+# Preview extraction without touching files
+.\.venv\Scripts\python.exe unzip_archive.py "path\to\archive.zip" --dry-run
+
+# Unpack all zip archives currently sitting at the top of Downloads
+.\.venv\Scripts\python.exe unzip_archive.py --all
+
+# Extract into a custom landing directory
+.\.venv\Scripts\python.exe unzip_archive.py "path\to\archive.zip" --dest "C:\path\to\folder"
+```
+
+* **Smart Root-Stripping:** Intelligently strips redundant single top-level folders inside the zip to avoid duplicate nested folders like `Extracted\my_archive\my_archive\...`.
+* **Zip Slip Defense:** Rejects path traversal (`../`) attacks to safeguard your filesystem.
+* **Auto-Sorting Integration:** When the background watcher (`watch.py`) is running and `auto_unzip` is enabled in `config.json`, newly downloaded `.zip` files are automatically extracted and archived.
+
+### 4. Safe Janitor (`clean_old.py`)
 Clean out old installers and archives by sending them to your **Windows Recycle Bin** (never permanent deletion):
 
 ```powershell

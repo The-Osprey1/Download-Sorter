@@ -11,5 +11,6 @@ foreach ($ext in @(".3mf", ".gcode", ".bgcode")) {
 }
 
 Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\.zip\shell\Unzip3D" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\.zip\shell\AutoUnzip" -Recurse -Force
 
 Write-Host "Context menus removed successfully."
