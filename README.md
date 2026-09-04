@@ -25,6 +25,8 @@ Downloads/
 
 Keyword rules run first (for example a PDF named `transcript` goes to `Documents\School`, not `Documents\PDFs`). Edit `config.json` to change mappings.
 
+For a full breakdown of the sorting and extraction decision lifecycle, see [FLOWCHART.md](FLOWCHART.md).
+
 ## Usage
 
 ### Run once (or simulate)
