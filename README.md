@@ -166,8 +166,8 @@ flowchart TD
 
 ### Setup Virtual Environment
 ```powershell
-git clone https://github.com/The-Osprey1/download-sorter.git
-cd download-sorter
+git clone https://github.com/The-Osprey1/Download-Sorter.git
+cd Download-Sorter
 
 # Create virtual environment
 python -m venv .venv
