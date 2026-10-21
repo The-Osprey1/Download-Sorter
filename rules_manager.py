@@ -1309,6 +1309,15 @@ class RulesManagerDialog(QDialog):
 def main() -> int:
     """Launch the Rules Manager dialog standalone."""
     from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+
+    try:
+        QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+    except Exception:
+        pass
 
     app = QApplication.instance()
     owns_app = False

@@ -1,6 +1,12 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $python = Join-Path $root ".venv\Scripts\python.exe"
+if (-not (Test-Path $python)) {
+    $sysPython = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+    if ($sysPython) {
+        $python = $sysPython
+    }
+}
 $sortOnce = Join-Path $root "sort_once.py"
 $gcodePeek = Join-Path $root "gcode_peek.py"
 $unzip3D = Join-Path $root "unzip_3d.py"

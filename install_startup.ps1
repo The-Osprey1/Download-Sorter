@@ -3,7 +3,12 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pythonw = Join-Path $root ".venv\Scripts\pythonw.exe"
 $entry = Join-Path $root "tray.py"
 if (-not (Test-Path $pythonw)) {
-    throw "Missing venv pythonw.exe. Create the venv first."
+    $sysPythonw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue).Source
+    if ($sysPythonw) {
+        $pythonw = $sysPythonw
+    } else {
+        throw "Missing pythonw.exe. Create the venv first (python -m venv .venv) or ensure Python is on PATH."
+    }
 }
 
 $taskName = "DownloadSorter"

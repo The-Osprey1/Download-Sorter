@@ -164,7 +164,17 @@ flowchart TD
 * Windows 10 or 11
 * Python 3.10+
 
-### Setup Virtual Environment
+### Quick Start (One-Click)
+Double-click **`setup.bat`** (or run `.\setup.bat` in PowerShell/CMD). It will automatically:
+1. Verify Python 3.10+ on your system
+2. Create your `.venv` virtual environment
+3. Install dependencies from `requirements.txt`
+4. Optionally configure auto-start at login and Explorer context menus
+5. Launch the system tray icon
+
+---
+
+### Manual Setup
 ```powershell
 git clone https://github.com/The-Osprey1/Download-Sorter.git
 cd Download-Sorter

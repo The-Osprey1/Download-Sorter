@@ -537,7 +537,19 @@ def watch_root(config: dict) -> Path:
             folder = config.get("downloads_dir", "")
     if not folder:
         folder = "${USERPROFILE}\\Downloads" if sys.platform == "win32" else "~/Downloads"
-    return expand_path(folder)
+    resolved = expand_path(folder)
+    if not resolved.exists() and sys.platform == "win32":
+        try:
+            import winreg
+            sub_key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub_key) as key:
+                val, _ = winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")
+                reg_path = Path(os.path.expandvars(val)).resolve()
+                if reg_path.exists():
+                    return reg_path
+        except Exception:
+            pass
+    return resolved
 
 
 def document_roots(config: dict) -> list[Path]:

@@ -38,6 +38,12 @@ from sorter import (
 
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+if not PYTHON.exists():
+    PYTHON = Path(sys.executable)
+    if PYTHON.name.lower() == "pythonw.exe":
+        sibling = PYTHON.with_name("python.exe")
+        if sibling.exists():
+            PYTHON = sibling
 _HISTORY_READER = IncrementalHistoryReader(HISTORY_FILE)
 
 # Align with Devyn Personal Suite design tokens: ACCENTS['downloadSorter'] = #69E6AD
