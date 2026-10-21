@@ -496,12 +496,17 @@ class WatchCoordinator:
 
         already_signaled = WAKE_EVENT.is_set()
         WAKE_EVENT.clear()
+        signaled = False
         if not already_signaled:
-            WAKE_EVENT.wait(timeout)
+            signaled = WAKE_EVENT.wait(timeout)
         self.wake_count += 1
 
         now = time.monotonic()
-        fallback_due = now >= self._next_fallback
+        fallback_due = (
+            now >= (self._next_fallback - 0.005)
+            if (not already_signaled and not signaled and pending_delay is None)
+            else (now >= self._next_fallback)
+        )
         if fallback_due:
             self._next_fallback = now + self.fallback_seconds
         return fallback_due

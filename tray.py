@@ -123,6 +123,7 @@ class SorterTray:
             ),
             pystray.MenuItem("Sort Downloads now", self.on_sort_now),
             pystray.MenuItem("Undo last batch", self.on_undo),
+            pystray.MenuItem("Configure Rules & Simulator...", self.on_open_rules_manager),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open Downloads", self.on_open_downloads),
             pystray.MenuItem("Open log folder", self.on_open_logs),
@@ -164,6 +165,11 @@ class SorterTray:
             else:
                 tail = (result.stdout or result.stderr or "").strip().splitlines()
                 self.notify(tail[-1] if tail else "Nothing to undo.")
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_open_rules_manager(self, _icon=None, _item=None) -> None:
+        def work() -> None:
+            run_script("rules_manager.py")
         threading.Thread(target=work, daemon=True).start()
 
     def on_open_downloads(self, _icon=None, _item=None) -> None:

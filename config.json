@@ -101,7 +101,17 @@
         "metal casting",
         "foundry"
       ],
-      "extensions": [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".rtf", ".odt"],
+      "extensions": [
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".txt",
+        ".rtf",
+        ".odt"
+      ],
       "enabled": true
     },
     {
@@ -120,28 +130,212 @@
         "exam",
         "review"
       ],
-      "extensions": [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt"],
+      "extensions": [
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".txt",
+        ".rtf",
+        ".odt"
+      ],
       "enabled": true
     }
   ],
   "extension_rules": [
-    { "name": "3D STL", "folder": "3D Models\\STL", "extensions": [".stl"], "enabled": true },
-    { "name": "3D 3MF", "folder": "3D Models\\3MF", "extensions": [".3mf"], "enabled": true },
-    { "name": "3D OBJ", "folder": "3D Models\\OBJ", "extensions": [".obj"], "enabled": true },
-    { "name": "3D STEP", "folder": "3D Models\\STEP", "extensions": [".step", ".stp", ".iges", ".igs"], "enabled": true },
-    { "name": "3D Other", "folder": "3D Models\\Other", "extensions": [".3ds", ".fbx", ".blend", ".glb", ".gltf"], "enabled": true },
-    { "name": "3D CAD", "folder": "3D Models\\CAD", "extensions": [".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf"], "enabled": true },
-    { "name": "Haas / G-Code", "folder": "Code\\Gcode", "extensions": [".nc", ".tap", ".ngc", ".gcode", ".bgcode"], "enabled": true },
-    { "name": "PDF Documents", "folder": "Documents\\PDFs", "extensions": [".pdf"], "enabled": true },
-    { "name": "Word Documents", "folder": "Documents\\Word", "extensions": [".doc", ".docx", ".odt", ".rtf"], "enabled": true },
-    { "name": "Text Documents", "folder": "Documents\\Text", "extensions": [".txt", ".md"], "enabled": true },
-    { "name": "Spreadsheets", "folder": "Spreadsheets", "extensions": [".xls", ".xlsx", ".csv", ".ods"], "enabled": true },
-    { "name": "Images", "folder": "Images", "extensions": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".svg", ".bmp", ".tif", ".tiff"], "enabled": true },
-    { "name": "Videos", "folder": "Videos", "extensions": [".mp4", ".mov", ".mkv", ".avi", ".webm"], "enabled": true },
-    { "name": "Audio", "folder": "Audio", "extensions": [".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"], "enabled": true },
-    { "name": "Archives", "folder": "Archives", "extensions": [".zip", ".rar", ".7z", ".tar", ".gz"], "enabled": true },
-    { "name": "Installers", "folder": "Installers", "extensions": [".exe", ".msi", ".msix"], "enabled": true },
-    { "name": "Code", "folder": "Code", "extensions": [".py", ".js", ".ts", ".cpp", ".h", ".cs", ".json", ".html", ".css"], "enabled": true }
+    {
+      "name": "3D STL",
+      "folder": "3D Models\\STL",
+      "extensions": [
+        ".stl"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D 3MF",
+      "folder": "3D Models\\3MF",
+      "extensions": [
+        ".3mf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D OBJ",
+      "folder": "3D Models\\OBJ",
+      "extensions": [
+        ".obj"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D STEP",
+      "folder": "3D Models\\STEP",
+      "extensions": [
+        ".step",
+        ".stp",
+        ".iges",
+        ".igs"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D Other",
+      "folder": "3D Models\\Other",
+      "extensions": [
+        ".3ds",
+        ".fbx",
+        ".blend",
+        ".glb",
+        ".gltf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D CAD",
+      "folder": "3D Models\\CAD",
+      "extensions": [
+        ".f3d",
+        ".f3z",
+        ".ipt",
+        ".iam",
+        ".sldprt",
+        ".sldasm",
+        ".slddrw",
+        ".dwg",
+        ".dxf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Haas / G-Code",
+      "folder": "Code\\Gcode",
+      "extensions": [
+        ".nc",
+        ".tap",
+        ".ngc",
+        ".gcode",
+        ".bgcode"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "PDF Documents",
+      "folder": "Documents\\PDFs",
+      "extensions": [
+        ".pdf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Word Documents",
+      "folder": "Documents\\Word",
+      "extensions": [
+        ".doc",
+        ".docx",
+        ".odt",
+        ".rtf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Text Documents",
+      "folder": "Documents\\Text",
+      "extensions": [
+        ".txt",
+        ".md"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Spreadsheets",
+      "folder": "Spreadsheets",
+      "extensions": [
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".ods"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Images",
+      "folder": "Images",
+      "extensions": [
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".heic",
+        ".svg",
+        ".bmp",
+        ".tif",
+        ".tiff"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Videos",
+      "folder": "Videos",
+      "extensions": [
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".webm"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Audio",
+      "folder": "Audio",
+      "extensions": [
+        ".mp3",
+        ".wav",
+        ".flac",
+        ".m4a",
+        ".aac",
+        ".ogg"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Archives",
+      "folder": "Archives",
+      "extensions": [
+        ".zip",
+        ".rar",
+        ".7z",
+        ".tar",
+        ".gz"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Installers",
+      "folder": "Installers",
+      "extensions": [
+        ".exe",
+        ".msi",
+        ".msix"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Code",
+      "folder": "Code",
+      "extensions": [
+        ".py",
+        ".js",
+        ".ts",
+        ".cpp",
+        ".h",
+        ".cs",
+        ".json",
+        ".html",
+        ".css"
+      ],
+      "enabled": true
+    }
   ],
   "default_folder": "Other"
 }

@@ -1,172 +1,232 @@
 # download-sorter
 
-Lightweight auto-sorter for the **top of your Downloads folder**, plus a sweep of **Windows Documents**.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
+[![Tests Passing](https://img.shields.io/badge/tests-743%20passed-69E6AD.svg?style=flat)](tests/)
 
-Downloads files are moved into a premade folder tree *inside Downloads*. Files already in those folders are left alone.
+A lightweight, local-first automated file organizer for Windows that keeps your **Downloads** and **Documents** folders organized without sending your data to any cloud service.
 
-Targeted CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`, etc.) found under Windows Documents are moved into the Downloads tree (for example `Downloads\3D Models`). Application, game directories (like `SOLIDCast`, `My Games`, `Steam`), and OneDrive cloud placeholders are automatically skipped.
+Includes a **PySide6 Visual Rules Manager & Live Sandbox GUI**, **System Tray monitor**, **interactive High-DPI Desktop Ribbon toasts**, **reversible Undo**, and **3D Printing / CNC intelligence**.
 
-## Folder tree
+---
 
-```
+## Folder Architecture
+
+Newly downloaded files are routed into an organized tree directly inside your Downloads folder:
+
+```text
 Downloads/
-  3D Models/STL, 3MF, OBJ, STEP, Print files, Other, CAD
-  Documents/School, PDFs, Word, Text
-  Spreadsheets
-  Images
-  Videos
-  Audio
-  Archives
-  Extracted
-  Installers
-  Code
-  Other
+  ├── 3D Models/
+  │     ├── STL/
+  │     ├── 3MF/
+  │     ├── OBJ/
+  │     ├── STEP/
+  │     ├── CAD/ (F3D, SLDPRT, IPT, DWG, DXF)
+  │     └── Other/
+  ├── Documents/
+  │     ├── School/ (Course-specific keywords, syllabi, homework)
+  │     ├── PDFs/
+  │     ├── Word/
+  │     └── Text/
+  ├── Spreadsheets/ (XLSX, CSV, ODS)
+  ├── Images/ (JPG, PNG, WebP, SVG, HEIC)
+  ├── Videos/ (MP4, MKV, MOV, WebM)
+  ├── Audio/ (MP3, WAV, FLAC, AAC)
+  ├── Archives/ (Original ZIP, 7Z, RAR)
+  ├── Extracted/ (Unpacked landing folders)
+  ├── Installers/ (EXE, MSI, MSIX)
+  ├── Code/ (PY, JS, TS, CPP, JSON, HTML, CSS, Haas/GCode)
+  └── Other/ (Uncategorized fallback)
 ```
 
-Keyword rules run first (for example a PDF named `transcript` goes to `Documents\School`, not `Documents\PDFs`). Edit `config.json` to change mappings.
+Targeted CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`) found in Windows Documents are safely organized into the Downloads 3D tree, while application folders (like `OneDrive`, `Steam`, `My Games`, `SOLIDCast`, `Adobe`) and OneDrive cloud placeholders are automatically protected and skipped.
 
-For a full breakdown of the sorting and extraction decision lifecycle, see [FLOWCHART.md](FLOWCHART.md).
+---
 
-## Usage
+## Key Features
 
-### Run once (or simulate)
+### 1. Visual Rules Manager & Live Simulator GUI (`rules_manager.py`)
+A sleek dark-mode desktop GUI built with **PySide6**:
+* **Rule Reordering & Precedence**: Drag or use Up/Down buttons to adjust precedence order between keyword rules and extension rules.
+* **Instant Keyword & Folder Editing**: Create custom rules, edit target paths, and toggle rules active/inactive with validation.
+* **Live Sandbox & Real-time Simulator**: Type any hypothetical filename (e.g. `ME3210_Exam_Review.pdf`, `bracket_op1.nc`, `vase_multicolor.3mf`) to watch the rule engine evaluate the match chain in real time, showing the winning rule, matched trigger, destination path, and classification badge.
+* **Temporary "Active Project" Catch-All**: Working on a sprint or engineering build? Flip on Active Project mode to route all incoming CAD, 3D models, and CNC programs directly to your active project directory with optional auto-expiry.
+* **Safe Atomic Persistence**: Changes are verified with schema validation, written to a temporary buffer with `fsync`, backed up to `config.json.bak`, and replaced atomically with transient lock retry handling.
 
 ```powershell
-# Preview what would move without changing anything
-.\.venv\Scripts\python.exe sort_once.py --dry-run
-
-# Run the sorter now
-.\.venv\Scripts\python.exe sort_once.py
+# Launch the Visual Rules Manager GUI
+.\.venv\Scripts\python.exe rules_manager.py
 ```
 
-### Undo recent moves
-
-Restore moved files back to their original locations:
+### 2. Low-Resource Background Daemon & System Tray (`tray.py`)
+Run the unobtrusive system tray application:
+* **Background Watchdog**: Watches top-level Downloads and recursive Documents using low-CPU event hooks.
+* **Single-Instance Mutex**: Prevents multiple daemon instances from colliding.
+* **Instant Tray Control**: Right-click the tray icon to pause/resume sorting, trigger a manual sort, undo recent moves, configure rules, or open folders.
+* **Live Daily Counter**: Hover over or view the tray menu to see how many files have been filed today.
 
 ```powershell
-# Undo the most recent batch
-.\.venv\Scripts\python.exe sort_undo.py
-
-# Preview undo without moving
-.\.venv\Scripts\python.exe sort_undo.py --dry-run
-
-# List recent moves
-.\.venv\Scripts\python.exe sort_undo.py --list
+# Run the tray monitor (background watcher lives inside)
+.\.venv\Scripts\pythonw.exe tray.py
 ```
 
-### Pause / Resume sorting
+### 3. Desktop Ribbon Toast Notifications (`ribbon_popup.py`)
+Whenever an incoming download lands and organizes:
+* **One-Click Reveal**: Click the notification pill to instantly highlight the sorted file in Windows File Explorer.
+* **Vertical Dynamic Stacking**: Simultaneous downloads automatically stack neatly down the right margin without overlapping.
+* **Per-Monitor High-DPI Awareness**: Crystal-clear typography on 100%, 125%, 150%, 175%, and 200% scaling.
+* **Dynamic Category Accents**: Distinct visual color accents for 3D/CAD (Mint), CNC/G-Code (Red), Documents (Blue), and Media.
 
-```powershell
-# Toggle pause state
-.\.venv\Scripts\python.exe toggle_pause.py
-
-# Check status
-.\.venv\Scripts\python.exe toggle_pause.py --status
-```
-
-### Sort any specific folder
-
-```powershell
-.\.venv\Scripts\python.exe sort_once.py --target "C:\path\to\folder"
-```
-
-## Power Tools & Companion Utilities
-
-### 1. 3D Print / Slicer File Inspector (`gcode_peek.py`)
-Quickly inspect `.3mf`, `.gcode`, and `.bgcode` files from the terminal or right-click:
+### 4. 3D Print Inspector & CNC Machine Sniffer (`gcode_peek.py`)
+* **Smart Content Sniffing**: Inspects the first lines of ambiguous toolpaths (`.nc`, `.tap`, `.gcode`, `.bgcode`) to differentiate Haas CNC machine coordinates (`G90 G54`, Haas postamble, program delimiters) from 3D printer slicers (Bambu Studio, PrusaSlicer, Klipper layer comments).
+* **Embedded Thumbnail Extraction**: Pulls embedded preview thumbnails from `.3mf` and `.gcode` slices directly to disk.
 
 ```powershell
 # Inspect latest 3D file in Downloads
 .\.venv\Scripts\python.exe gcode_peek.py --latest
 
-# Inspect a specific file
-.\.venv\Scripts\python.exe gcode_peek.py "path\to\model.3mf"
-
-# Extract and view embedded thumbnail render
+# View embedded thumbnail render
 .\.venv\Scripts\python.exe gcode_peek.py "path\to\model.3mf" --thumb
 ```
 
-### 2. 3D Zip Flattener (`unzip_3d.py`)
-Unpack MakerWorld / Printables / Thingiverse archives without nested folder clutter:
+### 5. Smart Archive Unpackers (`unzip_3d.py` & `unzip_archive.py`)
+* **3D Zip Flattener**: Unpack MakerWorld, Printables, and Thingiverse archives without annoying nested subfolders.
+* **Root-Stripping**: Automatically strips single redundant top-level wrapper directories (e.g. `archive/archive/...`).
+* **Zip Slip Defense**: Strictly validates extraction paths to prevent path traversal (`../`) attacks.
 
 ```powershell
-# Unpack a specific 3D model zip
-.\.venv\Scripts\python.exe unzip_3d.py "path\to\model.zip"
-
 # Unpack all 3D model zips sitting in Downloads
 .\.venv\Scripts\python.exe unzip_3d.py --all
-```
 
-### 3. General Auto-Unzipper (`unzip_archive.py`)
-Automatically or manually unpack `.zip` archives into isolated landing folders under `Downloads\Extracted\<archive_name>\` while moving original archives safely to `Downloads\Archives`:
-
-```powershell
-# Unpack a specific zip archive
+# Extract general archive to Extracted\
 .\.venv\Scripts\python.exe unzip_archive.py "path\to\archive.zip"
-
-# Preview extraction without touching files
-.\.venv\Scripts\python.exe unzip_archive.py "path\to\archive.zip" --dry-run
-
-# Unpack all zip archives currently sitting at the top of Downloads
-.\.venv\Scripts\python.exe unzip_archive.py --all
-
-# Extract into a custom landing directory
-.\.venv\Scripts\python.exe unzip_archive.py "path\to\archive.zip" --dest "C:\path\to\folder"
 ```
 
-* **Smart Root-Stripping:** Intelligently strips redundant single top-level folders inside the zip to avoid duplicate nested folders like `Extracted\my_archive\my_archive\...`.
-* **Zip Slip Defense:** Rejects path traversal (`../`) attacks to safeguard your filesystem.
-* **Auto-Sorting Integration:** When the background watcher (`watch.py`) is running and `auto_unzip` is enabled in `config.json`, newly downloaded `.zip` files are automatically extracted and archived.
-
-### 4. Safe Janitor (`clean_old.py`)
-Clean out old installers and archives by sending them to your **Windows Recycle Bin** (never permanent deletion):
+### 6. Full Reversible Undo & Janitor Cleanup
+* **Undo Moves (`sort_undo.py`)**: Reverses recent batches back to their original download directories using the append-only move log (`%LOCALAPPDATA%\download-sorter\history.jsonl`).
+* **Safe Janitor (`clean_old.py`)**: Safely recycles old installers and archives to your **Windows Recycle Bin** (never permanent deletion).
 
 ```powershell
-# Preview what would be recycled (older than 30 days)
+# Preview undo without moving
+.\.venv\Scripts\python.exe sort_undo.py --dry-run
+
+# Undo the most recent sort batch
+.\.venv\Scripts\python.exe sort_undo.py
+
+# Clean old downloads (older than 30 days -> Recycle Bin)
 .\.venv\Scripts\python.exe clean_old.py --dry-run
-
-# Run cleanup for files older than 60 days
-.\.venv\Scripts\python.exe clean_old.py --days 60
 ```
 
-### 4. Windows File Explorer Context Menu Shortcuts
-Add right-click options in Windows Explorer (installed in user profile, no admin needed):
+---
+
+## Decision Lifecycle
+
+For a full breakdown of the sorting, deduplication, and extraction logic, see [FLOWCHART.md](FLOWCHART.md).
+
+```mermaid
+flowchart TD
+    Start(["File Lands in Downloads"]) --> Ready{"Ready to Move?<br>• Not temporary (.crdownload)<br>• Settle window elapsed<br>• Lock released"}
+    Ready -- No --> Wait["Wait for Download Completion"]
+    Ready -- Yes --> Classify{"Classify by Rules"}
+
+    subgraph Hierarchy ["Evaluation Order"]
+        Classify -->|"1"| Active["Active Project Catch-All (CAD/3D/CNC)"]
+        Classify -->|"2"| Keyword["Keyword Rules (School, Coursework)"]
+        Classify -->|"3"| Sniffer["Smart G-Code Sniffer (Haas vs 3D)"]
+        Classify -->|"4"| Ext["Extension Rules (PDFs, Images, Code)"]
+        Classify -->|"5"| Default["Default Fallback (Other)"]
+    end
+
+    Active --> Dedup{"Duplicate in Destination?"}
+    Keyword --> Dedup
+    Sniffer --> Dedup
+    Ext --> Dedup
+    Default --> Dedup
+
+    Dedup -- Yes --> Prune["Delete Redundant Copy"]
+    Dedup -- No --> Zip{"Is ZIP Archive?"}
+
+    Zip -- "3D Archive" --> Unzip3D["Extract Models to 3D Models/<br>Move ZIP to Archives/"]
+    Zip -- "General ZIP" --> UnzipGen["Extract to Extracted/<br>Move ZIP to Archives/"]
+    Zip -- "Standard File" --> Move["Move to Target Destination"]
+
+    Unzip3D --> Record["Append to History Log & Show Desktop Ribbon"]
+    UnzipGen --> Record
+    Move --> Record
+```
+
+---
+
+## Installation & Setup
+
+### Prerequisites
+* Windows 10 or 11
+* Python 3.10+
+
+### Setup Virtual Environment
+```powershell
+git clone https://github.com/The-Osprey1/download-sorter.git
+cd download-sorter
+
+# Create virtual environment
+python -m venv .venv
+
+# Install dependencies
+.\.venv\Scripts\pip.exe install -r requirements.txt
+```
+
+### Windows Explorer Right-Click Shortcuts (Optional)
+Add convenient right-click options in File Explorer (installed for the current user, no Administrator privileges required):
 
 ```powershell
-# Install right-click shortcuts
 powershell -ExecutionPolicy Bypass -File .\install_context_menu.ps1
+```
 
-# Remove right-click shortcuts
+* **Folder right-click**: `"Sort with DownloadSorter"`
+* **Folder background right-click**: `"Undo Last DownloadSorter Batch"`
+* **`.3mf` / `.gcode` right-click**: `"Inspect 3D Print Info (gcode-peek)"`
+* **`.zip` right-click**: `"Extract 3D Models to Downloads"`
+
+To remove the context menu entries:
+```powershell
 powershell -ExecutionPolicy Bypass -File .\uninstall_context_menu.ps1
 ```
 
-* Right-click any folder $\to$ **"Sort with DownloadSorter"**
-* Right-click folder background $\to$ **"Undo Last Sort"**
-* Right-click `.3mf` / `.gcode` $\to$ **"Inspect 3D Print Info (gcode-peek)"**
-* Right-click `.zip` $\to$ **"Extract 3D Models to Downloads"**
-
-### 5. Interactive Top-Right Notification Ribbon (`ribbon_popup.py`)
-Whenever an incoming download lands and organizes into its target folder, a sleek notification card pops up at the top-right of your screen:
-* **One-Click Reveal:** Click anywhere on the ribbon to open Windows File Explorer with that exact file highlighted.
-* **Vertical Stacking:** Simultaneous downloads automatically stack neatly down the right margin without overlapping.
-* **Per-Monitor High-DPI:** Crystal-sharp subpixel typography matching Windows scaling.
-* **Dynamic Category Accents:** Colors adjust to file types based on the **Devyn Personal Suite** theme tokens (`suite_theme.py`).
-* **Test ribbon manually:**
-  ```powershell
-  .\.venv\Scripts\python.exe ribbon_popup.py --test
-  ```
-
-## Background Watch + Auto-start at Login
+### Auto-Start at Login (Optional)
+To register Download Sorter as a persistent Windows Scheduled Task that starts at user logon:
 
 ```powershell
-# Install and start background task
 powershell -ExecutionPolicy Bypass -File .\install_startup.ps1
+```
 
-# Stop and remove background task
+To remove the scheduled task:
+```powershell
 powershell -ExecutionPolicy Bypass -File .\uninstall_startup.ps1
 ```
 
-* Logs: `%LOCALAPPDATA%\download-sorter\sorter.log` (automatically rotated)
-* History: `%LOCALAPPDATA%\download-sorter\history.jsonl`
+---
 
+## Testing & Quality Assurance
 
+This repository includes a comprehensive 4-Tier test suite covering feature tests, adversarial stress tests, live reload, and simulation parity:
+
+```powershell
+# Run the complete test suite (740+ tests)
+.\.venv\Scripts\pytest.exe
+```
+
+---
+
+## Safety & Privacy
+
+* **100% Offline**: Zero external network requests, analytics, or telemetry. All sorting occurs entirely on your local machine.
+* **Non-Destructive Cleanup**: Clean scripts send items strictly to the Windows Recycle Bin using `send2trash`.
+* **Path Traversal Protection**: Archive extractors reject any archive member with directory traversal markers (`../` or leading root slashes).
+* **Atomic Configuration**: Config persistence creates `.bak` backups before swapping files to guarantee zero configuration loss if interrupted.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

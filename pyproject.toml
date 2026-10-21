@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "download-sorter"
+version = "1.0.0"
+description = "Local-first automated Downloads and Documents organizer with background daemon, visual rules editor, live sandbox simulator, and 3D/CNC intelligence."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Devyn"}
+]
+keywords = [
+    "downloads",
+    "file-organizer",
+    "automation",
+    "watchdog",
+    "pyside6",
+    "gcode",
+    "3d-printing",
+    "bambu",
+    "haas"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Utilities"
+]
+dependencies = [
+    "watchdog>=6.0.0",
+    "pystray>=0.19.5",
+    "pillow>=12.0.0",
+    "PySide6>=6.8.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.0"
+]
+
+[project.scripts]
+download-sorter = "sort_once:main"
+download-sorter-watch = "watch:main"
+download-sorter-tray = "tray:main"
+download-sorter-gui = "rules_manager:main"
+download-sorter-undo = "sort_undo:main"
+gcode-peek = "gcode_peek:main"
+unzip-3d = "unzip_3d:main"
+unzip-archive = "unzip_archive:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "."]
+python_files = ["test_*.py"]
+addopts = "-q"

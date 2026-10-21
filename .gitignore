@@ -1,5 +1,55 @@
-.venv/
+# Python byte code and caches
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Pytest & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache
+
+# Sorter Local Logs and Runtime Artifacts
 *.log
+*.bak
+*.tmp*
+*.tmp.*
+history.jsonl
+active_project.json
+runtime_state.json
+service_disabled
+failures.json
+paused
+
+# Operating System & IDE
 .DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~

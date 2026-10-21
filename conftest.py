@@ -33,7 +33,7 @@ def isolate_sorter_state(tmp_path, monkeypatch):
         watch.PENDING_MISPLACED.clear()
         watch.PENDING_DEADLINES.clear()
     watch.WAKE_EVENT.clear()
-    for module_name in ("watch", "tray", "status", "sort_undo"):
+    for module_name in ("watch", "tray", "status", "sort_undo", "config_manager"):
         module = sys.modules.get(module_name)
         if module is None:
             continue
