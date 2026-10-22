@@ -3,9 +3,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 import tempfile
+import threading
 import time
 import unittest
+
+if sys.platform == "win32":
+    import ctypes
+    import tkinter as tk
+    from tkinter import filedialog
 
 from quick_switcher import (
     clear_recent_file,
@@ -41,6 +48,20 @@ class QuickSwitcherStateTests(unittest.TestCase):
         self.assertTrue(Path(recent["path"]).exists())
         self.assertIn("age_sec", recent)
         self.assertLess(recent["age_sec"], 5.0)
+
+    def test_special_characters_and_spaces_in_path(self) -> None:
+        sub_dir = self.test_root / "Project, Part #1 & Drafts"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        complex_file = sub_dir / "Complex (Model) [v2.0] + test.step"
+        complex_file.write_text("complex 3d data")
+
+        record_recent_file(complex_file, downloads_root=self.test_root)
+        recent = get_recent_file(max_age_sec=300.0)
+
+        self.assertIsNotNone(recent)
+        self.assertEqual(recent["name"], "Complex (Model) [v2.0] + test.step")
+        self.assertEqual(recent["path"], str(complex_file.resolve()))
+        self.assertTrue(Path(recent["path"]).exists())
 
     def test_recency_timeout_expiration(self) -> None:
         sample_file = self.test_root / "test_notes.pdf"
@@ -86,6 +107,38 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
     def test_inject_file_safety(self) -> None:
         self.assertFalse(inject_file_into_dialog(0, "C:/fake/path.step"))
         self.assertFalse(inject_file_into_dialog(-1, "C:/fake/path.step"))
+
+    def test_inject_nonexistent_file_returns_false(self) -> None:
+        # Must verify file exists before attempting to inject
+        self.assertFalse(inject_file_into_dialog(12345, "C:/totally_nonexistent_file.xyz"))
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows Win32 dialog integration test")
+    def test_live_dialog_injection_e2e(self) -> None:
+        user32 = ctypes.windll.user32
+        with tempfile.TemporaryDirectory() as td:
+            sample_file = Path(td) / "E2E_Test_Model.step"
+            sample_file.write_text("solid model data")
+
+            chosen_result: list[str] = []
+
+            def background_agent() -> None:
+                time.sleep(0.4)
+                dialog_hwnd = user32.FindWindowW("#32770", None)
+                if dialog_hwnd and is_file_dialog(dialog_hwnd):
+                    inject_file_into_dialog(dialog_hwnd, sample_file)
+
+            t = threading.Thread(target=background_agent, daemon=True)
+            t.start()
+
+            root = tk.Tk()
+            root.withdraw()
+            res = filedialog.askopenfilename(title="Live E2E Test Dialog")
+            if res:
+                chosen_result.append(res)
+            root.destroy()
+
+            self.assertTrue(len(chosen_result) > 0)
+            self.assertEqual(Path(chosen_result[0]).resolve(), sample_file.resolve())
 
 
 if __name__ == "__main__":

@@ -123,9 +123,11 @@ def record_recent_file(
         "timestamp": time.time(),
     }
 
+    temp_file = RECENT_STATE_FILE.with_suffix(".tmp")
     try:
-        with open(RECENT_STATE_FILE, "w", encoding="utf-8") as f:
+        with open(temp_file, "w", encoding="utf-8") as f:
             json.dump(data, f)
+        temp_file.replace(RECENT_STATE_FILE)
     except Exception as exc:
         logging.debug("Failed to record recent file: %s", exc)
 
@@ -174,7 +176,7 @@ def clear_recent_file() -> None:
 
 
 def is_file_dialog(hwnd: int) -> bool:
-    """Return True if hwnd is an active Windows Common File Dialog (#32770)."""
+    """Return True if hwnd is an active Open/Upload File Dialog (#32770), skipping Save dialogs."""
     if sys.platform != "win32" or not hwnd:
         return False
 
@@ -187,21 +189,38 @@ def is_file_dialog(hwnd: int) -> bool:
     if class_name.value != "#32770":
         return False
 
-    # Check for child file dialog controls (ComboBoxEx32 or Edit)
-    found_file_controls = False
+    title = (ctypes.c_wchar * 256)()
+    user32.GetWindowTextW(hwnd, title, 256)
+    title_lower = title.value.lower()
+    # Filter out Save As dialogs
+    if "save as" in title_lower or "save file" in title_lower:
+        return False
+
+    has_edit = False
+    is_save_btn = False
 
     def enum_child(h, _):
-        nonlocal found_file_controls
+        nonlocal has_edit, is_save_btn
         cn = (ctypes.c_wchar * 256)()
         user32.GetClassNameW(h, cn, 256)
-        if cn.value in ("ComboBoxEx32", "Edit"):
-            found_file_controls = True
-            return False
+        cname = cn.value
+        if cname in ("ComboBoxEx32", "Edit"):
+            has_edit = True
+        elif cname == "Button":
+            btn_txt = (ctypes.c_wchar * 256)()
+            user32.GetWindowTextW(h, btn_txt, 256)
+            txt = btn_txt.value.strip().lower().replace("&", "")
+            if txt == "save":
+                is_save_btn = True
         return True
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user32.EnumChildWindows(hwnd, WNDENUMPROC(enum_child), 0)
-    return found_file_controls
+
+    if not has_edit or is_save_btn:
+        return False
+
+    return True
 
 
 def find_dialog_edit_control(dialog_hwnd: int) -> int | None:
@@ -234,16 +253,25 @@ def inject_file_into_dialog(dialog_hwnd: int, file_path: str | Path) -> bool:
         return False
 
     user32 = ctypes.windll.user32
+    target = Path(file_path).resolve()
+    if not target.exists():
+        return False
+
     edit_hwnd = find_dialog_edit_control(dialog_hwnd)
     if not edit_hwnd:
         return False
 
-    path_str = str(Path(file_path).resolve())
+    path_str = str(target)
     # 1. Set full path in the edit box
     user32.SendMessageW(edit_hwnd, WM_SETTEXT, 0, path_str)
     time.sleep(0.06)
 
-    # 2. Trigger the Open button via IDOK command
+    # 2. Trigger Open via both Return key on edit control and IDOK command on dialog
+    VK_RETURN = 0x0D
+    WM_KEYDOWN = 0x0100
+    WM_KEYUP = 0x0101
+    user32.PostMessageW(edit_hwnd, WM_KEYDOWN, VK_RETURN, 0)
+    user32.PostMessageW(edit_hwnd, WM_KEYUP, VK_RETURN, 0)
     user32.PostMessageW(dialog_hwnd, WM_COMMAND, IDOK, 0)
     return True
 
@@ -292,6 +320,8 @@ class QuickSwitcherPill:
         self.pill_w = round(350 * self.scale)
         self.pill_h = round(42 * self.scale)
         self.icon_photo: ImageTk.PhotoImage | None = None
+        self.last_x: int | None = None
+        self.last_y: int | None = None
 
         self._build_ui()
         self._position_pill()
@@ -299,8 +329,8 @@ class QuickSwitcherPill:
         # Register Ctrl+G global hotkey for quick activation
         self._register_hotkey()
 
-        # Track dialog position and auto-dismiss
-        self.root.after(120, self._track_dialog)
+        # Track dialog position and poll hotkey
+        self.root.after(100, self._track_dialog)
         self.root.after(25000, self.close)  # 25s auto-timeout
 
     def _build_ui(self) -> None:
@@ -419,11 +449,16 @@ class QuickSwitcherPill:
                 if user32.GetWindowRect(self.dialog_hwnd, ctypes.byref(rect)):
                     # Right-aligned, docked right above the dialog's top title bar
                     x = rect.right - self.pill_w - round(16 * self.scale)
+                    x = max(rect.left + round(8 * self.scale), x)
                     y = rect.top - self.pill_h - round(6 * self.scale)
                     if y < 8:
                         # If dialog is at the top of the monitor, dock just inside below title bar
                         y = rect.top + round(36 * self.scale)
-                    self.root.geometry(f"{self.pill_w}x{self.pill_h}+{x}+{y}")
+
+                    if (x, y) != (self.last_x, self.last_y):
+                        self.last_x = x
+                        self.last_y = y
+                        self.root.geometry(f"{self.pill_w}x{self.pill_h}+{x}+{y}")
                     return
             except Exception:
                 pass
@@ -438,13 +473,31 @@ class QuickSwitcherPill:
 
         if sys.platform == "win32":
             user32 = ctypes.windll.user32
-            # If the dialog window was closed by the user, close the pill immediately
-            if not user32.IsWindow(self.dialog_hwnd) or not user32.IsWindowVisible(self.dialog_hwnd):
+            # If the dialog window was closed or minimized by the user, close the pill immediately
+            if (
+                not user32.IsWindow(self.dialog_hwnd)
+                or not user32.IsWindowVisible(self.dialog_hwnd)
+                or user32.IsIconic(self.dialog_hwnd)
+            ):
                 self.close()
                 return
 
         self._position_pill()
-        self.root.after(150, self._track_dialog)
+        self._check_hotkey()
+        self.root.after(100, self._track_dialog)
+
+    def _check_hotkey(self) -> None:
+        """Poll Ctrl+G when the dialog or pill has keyboard focus."""
+        if sys.platform == "win32":
+            try:
+                user32 = ctypes.windll.user32
+                fg = user32.GetForegroundWindow()
+                pill_parent = user32.GetParent(self.root.winfo_id())
+                if fg in (self.dialog_hwnd, pill_parent, self.root.winfo_id()):
+                    if (user32.GetAsyncKeyState(0x11) & 0x8000) and (user32.GetAsyncKeyState(VK_G) & 0x8000):
+                        self.select_file()
+            except Exception:
+                pass
 
     def on_enter(self, _event=None) -> None:
         self.root.config(bg=self.hover_border)
@@ -468,6 +521,13 @@ class QuickSwitcherPill:
         """Inject the recent file into the dialog and dismiss the pill."""
         if self.is_closed:
             return
+
+        if not Path(self.file_path).exists():
+            self.action_btn.config(text="✕ File not found", fg="#FFFFFF", bg=CLOSE_HOVER)
+            self.root.update_idletasks()
+            self.root.after(1000, self.close)
+            return
+
         self.is_closed = True
         self._unregister_hotkey()
 
