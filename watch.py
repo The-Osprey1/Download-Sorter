@@ -255,6 +255,11 @@ def drain(
                         notify_file_moved(dest, target_root)
                     except Exception as err:
                         logging.debug("Ribbon notification skipped: %s", err)
+                    try:
+                        from quick_switcher import record_recent_file
+                        record_recent_file(dest, target_root)
+                    except Exception as err:
+                        logging.debug("Quick switcher record skipped: %s", err)
                 elif (
                     path.exists()
                     and path.is_file()
@@ -290,6 +295,11 @@ def drain(
                         notify_file_moved(dest, target_root)
                     except Exception as err:
                         logging.debug("Ribbon notification skipped: %s", err)
+                    try:
+                        from quick_switcher import record_recent_file
+                        record_recent_file(dest, target_root)
+                    except Exception as err:
+                        logging.debug("Quick switcher record skipped: %s", err)
             except Exception:
                 logging.exception("Failed relocating %s", path)
 
@@ -317,6 +327,11 @@ def drain(
                         notify_file_moved(dest, target_root)
                     except Exception as err:
                         logging.debug("Ribbon notification skipped: %s", err)
+                    try:
+                        from quick_switcher import record_recent_file
+                        record_recent_file(dest, target_root)
+                    except Exception as err:
+                        logging.debug("Quick switcher record skipped: %s", err)
             except Exception:
                 logging.exception("Failed auto-correcting misplaced file for %s", path)
     return moved_count
@@ -553,6 +568,15 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
     observer.start()
     write_runtime_state("running", "filesystem observers active")
     last_heartbeat = time.monotonic()
+
+    switcher_monitor = None
+    if config.get("quick_switcher_enabled", True) and sys.platform == "win32":
+        try:
+            from quick_switcher import QuickSwitcherMonitor
+            switcher_monitor = QuickSwitcherMonitor(stop_event=stop)
+            switcher_monitor.start()
+        except Exception as err:
+            logging.debug("Quick switcher monitor start skipped: %s", err)
     try:
         # Observe first, reconcile second: a download arriving during the scan is
         # queued and cannot fall into the startup race window.

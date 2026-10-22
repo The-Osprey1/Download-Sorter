@@ -543,6 +543,11 @@ class RibbonPopup:
 
         self.category_type, self.accent_color = get_category_info(self.dest_path, self.folder_disp)
         add_to_recent_docs(self.dest_path)
+        try:
+            from quick_switcher import record_recent_file
+            record_recent_file(self.dest_path, self.downloads_root)
+        except Exception:
+            pass
 
         # Theme-derived color tokens & reactive border styling
         self.normal_border = blend_colors(self.accent_color, BORDER_COLOR, 0.32)
