@@ -4,11 +4,15 @@ Displays a modern floating banner in the top-right corner when a file is sorted.
 Features:
 - Integrated with Devyn Personal Suite design tokens (`suite_theme.py`).
 - Crisp High-DPI rendering on Windows (fixes blurriness on 125%/150%/175%/200% displays).
-- Dynamic category-based accent colors (3D/CAD, PDFs, Code, Media, Installers).
+- Dynamic category-based accent colors (3D/CAD, CNC, Slicer, PDFs, Code, Media, Installers).
+- Modern anti-aliased vector icon emblems for all major file categories.
+- Silky 60fps cubic ease-out entrance slide and snappy ease-in exit slide animations.
+- Smooth 50fps progress countdown bar with pause-on-hover and glow highlight.
+- Tinted category-reactive border and Windows 11 rounded corners + native drop shadow.
 - Atomic slot synchronization for multi-file downloads using Windows file locking.
 - Automatic vertical stacking when multiple files are downloaded at once.
 - Safe File Explorer reveal supporting commas and special characters in paths.
-- Auto-dismisses after timeout (pauses on hover).
+- Auto-dismisses after timeout (pauses on hover, dismisses on close button).
 - Rate-capped to avoid spamming the screen during large bulk operations.
 """
 
@@ -40,6 +44,12 @@ if sys.platform == "win32":
 
 import tkinter as tk
 
+try:
+    from PIL import Image, ImageDraw, ImageTk
+    HAS_PIL = True
+except Exception:
+    HAS_PIL = False
+
 ROOT = Path(__file__).resolve().parent
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 if not PYTHON.exists():
@@ -58,17 +68,17 @@ try:
     CLOSE_HOVER = COLORS.get("critical", "#FA7183")
     HOVER_BG = COLORS.get("surfaceHover", "#1D222C")
 
-    BASE_WIDTH = int(RIBBON.get("width", 350))
-    BASE_HEIGHT = int(RIBBON.get("height", 84))
-    BASE_OFFSET_X = int(RIBBON.get("offset", 20))
-    BASE_OFFSET_Y = int(RIBBON.get("offset", 20))
-    BASE_GAP = int(RIBBON.get("gap", 10))
-    AUTO_DISMISS_MS = int(RIBBON.get("timeoutMs", 7000))
+    BASE_WIDTH = int(RIBBON.get("width", 360))
+    BASE_HEIGHT = int(RIBBON.get("height", 90))
+    BASE_OFFSET_X = int(RIBBON.get("offset", 18))
+    BASE_OFFSET_Y = int(RIBBON.get("offset", 18))
+    BASE_GAP = int(RIBBON.get("gap", 8))
+    AUTO_DISMISS_MS = int(RIBBON.get("timeoutMs", 8000))
     MAX_SLOTS = int(RIBBON.get("maxVisible", 4))
     FONT_FAMILY = TYPE.get("ui", "Segoe UI")
 except Exception:
     RIBBON = {
-        "width": 336, "height": 84, "offset": 18, "gap": 8,
+        "width": 360, "height": 90, "offset": 18, "gap": 8,
         "timeoutMs": 8000, "maxVisible": 4, "opacity": 0.88,
     }
     BG_COLOR = "#12151C"
@@ -81,8 +91,8 @@ except Exception:
     CLOSE_HOVER = "#FA7183"
     HOVER_BG = "#1D222C"
 
-    BASE_WIDTH = 336
-    BASE_HEIGHT = 84
+    BASE_WIDTH = 360
+    BASE_HEIGHT = 90
     BASE_OFFSET_X = 18
     BASE_OFFSET_Y = 18
     BASE_GAP = 8
@@ -118,42 +128,276 @@ CATEGORY_COLORS: dict[str, str] = {
     "other": "#8B94A7",        # Muted slate
 }
 
+# Fallback text glyphs when Pillow is not available
+CATEGORY_GLYPHS: dict[str, str] = {
+    "cad": "◇",
+    "cnc": "⚙",
+    "print": "◈",
+    "pdf": "📄",
+    "doc": "📝",
+    "sheet": "▦",
+    "image": "🖼",
+    "video": "▶",
+    "audio": "♫",
+    "archive": "🗜",
+    "installer": "⬇",
+    "code": "⟨/⟩",
+    "default": "✓",
+}
 
-def get_accent_color(dest_path: Path, folder_disp: str) -> str:
-    """Return a distinct theme color depending on file type or category folder."""
+
+def hex_to_rgb(h: str) -> tuple[int, int, int]:
+    """Parse a hex color string (#RGB, #RRGGBB) to an RGB tuple."""
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except Exception:
+        return 105, 230, 173
+
+
+def blend_colors(color1: str, color2: str, factor: float) -> str:
+    """Blend two hex colors: factor 1.0 means 100% color1, 0.0 means 100% color2."""
+    try:
+        r1, g1, b1 = hex_to_rgb(color1)
+        r2, g2, b2 = hex_to_rgb(color2)
+        r = max(0, min(255, round(r1 * factor + r2 * (1.0 - factor))))
+        g = max(0, min(255, round(g1 * factor + g2 * (1.0 - factor))))
+        b = max(0, min(255, round(b1 * factor + b2 * (1.0 - factor))))
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except Exception:
+        return color1
+
+
+def get_category_info(dest_path: Path, folder_disp: str) -> tuple[str, str]:
+    """Return (category_type, accent_color) based on file extension and folder context."""
     folder_lower = folder_disp.lower()
     ext = dest_path.suffix.lower()
 
+    # Direct extension mappings (primary precision)
+    if ext in (".step", ".stp", ".stl", ".3mf", ".obj", ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".dwg", ".dxf"):
+        return "cad", "#69E6AD"
+    if ext in (".nc", ".tap", ".ngc"):
+        return "cnc", "#D74A4A"
+    if ext in (".gcode", ".bgcode"):
+        return "print", "#E8833A"
+    if ext == ".pdf":
+        return "pdf", "#FA7183"
+    if ext in (".doc", ".docx", ".odt", ".rtf", ".txt", ".md"):
+        return "doc", "#61A5FF"
+    if ext in (".xls", ".xlsx", ".csv", ".ods"):
+        return "sheet", "#69E6AD"
+    if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"):
+        return "image", "#A855F7"
+    if ext in (".mp4", ".mov", ".mkv", ".avi", ".webm"):
+        return "video", "#EC4899"
+    if ext in (".mp3", ".wav", ".flac", ".m4a", ".aac"):
+        return "audio", "#8B5CF6"
+    if ext in (".zip", ".rar", ".7z", ".tar", ".gz"):
+        return "archive", "#06B6D4"
+    if ext in (".exe", ".msi", ".msix"):
+        return "installer", "#F43F5E"
+    if ext in (".py", ".js", ".ts", ".html", ".css", ".json", ".cpp", ".cs", ".rs", ".go", ".c", ".h"):
+        return "code", "#F5AD62"
+
+    # Destination folder keyword matches
     for key, color in CATEGORY_COLORS.items():
         if key in folder_lower:
-            return color
+            if key in ("step", "stl", "3mf", "obj", "cad", "3d models"):
+                return "cad", color
+            if key == "gcode":
+                return "cnc", color
+            if key == "print files":
+                return "print", color
+            if key == "pdfs":
+                return "pdf", color
+            if key in ("school", "documents", "word", "text"):
+                return "doc", color
+            if key == "spreadsheets":
+                return "sheet", color
+            if key == "images":
+                return "image", color
+            if key == "videos":
+                return "video", color
+            if key == "audio":
+                return "audio", color
+            if key == "archives":
+                return "archive", color
+            if key == "installers":
+                return "installer", color
+            if key == "code":
+                return "code", color
+            return "default", color
 
-    if ext in (".step", ".stp", ".stl", ".3mf", ".obj", ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".dwg", ".dxf"):
-        return "#69E6AD"
-    if ext in (".nc", ".tap", ".ngc"):
-        return "#D74A4A"
-    if ext in (".gcode", ".bgcode"):
-        return "#E8833A"
-    if ext == ".pdf":
-        return "#FA7183"
-    if ext in (".doc", ".docx", ".odt", ".rtf", ".txt", ".md"):
-        return "#61A5FF"
-    if ext in (".xls", ".xlsx", ".csv", ".ods"):
-        return "#69E6AD"
-    if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"):
-        return "#A855F7"
-    if ext in (".mp4", ".mov", ".mkv", ".avi", ".webm"):
-        return "#EC4899"
-    if ext in (".mp3", ".wav", ".flac", ".m4a", ".aac"):
-        return "#8B5CF6"
-    if ext in (".zip", ".rar", ".7z", ".tar", ".gz"):
-        return "#06B6D4"
-    if ext in (".exe", ".msi", ".msix"):
-        return "#F43F5E"
-    if ext in (".py", ".js", ".ts", ".html", ".css", ".json", ".cpp", ".cs"):
-        return "#F5AD62"
+    return "default", DEFAULT_ACCENT
 
-    return DEFAULT_ACCENT
+
+def get_accent_color(dest_path: Path, folder_disp: str) -> str:
+    """Return a distinct theme color depending on file type or category folder."""
+    _cat, color = get_category_info(dest_path, folder_disp)
+    return color
+
+
+def render_category_icon(category_type: str, accent_hex: str, size: int = 38) -> Image.Image | None:
+    """Render a modern anti-aliased category emblem badge using Pillow with 3x supersampling."""
+    if not HAS_PIL:
+        return None
+
+    try:
+        scale = 3
+        S = size * scale
+        im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        r, g, b = hex_to_rgb(accent_hex)
+
+        # Background squircle container with dual-layer depth
+        rad = int(9 * scale)
+        # Outer soft glow outline
+        d.rounded_rectangle(
+            [1, 1, S - 2, S - 2],
+            radius=rad,
+            fill=(r, g, b, 24),
+            outline=(r, g, b, 50),
+            width=max(1, int(1 * scale)),
+        )
+        # Inset solid-glass badge
+        d.rounded_rectangle(
+            [int(2 * scale), int(2 * scale), S - int(3 * scale), S - int(3 * scale)],
+            radius=int(7 * scale),
+            fill=(r, g, b, 38),
+            outline=(r, g, b, 115),
+            width=max(1, int(1.2 * scale)),
+        )
+
+        cx, cy = S / 2.0, S / 2.0
+        fg = (r, g, b, 255)
+        fg_dim = (r, g, b, 135)
+        w = max(2, int(2.0 * scale))
+        w_thin = max(1, int(1.2 * scale))
+
+        if category_type == "cad":
+            # 3D isometric faceted cube
+            cr = S * 0.26
+            top = (cx, cy - cr)
+            tr = (cx + cr * 0.866, cy - cr * 0.5)
+            br = (cx + cr * 0.866, cy + cr * 0.5)
+            bot = (cx, cy + cr)
+            bl = (cx - cr * 0.866, cy + cr * 0.5)
+            tl = (cx - cr * 0.866, cy - cr * 0.5)
+            c = (cx, cy)
+            d.polygon([c, top, tr, c], fill=(r, g, b, 180), outline=fg)
+            d.polygon([c, tr, br, bot], fill=(r, g, b, 120), outline=fg)
+            d.polygon([c, bot, bl, tl], fill=(r, g, b, 70), outline=fg)
+            d.line([c, top], fill=fg, width=w)
+            d.line([c, br], fill=fg, width=w)
+            d.line([c, bl], fill=fg, width=w)
+
+        elif category_type == "cnc":
+            # Haas milling endmill cutter with helical flutes
+            x1, x2 = cx - S * 0.13, cx + S * 0.13
+            top_y, fl_y, bot_y = cy - S * 0.28, cy - S * 0.06, cy + S * 0.26
+            d.rounded_rectangle([x1, top_y, x2, fl_y], radius=int(2 * scale), fill=(r, g, b, 60), outline=fg, width=w)
+            d.line([(x1, fl_y), (x2, fl_y + S * 0.08)], fill=fg, width=w)
+            d.line([(x1, fl_y + S * 0.09), (x2, fl_y + S * 0.17)], fill=fg, width=w)
+            d.line([(x1, fl_y + S * 0.18), (x2, fl_y + S * 0.26)], fill=fg, width=w)
+            d.line([(x1, fl_y), (x1, bot_y)], fill=fg, width=w)
+            d.line([(x2, fl_y), (x2, bot_y)], fill=fg, width=w)
+            d.line([(x1, bot_y), (x2, bot_y)], fill=fg, width=w)
+
+        elif category_type == "print":
+            # 3D printer hotend extruder & deposited layer
+            top_y = cy - S * 0.25
+            mid_y = cy + S * 0.02
+            tip_y = cy + S * 0.18
+            d.polygon(
+                [(cx - S * 0.20, top_y), (cx + S * 0.20, top_y), (cx + S * 0.20, mid_y),
+                 (cx + S * 0.06, tip_y), (cx - S * 0.06, tip_y), (cx - S * 0.20, mid_y)],
+                fill=(r, g, b, 60), outline=fg, width=w,
+            )
+            d.line([(cx - S * 0.26, cy + S * 0.26), (cx + S * 0.26, cy + S * 0.26)], fill=fg, width=int(w * 1.4))
+
+        elif category_type in ("pdf", "doc"):
+            # Clean document page with folded corner and text lines
+            x1, y1 = cx - S * 0.22, cy - S * 0.27
+            x2, y2 = cx + S * 0.22, cy + S * 0.27
+            fold = S * 0.14
+            d.polygon([(x1, y1), (x2 - fold, y1), (x2, y1 + fold), (x2, y2), (x1, y2)], fill=(r, g, b, 45), outline=fg, width=w)
+            d.polygon([(x2 - fold, y1), (x2 - fold, y1 + fold), (x2, y1 + fold)], fill=(r, g, b, 140), outline=fg, width=w)
+            lx1, lx2 = x1 + S * 0.08, x2 - S * 0.08
+            d.line([(lx1, cy - S * 0.04), (lx2 - S * 0.06, cy - S * 0.04)], fill=fg_dim, width=w)
+            d.line([(lx1, cy + S * 0.08), (lx2, cy + S * 0.08)], fill=fg_dim, width=w)
+            d.line([(lx1, cy + S * 0.20), (lx1 + S * 0.14, cy + S * 0.20)], fill=fg_dim, width=w)
+
+        elif category_type == "sheet":
+            # Spreadsheet data grid with header
+            x1, y1 = cx - S * 0.26, cy - S * 0.23
+            x2, y2 = cx + S * 0.26, cy + S * 0.23
+            d.rounded_rectangle([x1, y1, x2, y2], radius=int(3 * scale), fill=(r, g, b, 45), outline=fg, width=w)
+            hdr_y = y1 + (y2 - y1) * 0.35
+            d.line([(x1, hdr_y), (x2, hdr_y)], fill=fg, width=w)
+            col_x = x1 + (x2 - x1) * 0.45
+            d.line([(col_x, y1), (col_x, y2)], fill=fg, width=w)
+
+        elif category_type == "image":
+            # Picture frame with mountain peaks and sun
+            x1, y1 = cx - S * 0.26, cy - S * 0.22
+            x2, y2 = cx + S * 0.26, cy + S * 0.22
+            d.rounded_rectangle([x1, y1, x2, y2], radius=int(3 * scale), fill=(r, g, b, 45), outline=fg, width=w)
+            d.ellipse([cx + S * 0.06, y1 + S * 0.06, cx + S * 0.18, y1 + S * 0.18], fill=fg)
+            d.polygon([(x1 + S * 0.04, y2 - S * 0.03), (cx - S * 0.06, cy - S * 0.02), (cx + S * 0.08, y2 - S * 0.03)], fill=(r, g, b, 150))
+            d.polygon([(cx, y2 - S * 0.03), (cx + S * 0.14, cy + S * 0.04), (x2 - S * 0.04, y2 - S * 0.03)], fill=(r, g, b, 100))
+
+        elif category_type == "video":
+            # Media screen with centered play triangle
+            x1, y1 = cx - S * 0.26, cy - S * 0.22
+            x2, y2 = cx + S * 0.26, cy + S * 0.22
+            d.rounded_rectangle([x1, y1, x2, y2], radius=int(4 * scale), fill=(r, g, b, 45), outline=fg, width=w)
+            pw = S * 0.12
+            d.polygon([(cx - pw * 0.6, cy - pw * 0.9), (cx + pw * 0.9, cy), (cx - pw * 0.6, cy + pw * 0.9)], fill=fg)
+
+        elif category_type == "audio":
+            # Audio spectrum waveform bars
+            bar_ws = [0.10, 0.22, 0.16, 0.26, 0.12]
+            step_x = S * 0.11
+            start_x = cx - 2 * step_x
+            for i, bh in enumerate(bar_ws):
+                bx = start_x + i * step_x
+                d.line([(bx, cy - S * bh), (bx, cy + S * bh)], fill=fg, width=int(2.2 * scale))
+
+        elif category_type == "archive":
+            # Archive package box with zipper teeth
+            x1, y1 = cx - S * 0.24, cy - S * 0.24
+            x2, y2 = cx + S * 0.24, cy + S * 0.24
+            d.rounded_rectangle([x1, y1, x2, y2], radius=int(3 * scale), fill=(r, g, b, 45), outline=fg, width=w)
+            d.line([(cx, y1), (cx, cy + S * 0.08)], fill=fg, width=w)
+            for ty in [y1 + S * 0.06, y1 + S * 0.14, y1 + S * 0.22]:
+                d.line([(cx - S * 0.06, ty), (cx + S * 0.06, ty)], fill=fg, width=w_thin)
+            d.rectangle([cx - S * 0.05, cy + S * 0.08, cx + S * 0.05, cy + S * 0.18], fill=fg)
+
+        elif category_type == "installer":
+            # System app window with download arrow
+            x1, y1 = cx - S * 0.24, cy - S * 0.24
+            x2, y2 = cx + S * 0.24, cy + S * 0.24
+            d.rounded_rectangle([x1, y1, x2, y2], radius=int(3 * scale), fill=(r, g, b, 45), outline=fg, width=w)
+            d.line([(cx, cy - S * 0.12), (cx, cy + S * 0.10)], fill=fg, width=w)
+            d.polygon([(cx - S * 0.10, cy + S * 0.06), (cx + S * 0.10, cy + S * 0.06), (cx, cy + S * 0.16)], fill=fg)
+
+        elif category_type == "code":
+            # Developer angle brackets < / >
+            gap = S * 0.16
+            d.line([(cx - gap, cy - S * 0.18), (cx - gap - S * 0.14, cy), (cx - gap, cy + S * 0.18)], fill=fg, width=w)
+            d.line([(cx + S * 0.06, cy - S * 0.22), (cx - S * 0.06, cy + S * 0.22)], fill=fg_dim, width=w)
+            d.line([(cx + gap, cy - S * 0.18), (cx + gap + S * 0.14, cy), (cx + gap, cy + S * 0.18)], fill=fg, width=w)
+
+        else:
+            # Clean checkmark badge
+            pts = [(cx - S * 0.16, cy + S * 0.02), (cx - S * 0.04, cy + S * 0.14), (cx + S * 0.18, cy - S * 0.12)]
+            d.line(pts, fill=fg, width=int(2.4 * scale), joint="curve")
+
+        return im.resize((size, size), Image.Resampling.LANCZOS)
+    except Exception:
+        return None
 
 
 @contextmanager
@@ -267,11 +511,17 @@ def scaled_ribbon_geometry(
 
 
 class RibbonPopup:
-    def __init__(self, dest_path: Path, downloads_root: Path | None = None) -> None:
+    def __init__(
+        self,
+        dest_path: Path,
+        downloads_root: Path | None = None,
+        enable_animation: bool = True,
+    ) -> None:
         self.dest_path = dest_path.resolve()
         self.downloads_root = downloads_root.resolve() if downloads_root else Path.home() / "Downloads"
         self.pid = os.getpid()
         self.slot = claim_slot(self.pid)
+        self.enable_animation = enable_animation
 
         # Calculate relative folder display
         try:
@@ -280,12 +530,17 @@ class RibbonPopup:
         except ValueError:
             self.folder_disp = self.dest_path.parent.name
 
-        self.accent_color = get_accent_color(self.dest_path, self.folder_disp)
+        self.category_type, self.accent_color = get_category_info(self.dest_path, self.folder_disp)
+
+        # Theme-derived color tokens & reactive border styling
+        self.normal_border = blend_colors(self.accent_color, BORDER_COLOR, 0.32)
+        self.hover_border = blend_colors(self.accent_color, COLORS.get("borderStrong", "#3A4352"), 0.50)
+        self.accent_glow = blend_colors(self.accent_color, "#FFFFFF", 0.25)
 
         self.root = tk.Tk()
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.config(bg=BORDER_COLOR)
+        self.root.config(bg=self.normal_border)
 
         # Enable DWM rounded corners + native drop shadow on Windows 11
         if sys.platform == "win32":
@@ -295,7 +550,8 @@ class RibbonPopup:
                 # DWMWA_WINDOW_CORNER_PREFERENCE (33) = DWMWCP_ROUND (2)
                 pref = ctypes.c_int(2)
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+                    hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)
+                )
                 # Enable DWM shadow via DwmExtendFrameIntoClientArea
                 class MARGINS(ctypes.Structure):
                     _fields_ = [("left", ctypes.c_int), ("right", ctypes.c_int),
@@ -305,26 +561,39 @@ class RibbonPopup:
             except Exception:
                 pass
 
-        # Keep window fully opaque for crisp text rendering
-        # (previous alpha=0.88 washed out ALL content including text)
-
         # Calculate DPI-scaled dimensions
         try:
             dpi = float(self.root.winfo_fpixels("1i"))
-            scale = max(1.0, dpi / 96.0)
+            self.scale = max(1.0, dpi / 96.0)
         except Exception:
-            scale = 1.0
+            self.scale = 1.0
 
-        width, height, pos_x, pos_y = scaled_ribbon_geometry(scale, self.slot, self._work_area())
-        self.root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        width, height, self.target_x, self.target_y = scaled_ribbon_geometry(
+            self.scale, self.slot, self._work_area()
+        )
+        self.target_w = width
+        self.target_h = height
 
+        # Animation parameters (220ms ease-out enter, 160ms ease-in exit)
+        self.slide_distance = round(140 * self.scale)
+        self.slide_job: str | None = None
         self.dismiss_job: str | None = None
         self.progress_job: str | None = None
-        self.remaining_ms = AUTO_DISMISS_MS
+        self.remaining_ms = float(AUTO_DISMISS_MS)
         self.dismiss_started = 0.0
         self.is_hovered = False
-        self._build_ui(scale)
-        self._schedule_dismiss()
+        self.is_closing = False
+        self.icon_photo: ImageTk.PhotoImage | None = None
+
+        self._build_ui(self.scale)
+
+        if self.enable_animation:
+            start_x = self.target_x + self.slide_distance
+            self.root.geometry(f"{width}x{height}+{start_x}+{self.target_y}")
+            self._animate_slide_in(start_x, self.target_x, self.target_y, duration_ms=220)
+        else:
+            self.root.geometry(f"{width}x{height}+{self.target_x}+{self.target_y}")
+            self._schedule_dismiss()
 
     def _work_area(self) -> tuple[int, int, int, int]:
         """Return the foreground monitor's work area, excluding its taskbar."""
@@ -349,87 +618,128 @@ class RibbonPopup:
         return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
 
     def _build_ui(self, scale: float) -> None:
-        pad_x = int(14 * scale)
-        pad_y = int(10 * scale)
+        pad_y = int(9 * scale)
         stripe_w = max(4, int(4 * scale))
+        icon_size = max(32, int(38 * scale))
+        progress_h = max(2, int(2.5 * scale))
 
         self.container = tk.Frame(self.root, bg=BG_COLOR, cursor="hand2")
         self.container.pack(fill="both", expand=True, padx=1, pady=1)
 
-        # Left accent stripe
+        # Left accent stripe (vertical colored border indicator)
         self.stripe = tk.Frame(self.container, bg=self.accent_color, width=stripe_w)
         self.stripe.pack(side="left", fill="y")
 
-        # A text glyph remains legible in high-contrast mode and gives success a
-        # second signal beyond color alone.
-        self.status = tk.Label(
-            self.container,
-            text="✓",
-            font=(FONT_FAMILY, 14, "bold"),
-            fg=self.accent_color,
-            bg=BG_COLOR,
-            width=2,
-            anchor="center",
-        )
-        self.status.pack(side="left", fill="y")
+        # Category Emblem Badge (anti-aliased Pillow icon or high-contrast fallback)
+        icon_img = render_category_icon(self.category_type, self.accent_color, size=icon_size)
+        if icon_img and HAS_PIL:
+            self.icon_photo = ImageTk.PhotoImage(icon_img)
+            self.status = tk.Label(
+                self.container,
+                image=self.icon_photo,
+                bg=BG_COLOR,
+                bd=0,
+                cursor="hand2",
+            )
+            self.status.pack(side="left", padx=(int(10 * scale), int(2 * scale)), pady=int(6 * scale))
+        else:
+            fallback_glyph = CATEGORY_GLYPHS.get(self.category_type, "✓")
+            self.status = tk.Label(
+                self.container,
+                text=fallback_glyph,
+                font=(FONT_FAMILY, 14, "bold"),
+                fg=self.accent_color,
+                bg=BG_COLOR,
+                width=2,
+                anchor="center",
+            )
+            self.status.pack(side="left", padx=(int(8 * scale), int(2 * scale)), fill="y")
 
-        # Content area
-        self.content = tk.Frame(self.container, bg=BG_COLOR, padx=pad_x, pady=pad_y)
+        # Main content area
+        self.content = tk.Frame(self.container, bg=BG_COLOR, padx=int(8 * scale), pady=pad_y)
         self.content.pack(side="left", fill="both", expand=True)
 
-        # Top row: Tag badge + Close button
+        # Top row: Eyebrow tag badge + Close button
         self.top_row = tk.Frame(self.content, bg=BG_COLOR)
         self.top_row.pack(fill="x")
 
         folder_upper = self.folder_disp.upper()
-        # Streamlined tag: avoid repeating folder name
-        tag_text = f"SORTED  ·  {folder_upper}"
-        if len(tag_text) > 34:
-            tag_text = "SORTED"
+        if len(folder_upper) > 22:
+            folder_upper = folder_upper[:20] + "…"
+        tag_text = f"●  SORTED  ·  {folder_upper}"
 
         self.tag_lbl = tk.Label(
             self.top_row,
             text=tag_text,
-            font=(FONT_FAMILY, 9, "bold"),
+            font=(FONT_FAMILY, 8, "bold"),
             fg=self.accent_color,
             bg=BG_COLOR,
             anchor="w",
         )
         self.tag_lbl.pack(side="left")
 
-        close_btn = tk.Label(
+        # Close button with guaranteed minimum 24px hit target per RIBBON_SPEC.md
+        hit_target = max(24, int(24 * scale))
+        self.close_frame = tk.Frame(
             self.top_row,
+            bg=BG_COLOR,
+            width=hit_target,
+            height=hit_target,
+            cursor="hand2",
+        )
+        self.close_frame.pack_propagate(False)
+        self.close_frame.pack(side="right")
+
+        self.close_btn = tk.Label(
+            self.close_frame,
             text="✕",
-            font=(FONT_FAMILY, 10, "bold"),
+            font=(FONT_FAMILY, 9, "bold"),
             fg=CLOSE_COLOR,
             bg=BG_COLOR,
-            cursor="arrow",
-            padx=int(4 * scale),
+            cursor="hand2",
+            anchor="center",
         )
-        close_btn.pack(side="right")
-        close_btn.bind("<Button-1>", lambda e: self.close())
-        close_btn.bind("<Enter>", lambda e: close_btn.config(fg=CLOSE_HOVER))
-        close_btn.bind("<Leave>", lambda e: close_btn.config(fg=CLOSE_COLOR))
+        self.close_btn.pack(fill="both", expand=True)
+        self.close_btn.bind("<Button-1>", lambda e: (self.close(), "break")[1])
+        self.close_frame.bind("<Button-1>", lambda e: (self.close(), "break")[1])
 
-        # Middle row: Filename
+        def on_close_enter(_e):
+            self.close_btn.config(fg=CLOSE_HOVER, bg="#282F3D")
+            self.close_frame.config(bg="#282F3D")
+
+        def on_close_leave(_e):
+            curr_bg = HOVER_BG if self.is_hovered else BG_COLOR
+            self.close_btn.config(fg=CLOSE_COLOR, bg=curr_bg)
+            self.close_frame.config(bg=curr_bg)
+
+        self.close_btn.bind("<Enter>", on_close_enter)
+        self.close_btn.bind("<Leave>", on_close_leave)
+        self.close_frame.bind("<Enter>", on_close_enter)
+        self.close_frame.bind("<Leave>", on_close_leave)
+
+        # Middle row: Filename (Title)
         fname = self.dest_path.name
-        if len(fname) > 38:
-            fname = fname[:35] + "..."
+        if len(fname) > 36:
+            fname = fname[:33] + "..."
 
         self.name_lbl = tk.Label(
             self.content,
             text=fname,
-            font=(FONT_FAMILY, 11, "bold"),
+            font=(FONT_FAMILY, 10, "bold"),
             fg=TEXT_MAIN,
             bg=BG_COLOR,
             anchor="w",
         )
         self.name_lbl.pack(fill="x", pady=(2, 1))
 
-        # Bottom row: Click action hint
+        # Bottom row: Context subtitle & Explorer action hint
+        action_text = f"Saved to {self.folder_disp}  ·  Click to reveal ›"
+        if len(action_text) > 42:
+            action_text = "Click to reveal in File Explorer ›"
+
         self.action_lbl = tk.Label(
             self.content,
-            text=f"Click to open in Explorer ›",
+            text=action_text,
             font=(FONT_FAMILY, 9),
             fg=TEXT_MUTED,
             bg=BG_COLOR,
@@ -437,15 +747,55 @@ class RibbonPopup:
         )
         self.action_lbl.pack(fill="x")
 
-        # Bind hover and click events across interactive widgets
-        for widget in [self.container, self.content, self.top_row, self.tag_lbl, self.name_lbl, self.action_lbl, self.stripe, self.status]:
+        # Bind hover and click events across all interactive surface widgets
+        interactive_widgets = [
+            self.container, self.content, self.top_row,
+            self.tag_lbl, self.name_lbl, self.action_lbl,
+            self.stripe, self.status
+        ]
+        for widget in interactive_widgets:
             widget.bind("<Button-1>", self.on_click)
             widget.bind("<Enter>", self.on_enter)
             widget.bind("<Leave>", self.on_leave)
 
-        # Rounded progress bar with proper height
-        self.progress = tk.Frame(self.container, bg=self.accent_color, height=max(3, int(3 * scale)))
+        # Subtle progress track underlay & active timer progress bar
+        self.progress_track = tk.Frame(self.container, bg="#181C25", height=progress_h)
+        self.progress_track.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
+
+        self.progress = tk.Frame(self.container, bg=self.accent_color, height=progress_h)
         self.progress.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
+
+    def _animate_slide_in(
+        self,
+        start_x: int,
+        target_x: int,
+        target_y: int,
+        duration_ms: float = 220.0,
+    ) -> None:
+        """Silky 60fps entrance slide using a cubic ease-out curve."""
+        t0 = time.monotonic()
+
+        def step() -> None:
+            if self.is_closing:
+                return
+            now = time.monotonic()
+            elapsed = (now - t0) * 1000.0
+            p = min(1.0, max(0.0, elapsed / duration_ms))
+            # Cubic ease-out: 1 - (1 - p)^3
+            ease_out = 1.0 - (1.0 - p) ** 3
+            curr_x = round(start_x + (target_x - start_x) * ease_out)
+            try:
+                self.root.geometry(f"{self.target_w}x{self.target_h}+{curr_x}+{target_y}")
+                if p < 1.0:
+                    self.slide_job = self.root.after(16, step)
+                else:
+                    self.root.geometry(f"{self.target_w}x{self.target_h}+{target_x}+{target_y}")
+                    self.slide_job = None
+                    self._schedule_dismiss()
+            except tk.TclError:
+                pass
+
+        self.slide_job = self.root.after(10, step)
 
     def _schedule_dismiss(self) -> None:
         if self.dismiss_job:
@@ -458,49 +808,71 @@ class RibbonPopup:
         if self.progress_job:
             self.root.after_cancel(self.progress_job)
             self.progress_job = None
-        if self.is_hovered:
+        if self.is_hovered or self.is_closing:
             return
-        elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000
+        elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
         fraction = max(0.0, min(1.0, (self.remaining_ms - elapsed_ms) / AUTO_DISMISS_MS))
-        self.progress.place_configure(relwidth=fraction)
-        if fraction > 0:
-            self.progress_job = self.root.after(50, self._tick_progress)
+        try:
+            self.progress.place_configure(relwidth=fraction)
+            if fraction > 0:
+                self.progress_job = self.root.after(20, self._tick_progress)
+        except tk.TclError:
+            pass
 
     def on_enter(self, _event=None) -> None:
-        if self.is_hovered:
+        if self.is_hovered or self.is_closing:
             return
         self.is_hovered = True
         if self.dismiss_job:
-            elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000
-            self.remaining_ms = max(1, self.remaining_ms - elapsed_ms)
+            elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
+            self.remaining_ms = max(1.0, self.remaining_ms - elapsed_ms)
             self.root.after_cancel(self.dismiss_job)
             self.dismiss_job = None
         if self.progress_job:
             self.root.after_cancel(self.progress_job)
             self.progress_job = None
-        self._set_bg(HOVER_BG)
+        self._set_hover_state(True)
 
     def on_leave(self, _event=None) -> None:
+        if self.is_closing:
+            return
         self.root.after(20, self._resume_if_pointer_left)
 
     def _resume_if_pointer_left(self) -> None:
-        pointer_widget = self.root.winfo_containing(self.root.winfo_pointerx(), self.root.winfo_pointery())
-        if pointer_widget is not None and pointer_widget.winfo_toplevel() == self.root:
+        if self.is_closing:
             return
+        try:
+            pointer_widget = self.root.winfo_containing(
+                self.root.winfo_pointerx(), self.root.winfo_pointery()
+            )
+            if pointer_widget is not None and pointer_widget.winfo_toplevel() == self.root:
+                return
+        except Exception:
+            pass
         self.is_hovered = False
-        self._set_bg(BG_COLOR)
+        self._set_hover_state(False)
         self._schedule_dismiss()
 
-    def _set_bg(self, color: str) -> None:
-        self.container.config(bg=color)
-        self.content.config(bg=color)
-        self.top_row.config(bg=color)
-        self.tag_lbl.config(bg=color)
-        self.name_lbl.config(bg=color)
-        self.action_lbl.config(bg=color)
-        self.status.config(bg=color)
+    def _set_hover_state(self, hovered: bool) -> None:
+        bg = HOVER_BG if hovered else BG_COLOR
+        border = self.hover_border if hovered else self.normal_border
+        action_col = ACTION_COLOR if hovered else TEXT_MUTED
+        bar_col = self.accent_glow if hovered else self.accent_color
+
+        self.root.config(bg=border)
+        self.container.config(bg=bg)
+        self.content.config(bg=bg)
+        self.top_row.config(bg=bg)
+        self.tag_lbl.config(bg=bg)
+        self.name_lbl.config(bg=bg)
+        self.action_lbl.config(bg=bg, fg=action_col)
+        self.status.config(bg=bg)
+        self.close_frame.config(bg=bg)
+        self.close_btn.config(bg=bg)
+        self.progress.config(bg=bar_col)
 
     def on_click(self, _event=None) -> None:
+        """Trigger reveal in File Explorer and play a fast exit dismiss animation."""
         try:
             if sys.platform == "win32":
                 dest_str = str(self.dest_path)
@@ -509,7 +881,10 @@ class RibbonPopup:
                         os.startfile(str(self.dest_path.parent))
                 elif "," in dest_str:
                     # Windows explorer.exe /select splits on commas. PowerShell handles it safely.
-                    cmd = f"Start-Process explorer.exe -ArgumentList ('/select,\"' + [System.IO.Path]::GetFullPath('{dest_str}') + '\"')"
+                    cmd = (
+                        "Start-Process explorer.exe -ArgumentList "
+                        f"('/select,\"' + [System.IO.Path]::GetFullPath('{dest_str}') + '\"')"
+                    )
                     subprocess.Popen(
                         ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", cmd],
                         creationflags=subprocess.CREATE_NO_WINDOW
@@ -524,17 +899,58 @@ class RibbonPopup:
             self.close()
 
     def close(self) -> None:
+        """Dismiss the ribbon with a snappy slide-out exit animation."""
+        if self.is_closing:
+            return
+        self.is_closing = True
+
         if self.dismiss_job:
             self.root.after_cancel(self.dismiss_job)
             self.dismiss_job = None
         if self.progress_job:
             self.root.after_cancel(self.progress_job)
             self.progress_job = None
+        if self.slide_job:
+            self.root.after_cancel(self.slide_job)
+            self.slide_job = None
+
         release_slot(self.slot, self.pid)
+
+        if not self.enable_animation:
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
+            return
+
         try:
-            self.root.destroy()
-        except tk.TclError:
-            pass
+            curr_x = self.root.winfo_x()
+            curr_y = self.root.winfo_y()
+        except Exception:
+            curr_x = self.target_x
+            curr_y = self.target_y
+
+        end_x = curr_x + self.slide_distance
+        t0 = time.monotonic()
+        duration_ms = 160.0
+
+        def out_step() -> None:
+            now = time.monotonic()
+            elapsed = (now - t0) * 1000.0
+            p = min(1.0, max(0.0, elapsed / duration_ms))
+            # Quadratic ease-in: p^2
+            ease_in = p * p
+            x = round(curr_x + (end_x - curr_x) * ease_in)
+            try:
+                self.root.geometry(f"{self.target_w}x{self.target_h}+{x}+{curr_y}")
+                if p < 1.0:
+                    self.slide_job = self.root.after(16, out_step)
+                else:
+                    self.root.destroy()
+            except tk.TclError:
+                pass
+
+        out_step()
 
     def run(self) -> None:
         try:
@@ -574,15 +990,18 @@ def main() -> int:
     parser.add_argument("dest_path", nargs="?", default="", help="Path to the destination file.")
     parser.add_argument("downloads_root", nargs="?", default="", help="Root Downloads folder.")
     parser.add_argument("--test", action="store_true", help="Show a test notification.")
+    parser.add_argument("--no-anim", action="store_true", help="Disable slide animations.")
     args = parser.parse_args()
+
+    enable_anim = not args.no_anim
 
     if args.test or not args.dest_path:
         sample = Path.home() / "Downloads" / "3D Models" / "STEP" / "Flanged Mace Iteration 1 STEP.step"
-        popup = RibbonPopup(sample)
+        popup = RibbonPopup(sample, enable_animation=enable_anim)
     else:
         dest = Path(args.dest_path)
         dl_root = Path(args.downloads_root) if args.downloads_root else None
-        popup = RibbonPopup(dest, dl_root)
+        popup = RibbonPopup(dest, dl_root, enable_animation=enable_anim)
 
     popup.run()
     return 0

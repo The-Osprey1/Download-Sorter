@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from ribbon_popup import (
@@ -8,6 +9,12 @@ from ribbon_popup import (
     BASE_OFFSET_X,
     BASE_OFFSET_Y,
     BASE_WIDTH,
+    CATEGORY_GLYPHS,
+    blend_colors,
+    get_accent_color,
+    get_category_info,
+    hex_to_rgb,
+    render_category_icon,
     scaled_ribbon_geometry,
 )
 
@@ -32,6 +39,64 @@ class RibbonGeometryTests(unittest.TestCase):
             fourth[3] - first[3],
             3 * (round(BASE_HEIGHT * 1.5) + round(BASE_GAP * 1.5)),
         )
+
+
+class RibbonGraphicsAndAnimationTests(unittest.TestCase):
+    def test_color_blending(self) -> None:
+        # Full weight color 1
+        self.assertEqual(blend_colors("#ffffff", "#000000", 1.0), "#ffffff")
+        # Full weight color 2
+        self.assertEqual(blend_colors("#ffffff", "#000000", 0.0), "#000000")
+        # Midpoint
+        mid = blend_colors("#ffffff", "#000000", 0.5)
+        self.assertEqual(mid, "#808080")
+        # Handles 3-char shorthand
+        self.assertEqual(hex_to_rgb("#fff"), (255, 255, 255))
+
+    def test_category_info_and_accent_colors(self) -> None:
+        cases = [
+            ("bracket.step", "CAD", "cad", "#69E6AD"),
+            ("part.stl", "3D Models", "cad", "#69E6AD"),
+            ("spindle.nc", "Haas", "cnc", "#D74A4A"),
+            ("plate.gcode", "Print Files", "print", "#E8833A"),
+            ("lecture.pdf", "School", "pdf", "#FA7183"),
+            ("notes.docx", "Documents", "doc", "#61A5FF"),
+            ("budget.xlsx", "Spreadsheets", "sheet", "#69E6AD"),
+            ("render.png", "Images", "image", "#A855F7"),
+            ("clip.mp4", "Videos", "video", "#EC4899"),
+            ("track.mp3", "Audio", "audio", "#8B5CF6"),
+            ("archive.zip", "Archives", "archive", "#06B6D4"),
+            ("installer.exe", "Installers", "installer", "#F43F5E"),
+            ("script.py", "Code", "code", "#F5AD62"),
+            ("unknown.xyz", "Random", "default", "#69E6AD"),
+        ]
+        for filename, folder, expected_type, expected_color in cases:
+            with self.subTest(file=filename, folder=folder):
+                cat_type, color = get_category_info(Path(filename), folder)
+                self.assertEqual(cat_type, expected_type)
+                self.assertEqual(color, expected_color)
+                # Ensure get_accent_color matches
+                self.assertEqual(get_accent_color(Path(filename), folder), expected_color)
+
+    def test_render_category_icons(self) -> None:
+        categories = [
+            "cad", "cnc", "print", "pdf", "doc", "sheet",
+            "image", "video", "audio", "archive", "installer", "code", "default"
+        ]
+        for cat in categories:
+            with self.subTest(category=cat):
+                img = render_category_icon(cat, "#69E6AD", size=38)
+                self.assertIsNotNone(img)
+                self.assertEqual(img.size, (38, 38))
+
+    def test_fallback_glyphs_coverage(self) -> None:
+        categories = [
+            "cad", "cnc", "print", "pdf", "doc", "sheet",
+            "image", "video", "audio", "archive", "installer", "code", "default"
+        ]
+        for cat in categories:
+            self.assertIn(cat, CATEGORY_GLYPHS)
+            self.assertTrue(len(CATEGORY_GLYPHS[cat]) > 0)
 
 
 if __name__ == "__main__":
