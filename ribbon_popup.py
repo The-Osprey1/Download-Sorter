@@ -170,6 +170,17 @@ def blend_colors(color1: str, color2: str, factor: float) -> str:
         return color1
 
 
+def add_to_recent_docs(path: str | Path) -> None:
+    """Register the file in Windows Recent Documents so it immediately appears in all file upload dialogs."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            SHARD_PATHW = 0x00000003
+            ctypes.windll.shell32.SHAddToRecentDocs(SHARD_PATHW, str(Path(path).resolve()))
+        except Exception:
+            pass
+
+
 def get_category_info(dest_path: Path, folder_disp: str) -> tuple[str, str]:
     """Return (category_type, accent_color) based on file extension and folder context."""
     folder_lower = folder_disp.lower()
@@ -531,6 +542,7 @@ class RibbonPopup:
             self.folder_disp = self.dest_path.parent.name
 
         self.category_type, self.accent_color = get_category_info(self.dest_path, self.folder_disp)
+        add_to_recent_docs(self.dest_path)
 
         # Theme-derived color tokens & reactive border styling
         self.normal_border = blend_colors(self.accent_color, BORDER_COLOR, 0.32)
@@ -732,26 +744,42 @@ class RibbonPopup:
         )
         self.name_lbl.pack(fill="x", pady=(2, 1))
 
-        # Bottom row: Context subtitle & Explorer action hint
-        action_text = f"Saved to {self.folder_disp}  ·  Click to reveal ›"
-        if len(action_text) > 42:
-            action_text = "Click to reveal in File Explorer ›"
+        # Bottom row: Context subtitle & dedicated "Jump to File" pill button
+        self.bottom_row = tk.Frame(self.content, bg=BG_COLOR)
+        self.bottom_row.pack(fill="x", pady=(1, 0))
+
+        folder_text = f"Saved to {self.folder_disp}"
+        if len(folder_text) > 24:
+            folder_text = folder_text[:22] + "…"
 
         self.action_lbl = tk.Label(
-            self.content,
-            text=action_text,
+            self.bottom_row,
+            text=folder_text,
             font=(FONT_FAMILY, 9),
             fg=TEXT_MUTED,
             bg=BG_COLOR,
             anchor="w",
         )
-        self.action_lbl.pack(fill="x")
+        self.action_lbl.pack(side="left")
+
+        # Explicit interactive "Jump to File" pill button
+        self.jump_btn = tk.Label(
+            self.bottom_row,
+            text="Jump to File ›",
+            font=(FONT_FAMILY, 8, "bold"),
+            fg=ACTION_COLOR,
+            bg="#181D26",
+            cursor="hand2",
+            padx=int(6 * scale),
+            pady=int(1 * scale),
+        )
+        self.jump_btn.pack(side="right")
 
         # Bind hover and click events across all interactive surface widgets
         interactive_widgets = [
             self.container, self.content, self.top_row,
-            self.tag_lbl, self.name_lbl, self.action_lbl,
-            self.stripe, self.status
+            self.tag_lbl, self.name_lbl, self.bottom_row,
+            self.action_lbl, self.jump_btn, self.stripe, self.status
         ]
         for widget in interactive_widgets:
             widget.bind("<Button-1>", self.on_click)
@@ -858,6 +886,8 @@ class RibbonPopup:
         border = self.hover_border if hovered else self.normal_border
         action_col = ACTION_COLOR if hovered else TEXT_MUTED
         bar_col = self.accent_glow if hovered else self.accent_color
+        btn_bg = "#212836" if hovered else "#181D26"
+        btn_fg = self.accent_color if hovered else ACTION_COLOR
 
         self.root.config(bg=border)
         self.container.config(bg=bg)
@@ -865,7 +895,9 @@ class RibbonPopup:
         self.top_row.config(bg=bg)
         self.tag_lbl.config(bg=bg)
         self.name_lbl.config(bg=bg)
+        self.bottom_row.config(bg=bg)
         self.action_lbl.config(bg=bg, fg=action_col)
+        self.jump_btn.config(bg=btn_bg, fg=btn_fg)
         self.status.config(bg=bg)
         self.close_frame.config(bg=bg)
         self.close_btn.config(bg=bg)
@@ -875,10 +907,12 @@ class RibbonPopup:
         """Trigger reveal in File Explorer and play a fast exit dismiss animation."""
         try:
             if sys.platform == "win32":
-                dest_str = str(self.dest_path)
+                dest_str = os.path.abspath(str(self.dest_path))
                 if not self.dest_path.exists():
                     if self.dest_path.parent.exists():
                         os.startfile(str(self.dest_path.parent))
+                    elif self.downloads_root.exists():
+                        os.startfile(str(self.downloads_root))
                 elif "," in dest_str:
                     # Windows explorer.exe /select splits on commas. PowerShell handles it safely.
                     cmd = (
@@ -890,7 +924,9 @@ class RibbonPopup:
                         creationflags=subprocess.CREATE_NO_WINDOW
                     )
                 else:
-                    subprocess.Popen(["explorer.exe", f"/select,{dest_str}"])
+                    # Pass unquoted string command line so CreateProcess does not wrap /select
+                    cmd = f'explorer.exe /select,"{dest_str}"'
+                    subprocess.Popen(cmd)
             else:
                 subprocess.Popen(["open", "-R", str(self.dest_path)])
         except Exception as exc:

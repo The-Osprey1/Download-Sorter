@@ -10,6 +10,7 @@ from ribbon_popup import (
     BASE_OFFSET_Y,
     BASE_WIDTH,
     CATEGORY_GLYPHS,
+    add_to_recent_docs,
     blend_colors,
     get_accent_color,
     get_category_info,
@@ -97,6 +98,10 @@ class RibbonGraphicsAndAnimationTests(unittest.TestCase):
         for cat in categories:
             self.assertIn(cat, CATEGORY_GLYPHS)
             self.assertTrue(len(CATEGORY_GLYPHS[cat]) > 0)
+
+    def test_add_to_recent_docs_safety(self) -> None:
+        # Should execute safely without raising exceptions even on mock/non-existent paths
+        add_to_recent_docs(Path("C:/test/file.step"))
 
 
 if __name__ == "__main__":
