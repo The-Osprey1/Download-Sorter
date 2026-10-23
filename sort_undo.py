@@ -18,6 +18,17 @@ from sorter import (
     unique_destination,
 )
 
+try:
+    from ribbon_popup import dismiss_active_ribbons
+except ImportError:
+    dismiss_active_ribbons = None
+
+try:
+    from quick_switcher import clear_recent_file, get_recent_file
+except ImportError:
+    clear_recent_file = None
+    get_recent_file = None
+
 
 def load_history() -> list[dict]:
     if not HISTORY_FILE.exists():
@@ -88,6 +99,18 @@ def undo_moves(targets: list[dict], dry_run: bool = False) -> int:
             record_undo(rec_id, str(target_file), str(dest_path))
             logging.info("Restored: %s -> %s", dest_path.name, target_file)
             restored_count += 1
+            if dismiss_active_ribbons:
+                try:
+                    dismiss_active_ribbons(dest_path)
+                except Exception:
+                    pass
+            if clear_recent_file and get_recent_file:
+                try:
+                    rec_file = get_recent_file(max_age_sec=86400)
+                    if rec_file and Path(rec_file.get("path", "")).resolve() == dest_path.resolve():
+                        clear_recent_file()
+                except Exception:
+                    pass
         except OSError as exc:
             logging.error("Failed to restore %s: %s", dest_path, exc)
 

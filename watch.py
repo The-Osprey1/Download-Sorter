@@ -226,6 +226,22 @@ class DocumentsHandler(FileSystemEventHandler):
             self._queue(event.src_path)
 
 
+def _handle_post_move(dest: Path, target_root: Path, config: dict) -> None:
+    """Notify user via ribbon popup and record recent file for quick switcher, gated by config."""
+    if config.get("ribbon_enabled", True) and config.get("notifications", True):
+        try:
+            from ribbon_popup import notify_file_moved
+            notify_file_moved(dest, target_root)
+        except Exception as err:
+            logging.debug("Ribbon notification skipped: %s", err)
+    if config.get("quick_switcher_enabled", True):
+        try:
+            from quick_switcher import record_recent_file
+            record_recent_file(dest, target_root)
+        except Exception as err:
+            logging.debug("Quick switcher record skipped: %s", err)
+
+
 def drain(
     config: dict,
     root: Path | None = None,
@@ -251,16 +267,7 @@ def drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    try:
-                        from ribbon_popup import notify_file_moved
-                        notify_file_moved(dest, target_root)
-                    except Exception as err:
-                        logging.debug("Ribbon notification skipped: %s", err)
-                    try:
-                        from quick_switcher import record_recent_file
-                        record_recent_file(dest, target_root)
-                    except Exception as err:
-                        logging.debug("Quick switcher record skipped: %s", err)
+                    _handle_post_move(dest, target_root, config)
                 elif (
                     path.exists()
                     and path.is_file()
@@ -291,16 +298,7 @@ def drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    try:
-                        from ribbon_popup import notify_file_moved
-                        notify_file_moved(dest, target_root)
-                    except Exception as err:
-                        logging.debug("Ribbon notification skipped: %s", err)
-                    try:
-                        from quick_switcher import record_recent_file
-                        record_recent_file(dest, target_root)
-                    except Exception as err:
-                        logging.debug("Quick switcher record skipped: %s", err)
+                    _handle_post_move(dest, target_root, config)
             except Exception:
                 logging.exception("Failed relocating %s", path)
 
@@ -323,16 +321,7 @@ def drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    try:
-                        from ribbon_popup import notify_file_moved
-                        notify_file_moved(dest, target_root)
-                    except Exception as err:
-                        logging.debug("Ribbon notification skipped: %s", err)
-                    try:
-                        from quick_switcher import record_recent_file
-                        record_recent_file(dest, target_root)
-                    except Exception as err:
-                        logging.debug("Quick switcher record skipped: %s", err)
+                    _handle_post_move(dest, target_root, config)
             except Exception:
                 logging.exception("Failed auto-correcting misplaced file for %s", path)
     return moved_count

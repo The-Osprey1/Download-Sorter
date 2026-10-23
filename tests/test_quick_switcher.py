@@ -162,7 +162,7 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             self.assertEqual(Path(chosen_result[0]).resolve(), sample_file.resolve())
 
     def test_pill_select_file_success_lifecycle(self) -> None:
-        from unittest.mock import patch
+        from unittest.mock import MagicMock, patch
         from quick_switcher import QuickSwitcherPill
         from ribbon_popup import RIBBON_DISMISS_FILE
 
@@ -173,31 +173,40 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             recent = get_recent_file()
             self.assertIsNotNone(recent)
 
-            pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=recent)
-            self.assertFalse(pill.is_closed)
-            self.assertFalse(pill._is_injecting)
+            mock_tk_inst = MagicMock()
+            mock_tk_inst.winfo_id.return_value = 0
+            mock_tk_inst.winfo_fpixels.return_value = 96.0
 
-            with patch("quick_switcher.inject_file_into_dialog", return_value=True):
-                # Trigger select_file
-                pill.select_file()
-                self.assertTrue(pill._is_injecting)
-                # Successful injection must clear recent file state
-                self.assertIsNone(get_recent_file())
-                # Must signal ribbon popups to dismiss
-                self.assertTrue(RIBBON_DISMISS_FILE.exists())
+            with patch("quick_switcher.tk.Tk", return_value=mock_tk_inst), \
+                 patch.object(QuickSwitcherPill, "_build_ui"), \
+                 patch.object(QuickSwitcherPill, "_position_pill"), \
+                 patch.object(QuickSwitcherPill, "_register_hotkey"):
+                pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=recent)
+                pill.action_btn = MagicMock()
+                self.assertFalse(pill.is_closed)
+                self.assertFalse(pill._is_injecting)
 
-            # Now close pill
-            pill.close()
-            self.assertTrue(pill.is_closed)
+                with patch("quick_switcher.inject_file_into_dialog", return_value=True):
+                    # Trigger select_file
+                    pill.select_file()
+                    self.assertTrue(pill._is_injecting)
+                    # Successful injection must clear recent file state
+                    self.assertIsNone(get_recent_file())
+                    # Must signal ribbon popups to dismiss
+                    self.assertTrue(RIBBON_DISMISS_FILE.exists())
 
-            # Window property cleanup verification on Win32
-            if sys.platform == "win32":
-                user32 = ctypes.windll.user32
-                prop_val = user32.GetPropW(12345, "DownloadSorterQuickSwitcher")
-                self.assertFalse(bool(prop_val))
+                # Now close pill
+                pill.close()
+                self.assertTrue(pill.is_closed)
+
+                # Window property cleanup verification on Win32
+                if sys.platform == "win32":
+                    user32 = ctypes.windll.user32
+                    prop_val = user32.GetPropW(12345, "DownloadSorterQuickSwitcher")
+                    self.assertFalse(bool(prop_val))
 
     def test_pill_select_file_failure_preserves_buffer(self) -> None:
-        from unittest.mock import patch
+        from unittest.mock import MagicMock, patch
         from quick_switcher import QuickSwitcherPill
 
         with tempfile.TemporaryDirectory() as td:
@@ -205,13 +214,22 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             sample_file.write_text("step data")
             record_recent_file(sample_file)
 
-            pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=get_recent_file())
-            with patch("quick_switcher.inject_file_into_dialog", return_value=False):
-                pill.select_file()
-                # Failed injection must preserve recent buffer for retry
-                self.assertIsNotNone(get_recent_file())
+            mock_tk_inst = MagicMock()
+            mock_tk_inst.winfo_id.return_value = 0
+            mock_tk_inst.winfo_fpixels.return_value = 96.0
 
-            pill.close()
+            with patch("quick_switcher.tk.Tk", return_value=mock_tk_inst), \
+                 patch.object(QuickSwitcherPill, "_build_ui"), \
+                 patch.object(QuickSwitcherPill, "_position_pill"), \
+                 patch.object(QuickSwitcherPill, "_register_hotkey"):
+                pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=get_recent_file())
+                pill.action_btn = MagicMock()
+                with patch("quick_switcher.inject_file_into_dialog", return_value=False):
+                    pill.select_file()
+                    # Failed injection must preserve recent buffer for retry
+                    self.assertIsNotNone(get_recent_file())
+
+                pill.close()
 
 
 if __name__ == "__main__":

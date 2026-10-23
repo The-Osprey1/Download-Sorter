@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import sys
+
+if sys.platform == "win32":
+    base = sys.base_prefix
+    tcl_cand = os.path.join(base, "tcl", "tcl8.6")
+    tk_cand = os.path.join(base, "tcl", "tk8.6")
+    if os.path.exists(tcl_cand):
+        os.environ.setdefault("TCL_LIBRARY", tcl_cand)
+    if os.path.exists(tk_cand):
+        os.environ.setdefault("TK_LIBRARY", tk_cand)
 
 import pytest
 

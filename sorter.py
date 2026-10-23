@@ -1157,24 +1157,41 @@ def unique_destination(directory: Path, name: str) -> Path:
     stem = Path(name).stem
     suffix = Path(name).suffix
     index = 2
-    while True:
+    while index < 10000:
         candidate = directory / f"{stem} ({index}){suffix}"
         if not candidate.exists():
             return candidate
         index += 1
+    import uuid
+    return directory / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
 
 
 def is_file_locked(path: Path) -> bool:
     """Return True if another process holds an exclusive write/share lock on path."""
     if sys.platform == "win32":
         import ctypes
+        from ctypes import wintypes
         GENERIC_READ = 0x80000000
         GENERIC_WRITE = 0x40000000
         OPEN_EXISTING = 3
         FILE_SHARE_NONE = 0
-        INVALID_HANDLE = ctypes.c_void_p(-1).value
+        INVALID_HANDLE_VAL = ctypes.c_void_p(-1).value
         try:
-            handle = ctypes.windll.kernel32.CreateFileW(
+            kernel32 = ctypes.windll.kernel32
+            kernel32.CreateFileW.argtypes = [
+                wintypes.LPCWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.LPVOID,
+                wintypes.DWORD,
+                wintypes.DWORD,
+                wintypes.HANDLE,
+            ]
+            kernel32.CreateFileW.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
+            handle = kernel32.CreateFileW(
                 str(path.resolve()),
                 GENERIC_READ | GENERIC_WRITE,
                 FILE_SHARE_NONE,
@@ -1183,12 +1200,31 @@ def is_file_locked(path: Path) -> bool:
                 0,
                 None,
             )
-            if handle == INVALID_HANDLE or handle == -1:
-                err = ctypes.windll.kernel32.GetLastError()
-                if err in (5, 32, 33):  # Access denied, Sharing violation, Lock violation
+            if handle in (INVALID_HANDLE_VAL, -1, None, 0):
+                err = kernel32.GetLastError()
+                if err == 5:
+                    # ERROR_ACCESS_DENIED: May be a read-only file rather than an active write lock.
+                    # Retry with GENERIC_READ and FILE_SHARE_NONE to verify if the file is truly locked.
+                    ro_handle = kernel32.CreateFileW(
+                        str(path.resolve()),
+                        GENERIC_READ,
+                        FILE_SHARE_NONE,
+                        None,
+                        OPEN_EXISTING,
+                        0,
+                        None,
+                    )
+                    if ro_handle not in (INVALID_HANDLE_VAL, -1, None, 0):
+                        kernel32.CloseHandle(ro_handle)
+                        return False
+                    ro_err = kernel32.GetLastError()
+                    if ro_err in (5, 32, 33):
+                        return True
+                    return False
+                if err in (32, 33):  # Sharing violation, Lock violation
                     return True
                 return False
-            ctypes.windll.kernel32.CloseHandle(handle)
+            kernel32.CloseHandle(handle)
             return False
         except Exception:
             return False
@@ -1196,7 +1232,13 @@ def is_file_locked(path: Path) -> bool:
         with open(path, "r+b"):
             return False
     except PermissionError:
-        return True
+        try:
+            with open(path, "rb"):
+                return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
     except OSError:
         return False
 
