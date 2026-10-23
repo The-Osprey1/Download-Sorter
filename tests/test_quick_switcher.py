@@ -161,7 +161,8 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             self.assertTrue(len(chosen_result) > 0)
             self.assertEqual(Path(chosen_result[0]).resolve(), sample_file.resolve())
 
-    def test_pill_select_file_lifecycle_and_dismiss(self) -> None:
+    def test_pill_select_file_success_lifecycle(self) -> None:
+        from unittest.mock import patch
         from quick_switcher import QuickSwitcherPill
         from ribbon_popup import RIBBON_DISMISS_FILE
 
@@ -176,13 +177,14 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             self.assertFalse(pill.is_closed)
             self.assertFalse(pill._is_injecting)
 
-            # Trigger select_file
-            pill.select_file()
-            self.assertTrue(pill._is_injecting)
-            # Must clear recent file state
-            self.assertIsNone(get_recent_file())
-            # Must signal ribbon popups to dismiss
-            self.assertTrue(RIBBON_DISMISS_FILE.exists())
+            with patch("quick_switcher.inject_file_into_dialog", return_value=True):
+                # Trigger select_file
+                pill.select_file()
+                self.assertTrue(pill._is_injecting)
+                # Successful injection must clear recent file state
+                self.assertIsNone(get_recent_file())
+                # Must signal ribbon popups to dismiss
+                self.assertTrue(RIBBON_DISMISS_FILE.exists())
 
             # Now close pill
             pill.close()
@@ -192,7 +194,24 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             if sys.platform == "win32":
                 user32 = ctypes.windll.user32
                 prop_val = user32.GetPropW(12345, "DownloadSorterQuickSwitcher")
-                self.assertEqual(prop_val, 0)
+                self.assertFalse(bool(prop_val))
+
+    def test_pill_select_file_failure_preserves_buffer(self) -> None:
+        from unittest.mock import patch
+        from quick_switcher import QuickSwitcherPill
+
+        with tempfile.TemporaryDirectory() as td:
+            sample_file = Path(td) / "Preserve_Part.step"
+            sample_file.write_text("step data")
+            record_recent_file(sample_file)
+
+            pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=get_recent_file())
+            with patch("quick_switcher.inject_file_into_dialog", return_value=False):
+                pill.select_file()
+                # Failed injection must preserve recent buffer for retry
+                self.assertIsNotNone(get_recent_file())
+
+            pill.close()
 
 
 if __name__ == "__main__":

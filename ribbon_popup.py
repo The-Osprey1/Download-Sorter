@@ -449,11 +449,15 @@ def is_pid_alive(pid: int) -> bool:
         return False
     if sys.platform == "win32":
         import ctypes
+        from ctypes import wintypes
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if handle:
+            exit_code = wintypes.DWORD()
+            res = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
             ctypes.windll.kernel32.CloseHandle(handle)
-            return True
+            # STILL_ACTIVE is 259
+            return bool(res and exit_code.value == 259)
         return False
     else:
         try:

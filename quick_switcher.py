@@ -94,6 +94,17 @@ MOD_CONTROL = 0x0002
 VK_G = 0x47
 HOTKEY_ID = 9101
 
+if sys.platform == "win32":
+    try:
+        user32 = ctypes.windll.user32
+        user32.SetPropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.HANDLE]
+        user32.GetPropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
+        user32.GetPropW.restype = wintypes.HANDLE
+        user32.RemovePropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
+        user32.RemovePropW.restype = wintypes.HANDLE
+    except Exception:
+        pass
+
 
 def record_recent_file(
     dest_path: str | Path,
@@ -192,8 +203,14 @@ def is_file_dialog(hwnd: int) -> bool:
     title = (ctypes.c_wchar * 256)()
     user32.GetWindowTextW(hwnd, title, 256)
     title_lower = title.value.lower()
-    # Filter out Save As dialogs
-    if "save as" in title_lower or "save file" in title_lower:
+    # Filter out Save As dialogs across languages
+    if (
+        title_lower.startswith("save")
+        or "save as" in title_lower
+        or "save file" in title_lower
+        or "speichern unter" in title_lower
+        or "enregistrer sous" in title_lower
+    ):
         return False
 
     has_edit = False
@@ -210,7 +227,7 @@ def is_file_dialog(hwnd: int) -> bool:
             btn_txt = (ctypes.c_wchar * 256)()
             user32.GetWindowTextW(h, btn_txt, 256)
             txt = btn_txt.value.strip().lower().replace("&", "")
-            if txt == "save":
+            if txt == "save" or txt.startswith("save "):
                 is_save_btn = True
         return True
 
@@ -229,22 +246,33 @@ def find_dialog_edit_control(dialog_hwnd: int) -> int | None:
         return None
 
     user32 = ctypes.windll.user32
-    found_edit = None
+    target_edit = None
+    fallback_edit = None
 
     def enum_child(hwnd, _lparam):
-        nonlocal found_edit
+        nonlocal target_edit, fallback_edit
         class_name = (ctypes.c_wchar * 256)()
         user32.GetClassNameW(hwnd, class_name, 256)
         if class_name.value == "Edit":
             # Verify it is enabled and visible
             if user32.IsWindowVisible(hwnd) and user32.IsWindowEnabled(hwnd):
-                found_edit = hwnd
-                return False
+                ctrl_id = user32.GetDlgCtrlID(hwnd)
+                # 0x47C (1148) is the standard Windows ComboBoxEx32 filename box
+                # 0x480 (1152) is the standard Windows direct Edit filename box
+                if ctrl_id in (1148, 1152):
+                    target_edit = hwnd
+                    return False
+                parent = user32.GetParent(hwnd)
+                if parent and user32.GetDlgCtrlID(parent) in (1148, 1152):
+                    target_edit = hwnd
+                    return False
+                if fallback_edit is None:
+                    fallback_edit = hwnd
         return True
 
     WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     user32.EnumChildWindows(dialog_hwnd, WNDENUMPROC(enum_child), 0)
-    return found_edit
+    return target_edit or fallback_edit
 
 
 def inject_file_into_dialog(dialog_hwnd: int, file_path: str | Path) -> bool:
@@ -262,6 +290,13 @@ def inject_file_into_dialog(dialog_hwnd: int, file_path: str | Path) -> bool:
         return False
 
     path_str = str(target)
+
+    # Bring dialog into foreground to guarantee proper input routing
+    try:
+        user32.SetForegroundWindow(dialog_hwnd)
+    except Exception:
+        pass
+
     # 1. Set full path in the edit box
     user32.SendMessageW(edit_hwnd, WM_SETTEXT, 0, path_str)
     time.sleep(0.06)
@@ -460,12 +495,32 @@ class QuickSwitcherPill:
                 user32 = ctypes.windll.user32
                 rect = wintypes.RECT()
                 if user32.GetWindowRect(self.dialog_hwnd, ctypes.byref(rect)):
+                    # Determine monitor work area bounds for multi-monitor / virtual desktop accuracy
+                    class MONITORINFO(ctypes.Structure):
+                        _fields_ = [
+                            ("cbSize", ctypes.c_ulong),
+                            ("rcMonitor", wintypes.RECT),
+                            ("rcWork", wintypes.RECT),
+                            ("dwFlags", ctypes.c_ulong),
+                        ]
+
+                    mon = user32.MonitorFromWindow(self.dialog_hwnd, 2)
+                    minfo = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+                    work_top = 0
+                    work_left = 0
+                    sw = self.root.winfo_screenwidth()
+                    work_right = sw
+                    if mon and user32.GetMonitorInfoW(mon, ctypes.byref(minfo)):
+                        work_top = minfo.rcWork.top
+                        work_left = minfo.rcWork.left
+                        work_right = minfo.rcWork.right
+
                     # Right-aligned, docked right above the dialog's top title bar
                     x = rect.right - self.pill_w - round(16 * self.scale)
-                    x = max(rect.left + round(8 * self.scale), x)
+                    x = max(work_left + round(8 * self.scale), min(x, work_right - self.pill_w - round(8 * self.scale)))
                     y = rect.top - self.pill_h - round(6 * self.scale)
-                    if y < 8:
-                        # If dialog is at the top of the monitor, dock just inside below title bar
+                    if y < work_top + 4:
+                        # If dialog is at the top of its monitor, dock neatly below title bar
                         y = rect.top + round(36 * self.scale)
 
                     if (x, y) != (self.last_x, self.last_y):
@@ -495,11 +550,6 @@ class QuickSwitcherPill:
                 self.close()
                 return
 
-            # Check if user pressed Escape anywhere while dialog/pill has focus
-            if user32.GetAsyncKeyState(0x1B) & 0x8000:
-                self.close()
-                return
-
             # Check foreground window: if user switched away to another application, auto-dismiss
             fg = user32.GetForegroundWindow()
             pill_hwnd = user32.GetParent(self.root.winfo_id())
@@ -510,6 +560,10 @@ class QuickSwitcherPill:
                     return
             else:
                 self.unfocused_ticks = 0
+                # Check if user pressed Escape while dialog/pill has keyboard focus
+                if user32.GetAsyncKeyState(0x1B) & 0x8000:
+                    self.close()
+                    return
 
         self._position_pill()
         self._check_hotkey()
@@ -560,25 +614,30 @@ class QuickSwitcherPill:
         self._is_injecting = True
         self._unregister_hotkey()
 
-        # Visually indicate selection
-        self.action_btn.config(text="✓ Injected!", fg="#FFFFFF", bg=self.accent_color)
-        self.root.update_idletasks()
+        # Perform file injection into the Windows file dialog
+        success = inject_file_into_dialog(self.dialog_hwnd, self.file_path)
 
-        # 1. Clear recent file buffer so future dialogs don't re-prompt with already-used file
-        clear_recent_file()
+        if success:
+            # Visually indicate selection
+            self.action_btn.config(text="✓ Injected!", fg="#FFFFFF", bg=self.accent_color)
+            self.root.update_idletasks()
 
-        # 2. Dismiss any active ribbon notifications for this file
-        try:
-            from ribbon_popup import dismiss_active_ribbons
-            dismiss_active_ribbons(self.file_path)
-        except Exception:
-            pass
+            # 1. Clear recent file buffer so future dialogs don't re-prompt with already-used file
+            clear_recent_file()
 
-        # 3. Perform file injection into the Windows file dialog
-        inject_file_into_dialog(self.dialog_hwnd, self.file_path)
+            # 2. Dismiss any active ribbon notifications for this file
+            try:
+                from ribbon_popup import dismiss_active_ribbons
+                dismiss_active_ribbons(self.file_path)
+            except Exception:
+                pass
 
-        # 4. Close the pill cleanly after short confirmation delay
-        self.root.after(180, self.close)
+            # 3. Close the pill cleanly after short confirmation delay
+            self.root.after(180, self.close)
+        else:
+            self.action_btn.config(text="✕ Dialog unavailable", fg="#FFFFFF", bg=CLOSE_HOVER)
+            self.root.update_idletasks()
+            self.root.after(800, self.close)
 
     def close(self) -> None:
         if self.is_closed:
