@@ -122,10 +122,31 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             chosen_result: list[str] = []
 
             def background_agent() -> None:
-                time.sleep(0.4)
-                dialog_hwnd = user32.FindWindowW("#32770", None)
-                if dialog_hwnd and is_file_dialog(dialog_hwnd):
-                    inject_file_into_dialog(dialog_hwnd, sample_file)
+                deadline = time.time() + 4.0
+                while time.time() < deadline:
+                    time.sleep(0.05)
+                    found_hwnd = 0
+
+                    def enum_wnd(h, _l):
+                        nonlocal found_hwnd
+                        buf = (ctypes.c_wchar * 256)()
+                        user32.GetWindowTextW(h, buf, 256)
+                        if "Live E2E Test Dialog" in buf.value:
+                            found_hwnd = h
+                            return False
+                        return True
+
+                    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+                    user32.EnumWindows(WNDENUMPROC(enum_wnd), 0)
+
+                    if found_hwnd and is_file_dialog(found_hwnd):
+                        time.sleep(0.08)
+                        if inject_file_into_dialog(found_hwnd, sample_file):
+                            return
+
+                # Safety fallback: dismiss dialog if test timed out
+                if found_hwnd:
+                    user32.PostMessageW(found_hwnd, 0x0111, 2, 0)  # IDCANCEL = 2
 
             t = threading.Thread(target=background_agent, daemon=True)
             t.start()
@@ -139,6 +160,39 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
 
             self.assertTrue(len(chosen_result) > 0)
             self.assertEqual(Path(chosen_result[0]).resolve(), sample_file.resolve())
+
+    def test_pill_select_file_lifecycle_and_dismiss(self) -> None:
+        from quick_switcher import QuickSwitcherPill
+        from ribbon_popup import RIBBON_DISMISS_FILE
+
+        with tempfile.TemporaryDirectory() as td:
+            sample_file = Path(td) / "Lifecycle_Part.step"
+            sample_file.write_text("step data")
+            record_recent_file(sample_file)
+            recent = get_recent_file()
+            self.assertIsNotNone(recent)
+
+            pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=recent)
+            self.assertFalse(pill.is_closed)
+            self.assertFalse(pill._is_injecting)
+
+            # Trigger select_file
+            pill.select_file()
+            self.assertTrue(pill._is_injecting)
+            # Must clear recent file state
+            self.assertIsNone(get_recent_file())
+            # Must signal ribbon popups to dismiss
+            self.assertTrue(RIBBON_DISMISS_FILE.exists())
+
+            # Now close pill
+            pill.close()
+            self.assertTrue(pill.is_closed)
+
+            # Window property cleanup verification on Win32
+            if sys.platform == "win32":
+                user32 = ctypes.windll.user32
+                prop_val = user32.GetPropW(12345, "DownloadSorterQuickSwitcher")
+                self.assertEqual(prop_val, 0)
 
 
 if __name__ == "__main__":

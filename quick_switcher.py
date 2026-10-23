@@ -287,6 +287,16 @@ class QuickSwitcherPill:
         self.category = recent_data.get("category", "default")
         self.accent_color = recent_data.get("color", ACTION_COLOR)
         self.is_closed = False
+        self._is_injecting = False
+
+        # Mark dialog window with property to prevent duplicate switchers
+        if sys.platform == "win32" and self.dialog_hwnd:
+            try:
+                ctypes.windll.user32.SetPropW(
+                    self.dialog_hwnd, "DownloadSorterQuickSwitcher", 1
+                )
+            except Exception:
+                pass
 
         self.root = tk.Tk()
         self.root.overrideredirect(True)
@@ -537,8 +547,8 @@ class QuickSwitcherPill:
         self.action_btn.config(bg="#171C26")
 
     def select_file(self) -> None:
-        """Inject the recent file into the dialog and dismiss the pill."""
-        if self.is_closed:
+        """Inject the recent file into the dialog, dismiss ribbon popups, and close the pill."""
+        if self.is_closed or self._is_injecting:
             return
 
         if not Path(self.file_path).exists():
@@ -547,14 +557,27 @@ class QuickSwitcherPill:
             self.root.after(1000, self.close)
             return
 
-        self.is_closed = True
+        self._is_injecting = True
         self._unregister_hotkey()
 
         # Visually indicate selection
         self.action_btn.config(text="✓ Injected!", fg="#FFFFFF", bg=self.accent_color)
         self.root.update_idletasks()
 
+        # 1. Clear recent file buffer so future dialogs don't re-prompt with already-used file
+        clear_recent_file()
+
+        # 2. Dismiss any active ribbon notifications for this file
+        try:
+            from ribbon_popup import dismiss_active_ribbons
+            dismiss_active_ribbons(self.file_path)
+        except Exception:
+            pass
+
+        # 3. Perform file injection into the Windows file dialog
         inject_file_into_dialog(self.dialog_hwnd, self.file_path)
+
+        # 4. Close the pill cleanly after short confirmation delay
         self.root.after(180, self.close)
 
     def close(self) -> None:
@@ -562,6 +585,15 @@ class QuickSwitcherPill:
             return
         self.is_closed = True
         self._unregister_hotkey()
+
+        if sys.platform == "win32" and self.dialog_hwnd:
+            try:
+                ctypes.windll.user32.RemovePropW(
+                    self.dialog_hwnd, "DownloadSorterQuickSwitcher"
+                )
+            except Exception:
+                pass
+
         try:
             self.root.quit()
         except Exception:
@@ -580,6 +612,13 @@ class QuickSwitcherPill:
 
 def spawn_quick_switcher(dialog_hwnd: int) -> None:
     """Spawn the Quick Switcher pill as a lightweight decoupled process."""
+    if sys.platform == "win32" and dialog_hwnd:
+        try:
+            if ctypes.windll.user32.GetPropW(dialog_hwnd, "DownloadSorterQuickSwitcher"):
+                return
+        except Exception:
+            pass
+
     recent = get_recent_file()
     if not recent:
         return
@@ -652,6 +691,12 @@ def main() -> int:
         return 0
 
     if args.dialog:
+        if sys.platform == "win32" and args.dialog:
+            try:
+                if ctypes.windll.user32.GetPropW(args.dialog, "DownloadSorterQuickSwitcher"):
+                    return 0
+            except Exception:
+                pass
         recent = get_recent_file()
         if not recent:
             return 1

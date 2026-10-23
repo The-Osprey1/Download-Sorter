@@ -102,6 +102,7 @@ except Exception:
 
 SLOTS_FILE = Path(tempfile.gettempdir()) / "download_sorter_ribbon_slots.json"
 SLOTS_LOCK = Path(tempfile.gettempdir()) / "download_sorter_ribbon_slots.lock"
+RIBBON_DISMISS_FILE = Path(tempfile.gettempdir()) / "download_sorter_ribbon_dismiss.json"
 
 # Category color map aligned with Devyn Personal Suite tokens
 CATEGORY_COLORS: dict[str, str] = {
@@ -505,6 +506,21 @@ def release_slot(slot: int, pid: int) -> None:
             pass
 
 
+def dismiss_active_ribbons(dest_path: str | Path | None = None) -> None:
+    """Request active ribbon popups (for a specific file or all) to dismiss immediately."""
+    data = {
+        "timestamp": time.time(),
+        "path": str(Path(dest_path).resolve()) if dest_path else None,
+    }
+    tmp = RIBBON_DISMISS_FILE.with_suffix(".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        tmp.replace(RIBBON_DISMISS_FILE)
+    except Exception:
+        pass
+
+
 def scaled_ribbon_geometry(
     scale: float,
     slot: int,
@@ -601,6 +617,8 @@ class RibbonPopup:
         self.is_hovered = False
         self.is_closing = False
         self.icon_photo: ImageTk.PhotoImage | None = None
+        self.start_time = time.time()
+        self.dismiss_signal_job: str | None = None
 
         self._build_ui(self.scale)
 
@@ -611,6 +629,12 @@ class RibbonPopup:
         else:
             self.root.geometry(f"{width}x{height}+{self.target_x}+{self.target_y}")
             self._schedule_dismiss()
+
+        # Poll external dismiss signals (e.g. file injected in Quick Switcher)
+        try:
+            self.dismiss_signal_job = self.root.after(100, self._check_dismiss_signal)
+        except tk.TclError:
+            pass
 
     def _work_area(self) -> tuple[int, int, int, int]:
         """Return the foreground monitor's work area, excluding its taskbar."""
@@ -939,12 +963,38 @@ class RibbonPopup:
         finally:
             self.close()
 
+    def _check_dismiss_signal(self) -> None:
+        if self.is_closing:
+            return
+        if RIBBON_DISMISS_FILE.exists():
+            try:
+                with open(RIBBON_DISMISS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                sig_time = float(data.get("timestamp", 0))
+                if sig_time >= self.start_time:
+                    target = data.get("path")
+                    if not target or Path(target).resolve() == self.dest_path.resolve():
+                        self.close()
+                        return
+            except Exception:
+                pass
+        try:
+            self.dismiss_signal_job = self.root.after(100, self._check_dismiss_signal)
+        except tk.TclError:
+            pass
+
     def close(self) -> None:
         """Dismiss the ribbon with a snappy slide-out exit animation."""
         if self.is_closing:
             return
         self.is_closing = True
 
+        if self.dismiss_signal_job:
+            try:
+                self.root.after_cancel(self.dismiss_signal_job)
+            except Exception:
+                pass
+            self.dismiss_signal_job = None
         if self.dismiss_job:
             self.root.after_cancel(self.dismiss_job)
             self.dismiss_job = None

@@ -10,8 +10,11 @@ from ribbon_popup import (
     BASE_OFFSET_Y,
     BASE_WIDTH,
     CATEGORY_GLYPHS,
+    RIBBON_DISMISS_FILE,
+    RibbonPopup,
     add_to_recent_docs,
     blend_colors,
+    dismiss_active_ribbons,
     get_accent_color,
     get_category_info,
     hex_to_rgb,
@@ -102,6 +105,22 @@ class RibbonGraphicsAndAnimationTests(unittest.TestCase):
     def test_add_to_recent_docs_safety(self) -> None:
         # Should execute safely without raising exceptions even on mock/non-existent paths
         add_to_recent_docs(Path("C:/test/file.step"))
+
+    def test_dismiss_active_ribbons_signal(self) -> None:
+        test_file = Path("C:/Downloads/Part.step")
+        popup = RibbonPopup(test_file, enable_animation=False)
+        self.assertFalse(popup.is_closing)
+
+        # Trigger dismiss signal after popup has started
+        dismiss_active_ribbons(test_file)
+        self.assertTrue(RIBBON_DISMISS_FILE.exists())
+
+        popup._check_dismiss_signal()
+        self.assertTrue(popup.is_closing)
+        try:
+            popup.root.destroy()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
