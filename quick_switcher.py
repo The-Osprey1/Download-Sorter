@@ -329,9 +329,12 @@ class QuickSwitcherPill:
         # Register Ctrl+G global hotkey for quick activation
         self._register_hotkey()
 
+        # Bind Escape key to instantly dismiss
+        self.root.bind("<Escape>", lambda e: self.close())
+
         # Track dialog position and poll hotkey
         self.root.after(100, self._track_dialog)
-        self.root.after(25000, self.close)  # 25s auto-timeout
+        self.root.after(10000, self.close)  # 10s auto-timeout
 
     def _build_ui(self) -> None:
         self.container = tk.Frame(self.root, bg=BG_COLOR, cursor="hand2")
@@ -482,6 +485,22 @@ class QuickSwitcherPill:
                 self.close()
                 return
 
+            # Check if user pressed Escape anywhere while dialog/pill has focus
+            if user32.GetAsyncKeyState(0x1B) & 0x8000:
+                self.close()
+                return
+
+            # Check foreground window: if user switched away to another application, auto-dismiss
+            fg = user32.GetForegroundWindow()
+            pill_hwnd = user32.GetParent(self.root.winfo_id())
+            if fg not in (self.dialog_hwnd, pill_hwnd, self.root.winfo_id()):
+                self.unfocused_ticks = getattr(self, "unfocused_ticks", 0) + 1
+                if self.unfocused_ticks >= 10:  # ~1 second unfocused
+                    self.close()
+                    return
+            else:
+                self.unfocused_ticks = 0
+
         self._position_pill()
         self._check_hotkey()
         self.root.after(100, self._track_dialog)
@@ -544,8 +563,12 @@ class QuickSwitcherPill:
         self.is_closed = True
         self._unregister_hotkey()
         try:
+            self.root.quit()
+        except Exception:
+            pass
+        try:
             self.root.destroy()
-        except tk.TclError:
+        except Exception:
             pass
 
     def run(self) -> None:
@@ -561,7 +584,11 @@ def spawn_quick_switcher(dialog_hwnd: int) -> None:
     if not recent:
         return
 
-    args = [str(PYTHON), str(Path(__file__).resolve()), "--dialog", str(dialog_hwnd)]
+    python_bin = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+    if not python_bin.exists():
+        python_bin = PYTHON
+
+    args = [str(python_bin), str(Path(__file__).resolve()), "--dialog", str(dialog_hwnd)]
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         subprocess.Popen(args, creationflags=flags)
