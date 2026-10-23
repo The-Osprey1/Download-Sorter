@@ -19,8 +19,10 @@ from pathlib import Path
 import uuid
 
 ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = ROOT / "config.json"
 LOG_DIR = Path(os.environ.get("LOCALAPPDATA", ROOT)) / "download-sorter"
+DEFAULT_CONFIG_PATH = ROOT / "config.json"
+USER_CONFIG_PATH = LOG_DIR / "config.json"
+CONFIG_PATH = USER_CONFIG_PATH
 LOG_FILE = LOG_DIR / "sorter.log"
 HISTORY_FILE = LOG_DIR / "history.jsonl"
 PAUSE_FILE = LOG_DIR / "paused"
@@ -490,18 +492,33 @@ def expand_path(value: str) -> Path:
 
 
 def load_config() -> dict:
-    if not CONFIG_PATH.exists():
-        logging.info("Config file %s does not exist; using default config", CONFIG_PATH)
+    target = CONFIG_PATH
+    if not target.exists():
+        if target == USER_CONFIG_PATH and DEFAULT_CONFIG_PATH.exists():
+            try:
+                with DEFAULT_CONFIG_PATH.open(encoding="utf-8") as handle:
+                    data = json.load(handle)
+                if isinstance(data, dict):
+                    try:
+                        LOG_DIR.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(DEFAULT_CONFIG_PATH, USER_CONFIG_PATH)
+                        logging.info("Initialized user config from %s to %s", DEFAULT_CONFIG_PATH, USER_CONFIG_PATH)
+                    except OSError:
+                        pass
+                    return data
+            except Exception as exc:
+                logging.warning("Failed loading template config from %s (%s)", DEFAULT_CONFIG_PATH, exc)
+        logging.info("Config file %s does not exist; using default config", target)
         return get_default_config()
     try:
-        with CONFIG_PATH.open(encoding="utf-8") as handle:
+        with target.open(encoding="utf-8") as handle:
             data = json.load(handle)
         if isinstance(data, dict):
             return data
-        logging.warning("Config at %s is not a dictionary; using default config", CONFIG_PATH)
+        logging.warning("Config at %s is not a dictionary; using default config", target)
         return get_default_config()
     except (OSError, json.JSONDecodeError, Exception) as exc:
-        logging.warning("Failed loading config from %s (%s); using default config", CONFIG_PATH, exc)
+        logging.warning("Failed loading config from %s (%s); using default config", target, exc)
         return get_default_config()
 
 

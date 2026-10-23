@@ -19,11 +19,13 @@ from sorter import (
     CAD_EXTENSIONS as SORTER_CAD_EXTENSIONS,
     CONFIG_PATH,
     DEFAULT_CONFIG,
+    DEFAULT_CONFIG_PATH,
     LOG_DIR,
+    USER_CONFIG_PATH,
 )
 
 CAD_EXTENSIONS: list[str] = sorted(list(SORTER_CAD_EXTENSIONS))
-SORTER_CONFIG_FILE: Path = CONFIG_PATH
+SORTER_CONFIG_FILE: Path = USER_CONFIG_PATH
 
 _sorter_config_write_lock = threading.RLock()
 _active_project_write_lock = threading.RLock()
@@ -69,7 +71,22 @@ def load_sorter_config(config_path: Path | str | None = None) -> dict[str, Any]:
         except Exception:
             pass
 
-    # 3. Safe fallback defaults
+    # 3. Fallback to repo template if user config in AppData doesn't exist yet
+    if config_path is None and DEFAULT_CONFIG_PATH.exists():
+        try:
+            raw_tmpl = DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
+            if raw_tmpl.strip():
+                tmpl_data = json.loads(raw_tmpl)
+                if isinstance(tmpl_data, dict) and "keyword_rules" in tmpl_data:
+                    try:
+                        save_sorter_config(tmpl_data, config_path=target)
+                    except Exception:
+                        pass
+                    return tmpl_data
+        except Exception:
+            pass
+
+    # 4. Safe fallback defaults
     return copy.deepcopy(DEFAULT_SORTER_CONFIG)
 
 

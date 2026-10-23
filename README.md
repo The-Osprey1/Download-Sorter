@@ -118,6 +118,17 @@ Whenever an incoming download lands and organizes:
 .\.venv\Scripts\python.exe clean_old.py --dry-run
 ```
 
+### 7. Recency-Gated Quick Switcher (`quick_switcher.py`)
+Need to upload or open a file you just downloaded without digging through folders?
+* **Common Item Dialog Sniffer**: Detects when an application (Discord, Slack, Chrome, Edge, CAD, or Slicers) opens a Windows File Open / Upload dialog within 5 minutes of a download.
+* **Floating Switcher Pill**: Docks an interactive, non-intrusive floating pill directly next to the active dialog.
+* **Instant 1-Click / Keyboard Injection**: Click **Select** or press `Ctrl+G` to automatically jump to and choose the recently downloaded file without manual navigation. Auto-dismisses if ignored.
+
+### 8. Isolated User Configuration & Live Reloader (`config_manager.py`)
+* **AppData Isolation**: Custom user rules, category folders, and precedence are stored safely in `%LOCALAPPDATA%\download-sorter\config.json`.
+* **Zero Git Conflicts**: Updating the codebase via `git pull` or `update.bat` will never touch or overwrite your personal rule presets.
+* **Zero-Restart Hot Reloading**: Rule changes made in the GUI instantly apply to the running background daemon in memory.
+
 ---
 
 ## Decision Lifecycle
@@ -126,34 +137,41 @@ For a full breakdown of the sorting, deduplication, and extraction logic, see [F
 
 ```mermaid
 flowchart TD
-    Start(["File Lands in Downloads"]) --> Ready{"Ready to Move?<br>• Not temporary (.crdownload)<br>• Settle window elapsed<br>• Lock released"}
-    Ready -- No --> Wait["Wait for Download Completion"]
-    Ready -- Yes --> Classify{"Classify by Rules"}
+    Start(["New File Lands in Downloads / Documents"]) --> Checks{"Is File Ready?<br>• Not incomplete (.crdownload)<br>• Settle timer elapsed (1.5s)<br>• File lock released"}
 
-    subgraph Hierarchy ["Evaluation Order"]
-        Classify -->|"1"| Active["Active Project Catch-All (CAD/3D/CNC)"]
-        Classify -->|"2"| Keyword["Keyword Rules (School, Coursework)"]
-        Classify -->|"3"| Sniffer["Smart G-Code Sniffer (Haas vs 3D)"]
-        Classify -->|"4"| Ext["Extension Rules (PDFs, Images, Code)"]
-        Classify -->|"5"| Default["Default Fallback (Other)"]
+    Checks -- "No" --> Wait["Wait / Ignore until download finishes"]
+    Checks -- "Yes" --> Route{"Classify File by Rules"}
+
+    subgraph Hierarchy ["5-Level Classification Hierarchy"]
+        Route -->|"1. Active Project?"| R_Active["Active Project Catch-All (CAD/3D/CNC)"]
+        Route -->|"2. Keyword Match?"| R_Keyword["Keyword Rules (School, Coursework)"]
+        Route -->|"3. G-Code Sniffer?"| R_Sniffer["Smart G-Code Sniffer (Haas vs 3D)"]
+        Route -->|"4. Extension Match?"| R_Ext["Extension Rules (3D, Docs, Media, Code)"]
+        Route -->|"5. No Match"| R_Default["Default Fallback (Other)"]
     end
 
-    Active --> Dedup{"Duplicate in Destination?"}
-    Keyword --> Dedup
-    Sniffer --> Dedup
-    Ext --> Dedup
-    Default --> Dedup
+    R_Active --> Dedup{"Exact duplicate in target?"}
+    R_Keyword --> Dedup
+    R_Sniffer --> Dedup
+    R_Ext --> Dedup
+    R_Default --> Dedup
 
-    Dedup -- Yes --> Prune["Delete Redundant Copy"]
-    Dedup -- No --> Zip{"Is ZIP Archive?"}
+    Dedup -- "Yes (Same SHA-256)" --> PruneDupe["Prune redundant download"]
+    Dedup -- "No (Unique File)" --> ZipCheck{"Is it a .zip archive?"}
 
-    Zip -- "3D Archive" --> Unzip3D["Extract Models to 3D Models/<br>Move ZIP to Archives/"]
-    Zip -- "General ZIP" --> UnzipGen["Extract to Extracted/<br>Move ZIP to Archives/"]
-    Zip -- "Standard File" --> Move["Move to Target Destination"]
+    ZipCheck -- "3D Archive" --> Unzip3D["Extract to 3D Models/<br>Move original to Archives/"]
+    ZipCheck -- "General .zip" --> UnzipGen["Extract to Extracted/<br>Strip root wrapper<br>Move original to Archives/"]
+    ZipCheck -- "Normal File" --> Move["Move to target folder<br>(Collision auto-rename)"]
 
-    Unzip3D --> Record["Append to History Log & Show Desktop Ribbon"]
+    Unzip3D --> Record["Append to History Log<br>(%LOCALAPPDATA%/download-sorter/history.jsonl)"]
     UnzipGen --> Record
     Move --> Record
+
+    subgraph PostSort ["Desktop Feedback & Recency Workflows"]
+        Record --> Ribbon["Show Desktop Ribbon Toast Notification<br>• High-DPI category badge<br>• Vertical stacking for batch downloads<br>• Click-to-reveal in File Explorer"]
+        Record --> Recency["Record to Recent Downloads Buffer<br>(5-minute recency window)"]
+        Recency --> QuickSwitch["Floating Quick Switcher Pill<br>• Docks to active File Dialogs<br>• 1-Click Select or Ctrl+G injection"]
+    end
 ```
 
 ---
@@ -171,6 +189,17 @@ Double-click **`setup.bat`** (or run `.\setup.bat` in PowerShell/CMD). It will a
 3. Install dependencies from `requirements.txt`
 4. Optionally configure auto-start at login and Explorer context menus
 5. Launch the system tray icon
+
+---
+
+### Updating to the Latest Version (One-Click)
+Double-click **`update.bat`** (or run `.\update.bat` in PowerShell/CMD). It will:
+1. Safely stop running background daemon and tray instances
+2. Pull the latest commits from GitHub (`git pull`)
+3. Synchronize any updated dependencies inside `.venv`
+4. Restart the system tray application automatically
+
+*(Because custom rules are stored safely in `%LOCALAPPDATA%\download-sorter\config.json`, updating will never conflict with or erase your personalized sorting rules).*
 
 ---
 

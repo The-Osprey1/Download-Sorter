@@ -16,6 +16,7 @@ from watchdog.observers import Observer
 from sorter import (
     ACTIVE_PROJECT_FILE,
     CONFIG_PATH,
+    DEFAULT_CONFIG_PATH,
     PAUSE_FILE,
     RoutingContext,
     compile_routing,
@@ -560,7 +561,7 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
         logging.warning("No Documents sources found to watch")
 
     control_handler = ControlFileHandler(reloader)
-    control_dirs = {CONFIG_PATH.resolve().parent, ACTIVE_PROJECT_FILE.resolve().parent}
+    control_dirs = {CONFIG_PATH.resolve().parent, ACTIVE_PROJECT_FILE.resolve().parent, DEFAULT_CONFIG_PATH.resolve().parent}
     for control_dir in control_dirs:
         control_dir.mkdir(parents=True, exist_ok=True)
         observer.schedule(control_handler, str(control_dir), recursive=False)
