@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+from unittest.mock import MagicMock, patch
 
 from ribbon_popup import (
     BASE_GAP,
@@ -108,19 +109,21 @@ class RibbonGraphicsAndAnimationTests(unittest.TestCase):
 
     def test_dismiss_active_ribbons_signal(self) -> None:
         test_file = Path("C:/Downloads/Part.step")
-        popup = RibbonPopup(test_file, enable_animation=False)
-        self.assertFalse(popup.is_closing)
+        mock_tk = MagicMock()
+        mock_tk.winfo_id.return_value = 0
+        mock_tk.winfo_fpixels.return_value = 96.0
+        with patch("ribbon_popup.tk.Tk", return_value=mock_tk), \
+             patch.object(RibbonPopup, "_build_ui"), \
+             patch.object(RibbonPopup, "_schedule_dismiss"):
+            popup = RibbonPopup(test_file, enable_animation=False)
+            self.assertFalse(popup.is_closing)
 
-        # Trigger dismiss signal after popup has started
-        dismiss_active_ribbons(test_file)
-        self.assertTrue(RIBBON_DISMISS_FILE.exists())
+            # Trigger dismiss signal after popup has started
+            dismiss_active_ribbons(test_file)
+            self.assertTrue(RIBBON_DISMISS_FILE.exists())
 
-        popup._check_dismiss_signal()
-        self.assertTrue(popup.is_closing)
-        try:
-            popup.root.destroy()
-        except Exception:
-            pass
+            popup._check_dismiss_signal()
+            self.assertTrue(popup.is_closing)
 
 
 if __name__ == "__main__":

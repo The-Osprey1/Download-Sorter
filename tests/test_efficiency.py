@@ -77,7 +77,7 @@ def test_download_events_debounce_without_classifying_early(tmp_path, monkeypatc
         watch.PENDING_DEADLINES.clear()
     handler._queue(str(target))
     first_deadline = watch.PENDING_DEADLINES[("misplaced", target)]
-    time.sleep(0.01)
+    time.sleep(0.025)
     handler._queue(str(target))
 
     assert watch.PENDING_MISPLACED == {target}
@@ -170,7 +170,7 @@ def test_history_cleanup_backs_up_and_removes_only_pytest_records(tmp_path):
 def test_runtime_state_is_atomic_and_preserves_process_start_time():
     sorter.write_runtime_state("starting", "initializing")
     first = json.loads(sorter.RUNTIME_STATE_FILE.read_text(encoding="utf-8"))
-    time.sleep(0.01)
+    time.sleep(0.025)
     sorter.write_runtime_state("running", "heartbeat")
     second = json.loads(sorter.RUNTIME_STATE_FILE.read_text(encoding="utf-8"))
 

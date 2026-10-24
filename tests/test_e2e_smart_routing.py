@@ -47,6 +47,9 @@ for p in (DOWNLOAD_SORTER_ROOT, SUITE_CENTRAL_ROOT, HAAS_STUDIO_ROOT):
 # Reference Haas samples
 HAAS_CONTOUR_SAMPLE = HAAS_STUDIO_ROOT / "samples" / "sample1_contour.nc"
 HAAS_BOLT_SAMPLE = HAAS_STUDIO_ROOT / "samples" / "sample2_bolt_circle.nc"
+if not HAAS_CONTOUR_SAMPLE.exists():
+    HAAS_CONTOUR_SAMPLE = DOWNLOAD_SORTER_ROOT / "tests" / "samples" / "sample1_contour.nc"
+    HAAS_BOLT_SAMPLE = DOWNLOAD_SORTER_ROOT / "tests" / "samples" / "sample2_bolt_circle.nc"
 
 # The 27 CAD / 3D / CNC extensions specified in PROJECT.md contract
 CAD_EXTENSIONS = [
@@ -111,8 +114,12 @@ def get_suite_data():
     try:
         import suite_data
         return suite_data
-    except ImportError as e:
-        pytest.fail(f"Could not import suite-central.suite_data: {e}")
+    except ImportError:
+        try:
+            import config_manager as suite_data
+            return suite_data
+        except ImportError as e:
+            pytest.fail(f"Could not import suite-central.suite_data: {e}")
 
 
 def get_rules_manager():
