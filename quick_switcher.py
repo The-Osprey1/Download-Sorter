@@ -682,11 +682,14 @@ def spawn_quick_switcher(dialog_hwnd: int) -> None:
     if not recent:
         return
 
-    python_bin = ROOT / ".venv" / "Scripts" / "pythonw.exe"
-    if not python_bin.exists():
-        python_bin = PYTHON
+    if getattr(sys, "frozen", False):
+        args = [sys.executable, "--dialog", str(dialog_hwnd)]
+    else:
+        python_bin = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+        if not python_bin.exists():
+            python_bin = PYTHON
+        args = [str(python_bin), str(Path(__file__).resolve()), "--dialog", str(dialog_hwnd)]
 
-    args = [str(python_bin), str(Path(__file__).resolve()), "--dialog", str(dialog_hwnd)]
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         subprocess.Popen(args, creationflags=flags)

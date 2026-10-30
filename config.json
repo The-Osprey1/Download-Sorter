@@ -58,6 +58,7 @@
     ".ngc"
   ],
   "documents_ignore_dirs": [
+    "antigravity",
     "Sorter Recovery",
     "CAD & 3D Projects",
     "Arduino",

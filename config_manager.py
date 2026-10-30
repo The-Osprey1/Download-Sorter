@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,12 @@ def validate_sorter_config(config: Any) -> bool:
         return False
     if "extension_rules" not in config or not isinstance(config["extension_rules"], list):
         return False
+    for r in config["keyword_rules"]:
+        if not isinstance(r, dict) or not r.get("name") or not r.get("folder"):
+            return False
+    for r in config["extension_rules"]:
+        if not isinstance(r, dict) or not r.get("name") or not r.get("extensions") or not isinstance(r["extensions"], list):
+            return False
     return True
 
 
@@ -289,3 +296,306 @@ def get_maker_projects(db_path: Path | str | None = None) -> list[dict[str, Any]
             pass
 
     return []
+
+
+# =====================================================================
+# PUBLIC PRESET LIBRARY & RULE PACKS
+# =====================================================================
+
+BUILTIN_PRESETS: list[dict[str, Any]] = [
+    {
+        "id": "office_admin",
+        "name": "Office, Invoices & Finance",
+        "category": "Office & Finance",
+        "description": "Essential organizational rules for invoices, receipts, tax documents, and careers.",
+        "rules": [
+            {
+                "name": "Invoices & Receipts",
+                "folder": "Documents\\Invoices & Receipts",
+                "match": [
+                    "invoice", "receipt", "billing", "statement", "payment",
+                    "order_confirmation", "tax_invoice", "purchase_order", "remittance",
+                ],
+                "extensions": [".pdf", ".png", ".jpg", ".docx", ".xlsx", ".csv"],
+                "enabled": True,
+            },
+            {
+                "name": "Financial & Taxes",
+                "folder": "Documents\\Financial & Tax",
+                "match": [
+                    "tax", "w2", "w-2", "1099", "1040", "tax_return",
+                    "bank_statement", "paystub", "w9", "w-9", "dividend",
+                ],
+                "extensions": [".pdf", ".xlsx", ".xls", ".csv", ".doc", ".docx"],
+                "enabled": True,
+            },
+            {
+                "name": "Resumes & Career",
+                "folder": "Documents\\Career",
+                "match": [
+                    "resume", "curriculum_vitae", "cv", "cover_letter",
+                    "portfolio", "offer_letter", "recommendation",
+                ],
+                "extensions": [".pdf", ".docx", ".doc", ".odt"],
+                "enabled": True,
+            },
+            {
+                "name": "Manuals & Guides",
+                "folder": "Documents\\Manuals & Guides",
+                "match": [
+                    "manual", "userguide", "datasheet", "quickstart",
+                    "handbook", "documentation", "spec_sheet",
+                ],
+                "extensions": [".pdf", ".doc", ".docx", ".txt"],
+                "enabled": True,
+            },
+            {
+                "name": "Travel & Bookings",
+                "folder": "Documents\\Travel",
+                "match": [
+                    "boarding_pass", "flight", "itinerary", "e-ticket",
+                    "hotel_reservation", "booking_confirmation", "airline",
+                ],
+                "extensions": [".pdf", ".pkpass", ".png", ".jpg"],
+                "enabled": True,
+            },
+        ],
+    },
+    {
+        "id": "academic_student",
+        "name": "Student & Academic Coursework",
+        "category": "Student & Academic",
+        "description": "Streamlined sorting for courses, syllabi, assignments, and academic research.",
+        "rules": [
+            {
+                "name": "Syllabi & Notes",
+                "folder": "Documents\\School\\Notes",
+                "match": [
+                    "syllabus", "lecture", "lecture_notes", "course_outline",
+                    "class_notes", "handout", "reading",
+                ],
+                "extensions": [".pdf", ".docx", ".pptx", ".txt"],
+                "enabled": True,
+            },
+            {
+                "name": "Homework & Assignments",
+                "folder": "Documents\\School\\Assignments",
+                "match": [
+                    "homework", "assignment", "lab_report", "problem_set",
+                    "submission", "rubric", "worksheet",
+                ],
+                "extensions": [".pdf", ".docx", ".doc", ".xlsx", ".py", ".zip"],
+                "enabled": True,
+            },
+            {
+                "name": "Exams & Study Guides",
+                "folder": "Documents\\School\\Exams",
+                "match": [
+                    "midterm", "final_exam", "quiz", "study_guide",
+                    "exam_review", "cheat_sheet", "practice_exam",
+                ],
+                "extensions": [".pdf", ".docx", ".doc"],
+                "enabled": True,
+            },
+            {
+                "name": "Research Papers & Theses",
+                "folder": "Documents\\School\\Research",
+                "match": [
+                    "thesis", "dissertation", "arxiv", "journal_article",
+                    "manuscript", "abstract", "whitepaper",
+                ],
+                "extensions": [".pdf", ".bib", ".tex"],
+                "enabled": True,
+            },
+        ],
+    },
+    {
+        "id": "maker_3d",
+        "name": "3D Printing & Digital Fabrication",
+        "category": "3D Printing & Maker",
+        "description": "Dedicated rules for makers running Bambu, Prusa, Creality, Haas CNC, and CAD.",
+        "rules": [
+            {
+                "name": "3MF Slicer Projects",
+                "folder": "3D Models\\3MF",
+                "match": [
+                    "bambu", "orca", "prusa", "plate", "multicolor", "ams",
+                ],
+                "extensions": [".3mf"],
+                "enabled": True,
+            },
+            {
+                "name": "CNC & Slicer G-Code",
+                "folder": "Code\\Gcode",
+                "match": [
+                    "slice", "layer", "toolpath", "contour", "gcode", "haas",
+                ],
+                "extensions": [".gcode", ".bgcode", ".nc", ".tap", ".ngc"],
+                "enabled": True,
+            },
+            {
+                "name": "CAD & Mechanical Parts",
+                "folder": "3D Models\\CAD",
+                "match": [
+                    "bracket", "mount", "enclosure", "adapter", "gear",
+                    "spacer", "chassis", "flange", "bushing",
+                ],
+                "extensions": [".step", ".stp", ".iges", ".f3d", ".sldprt", ".ipt", ".stl"],
+                "enabled": True,
+            },
+        ],
+    },
+    {
+        "id": "software_dev",
+        "name": "Software Development & Ops",
+        "category": "Software Developer",
+        "description": "Developer rules for configs, databases, container definitions, and diagnostics.",
+        "rules": [
+            {
+                "name": "Configs & Infrastructure",
+                "folder": "Code\\Configs",
+                "match": [
+                    "docker-compose", "k8s", "kubernetes", "settings",
+                    "config", "manifest", "env_example",
+                ],
+                "extensions": [".json", ".yaml", ".yml", ".toml", ".ini", ".env"],
+                "enabled": True,
+            },
+            {
+                "name": "Datasets & Data",
+                "folder": "Data",
+                "match": [
+                    "dataset", "benchmark", "sample_data", "kaggle",
+                    "telemetry", "metrics",
+                ],
+                "extensions": [".csv", ".json", ".parquet", ".sqlite", ".db", ".feather"],
+                "enabled": True,
+            },
+            {
+                "name": "Logs & Crash Dumps",
+                "folder": "Code\\Logs",
+                "match": [
+                    "crashdump", "stacktrace", "error_log", "diagnostics",
+                    "dmp", "syslog",
+                ],
+                "extensions": [".log", ".txt", ".dmp", ".out"],
+                "enabled": True,
+            },
+        ],
+    },
+    {
+        "id": "creative_media",
+        "name": "Creative Media & Design",
+        "category": "Creative & Media",
+        "description": "Rules for designers, video editors, music producers, and audio artists.",
+        "rules": [
+            {
+                "name": "Audio Stems & Samples",
+                "folder": "Audio\\Samples",
+                "match": [
+                    "stem", "multitrack", "sample_pack", "drum_kit",
+                    "loop", "acapella", "one_shot", "soundfx",
+                ],
+                "extensions": [".wav", ".flac", ".mp3", ".aiff"],
+                "enabled": True,
+            },
+            {
+                "name": "Vector Graphics & Logos",
+                "folder": "Images\\Vector",
+                "match": [
+                    "vector", "icon", "logo", "illustration",
+                    "sprite", "badge", "banner",
+                ],
+                "extensions": [".svg", ".eps", ".ai", ".cdr"],
+                "enabled": True,
+            },
+        ],
+    },
+]
+
+
+def get_available_presets() -> list[dict[str, Any]]:
+    """Return all available built-in rule presets."""
+    return copy.deepcopy(BUILTIN_PRESETS)
+
+
+def apply_preset(config: dict[str, Any], preset_id: str) -> tuple[dict[str, Any], int]:
+    """Apply a preset's rules into the given configuration without duplicating existing rules.
+
+    Returns (updated_config, count_of_added_rules).
+    """
+    preset = next((p for p in BUILTIN_PRESETS if p["id"] == preset_id), None)
+    if not preset:
+        raise ValueError(f"Unknown preset ID: {preset_id}")
+
+    existing_keyword_names = {
+        (r.get("name") or "").lower()
+        for r in config.get("keyword_rules", [])
+        if isinstance(r, dict)
+    }
+    new_rules: list[dict[str, Any]] = []
+    added_count = 0
+    for rule in preset["rules"]:
+        r_name = (rule.get("name") or "").lower()
+        if r_name and r_name not in existing_keyword_names:
+            new_rules.append(copy.deepcopy(rule))
+            existing_keyword_names.add(r_name)
+            added_count += 1
+
+    updated = copy.deepcopy(config)
+    updated.setdefault("keyword_rules", []).extend(new_rules)
+    return updated, added_count
+
+
+def export_rules_to_file(file_path: Path | str, config: dict[str, Any] | None = None) -> bool:
+    """Export keyword_rules and extension_rules to a standalone JSON file."""
+    cfg = config if config is not None else load_sorter_config()
+    payload = {
+        "version": "1.0",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "keyword_rules": cfg.get("keyword_rules", []),
+        "extension_rules": cfg.get("extension_rules", []),
+    }
+    target = Path(file_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return True
+
+
+def import_rules_from_file(file_path: Path | str) -> dict[str, Any]:
+    """Import and validate rules from an exported JSON file.
+
+    Returns a dict with 'keyword_rules' and/or 'extension_rules'.
+    """
+    target = Path(file_path)
+    if not target.exists():
+        raise FileNotFoundError(f"Import file does not exist: {target}")
+    raw = target.read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("Imported file must contain a JSON object")
+    if "keyword_rules" not in data and "extension_rules" not in data:
+        raise ValueError("Import file missing 'keyword_rules' and 'extension_rules'")
+
+    if "keyword_rules" in data:
+        if not isinstance(data["keyword_rules"], list):
+            raise ValueError("'keyword_rules' must be a list")
+        for idx, r in enumerate(data["keyword_rules"]):
+            if not isinstance(r, dict) or not r.get("name") or not r.get("folder"):
+                raise ValueError(f"Malformed keyword rule at index {idx}: must be an object with 'name' and 'folder'")
+
+    if "extension_rules" in data:
+        if not isinstance(data["extension_rules"], list):
+            raise ValueError("'extension_rules' must be a list")
+        for idx, r in enumerate(data["extension_rules"]):
+            if not isinstance(r, dict) or not r.get("name") or not r.get("extensions") or not isinstance(r["extensions"], list):
+                raise ValueError(f"Malformed extension rule at index {idx}: must be an object with 'name' and 'extensions'")
+
+    return data
+
+
+def reset_sorter_config_to_defaults(config_path: Path | str | None = None) -> dict[str, Any]:
+    """Reset configuration to factory defaults and persist atomically."""
+    default_cfg = copy.deepcopy(DEFAULT_SORTER_CONFIG)
+    save_sorter_config(default_cfg, config_path=config_path)
+    return default_cfg

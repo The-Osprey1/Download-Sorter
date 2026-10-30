@@ -43,13 +43,23 @@ dependencies = [
     "PySide6>=6.8.0"
 ]
 
+[project.urls]
+Homepage = "https://github.com/The-Osprey1/Download-Sorter"
+Documentation = "https://github.com/The-Osprey1/Download-Sorter#readme"
+Repository = "https://github.com/The-Osprey1/Download-Sorter.git"
+Issues = "https://github.com/The-Osprey1/Download-Sorter/issues"
+Changelog = "https://github.com/The-Osprey1/Download-Sorter/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 dev = [
-    "pytest>=9.0.0"
+    "pytest>=9.0.0",
+    "pyinstaller>=6.0.0"
 ]
 
 [project.scripts]
-download-sorter = "sort_once:main"
+download-sorter = "main:main"
+download-sorter-app = "main:main"
+download-sorter-run = "sort_once:main"
 download-sorter-watch = "watch:main"
 download-sorter-tray = "tray:main"
 download-sorter-gui = "rules_manager:main"

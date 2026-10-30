@@ -82,7 +82,180 @@ else:
 
 
 # =====================================================================
-# 1. RULE EDIT MODAL DIALOG
+# 1. PRESET LIBRARY & RULE PACK DIALOG
+# =====================================================================
+
+class PresetLibraryDialog(QDialog):
+    """Modal dialog for browsing and selecting curated rule packs."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("📚 Rule Preset Library")
+        self.setMinimumSize(580, 500)
+        self.resize(620, 540)
+        self._selected_preset_ids: list[str] = []
+        self._checkboxes: dict[str, QCheckBox] = {}
+        self._init_ui()
+
+    def _init_ui(self) -> None:
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {COLORS['surface']};
+                color: {COLORS['text']};
+            }}
+            QLabel {{
+                color: {COLORS['text']};
+                font-family: '{TYPE['ui']}';
+            }}
+            QScrollArea {{
+                border: 1px solid {COLORS['border']};
+                background: {COLORS['canvas']};
+                border-radius: {RADII['small']}px;
+            }}
+            QPushButton {{
+                background: {COLORS['surfaceRaised']};
+                border: 1px solid {COLORS['border']};
+                border-radius: {RADII['small']}px;
+                color: {COLORS['text']};
+                padding: 6px 14px;
+                font-family: '{TYPE['ui']}';
+                font-weight: 600;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background: {COLORS['surfaceHover']};
+                border-color: {ACCENTS['downloadSorter']};
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        # Header
+        title_lbl = QLabel("📚 Curated Rule Presets Library")
+        title_lbl.setFont(QFont(TYPE["ui"], 13, QFont.Weight.Bold))
+        layout.addWidget(title_lbl)
+
+        sub_lbl = QLabel("Select rule packs to add to your configuration. Rules with matching names will not be duplicated.")
+        sub_lbl.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 11px;")
+        sub_lbl.setWordWrap(True)
+        layout.addWidget(sub_lbl)
+
+        # Scroll Area with Presets
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(12, 12, 12, 12)
+        container_layout.setSpacing(10)
+
+        presets = suite_data.get_available_presets() if hasattr(suite_data, "get_available_presets") else []
+        for p in presets:
+            card = QFrame()
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background: {COLORS['surfaceRaised']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: {RADII['small']}px;
+                    padding: 8px;
+                }}
+            """)
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(10, 8, 10, 8)
+            card_layout.setSpacing(4)
+
+            top_row = QHBoxLayout()
+            cb = QCheckBox(f"{p.get('name', p.get('id'))}")
+            cb.setFont(QFont(TYPE["ui"], 11, QFont.Weight.Bold))
+            cb.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
+            self._checkboxes[p["id"]] = cb
+            top_row.addWidget(cb)
+
+            badge = QLabel(f"  {p.get('category', '')}  ")
+            badge.setStyleSheet(f"""
+                background: {COLORS['canvas']};
+                color: {COLORS['textMuted']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                font-size: 9px;
+            """)
+            top_row.addWidget(badge)
+            top_row.addStretch()
+            card_layout.addLayout(top_row)
+
+            desc = QLabel(p.get("description", ""))
+            desc.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 10px;")
+            desc.setWordWrap(True)
+            card_layout.addWidget(desc)
+
+            rule_names = [r.get("name", "") for r in p.get("rules", [])]
+            rules_lbl = QLabel(f"Includes: {', '.join(rule_names)}")
+            rules_lbl.setStyleSheet(f"color: {COLORS['textFaint']}; font-size: 9px; font-style: italic;")
+            rules_lbl.setWordWrap(True)
+            card_layout.addWidget(rules_lbl)
+
+            container_layout.addWidget(card)
+
+        container_layout.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        # Buttons
+        btn_layout = QHBoxLayout()
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.clicked.connect(self._select_all)
+        btn_layout.addWidget(select_all_btn)
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(self._clear_all)
+        btn_layout.addWidget(clear_btn)
+
+        btn_layout.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        add_btn = QPushButton("✓ Add Selected Rules")
+        add_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {ACCENTS['downloadSorter']};
+                color: #0B0D12;
+                border: 1px solid {ACCENTS['downloadSorter']};
+                font-weight: bold;
+                padding: 6px 16px;
+            }}
+            QPushButton:hover {{
+                background: #82ecc0;
+            }}
+        """)
+        add_btn.clicked.connect(self._on_accept)
+        btn_layout.addWidget(add_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _select_all(self) -> None:
+        for cb in self._checkboxes.values():
+            cb.setChecked(True)
+
+    def _clear_all(self) -> None:
+        for cb in self._checkboxes.values():
+            cb.setChecked(False)
+
+    def _on_accept(self) -> None:
+        self._selected_preset_ids = [pid for pid, cb in self._checkboxes.items() if cb.isChecked()]
+        if not self._selected_preset_ids:
+            QMessageBox.information(self, "No Selection", "Please check at least one preset to add.")
+            return
+        self.accept()
+
+    def get_selected_preset_ids(self) -> list[str]:
+        return list(self._selected_preset_ids)
+
+
+# =====================================================================
+# 2. RULE EDIT MODAL DIALOG
 # =====================================================================
 
 class RuleEditDialog(QDialog):
@@ -286,6 +459,12 @@ class RuleTableWidget(QWidget):
         self._add_btn.clicked.connect(self.add_rule_dialog)
         toolbar.addWidget(self._add_btn)
 
+        if self.rule_type == "keyword":
+            self._preset_btn = QPushButton("📚 Add from Presets...")
+            self._preset_btn.setToolTip("Add pre-configured keyword rules from the Preset Library")
+            self._preset_btn.clicked.connect(self.add_from_presets_dialog)
+            toolbar.addWidget(self._preset_btn)
+
         self._move_up_btn = QPushButton("▲ Move Up")
         self._move_up_btn.setToolTip("Increase rule precedence (evaluated earlier)")
         self._move_up_btn.clicked.connect(self.move_rule_up)
@@ -471,6 +650,27 @@ class RuleTableWidget(QWidget):
             self._refresh_table()
             self._table.setCurrentCell(len(self._rules) - 1, 1)
             self.rules_changed.emit()
+
+    def add_from_presets_dialog(self) -> None:
+        """Open Preset Library dialog and append selected preset rules."""
+        dlg = PresetLibraryDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            selected_ids = dlg.get_selected_preset_ids()
+            presets = suite_data.get_available_presets() if hasattr(suite_data, "get_available_presets") else []
+            existing_names = {r.get("name", "").lower() for r in self._rules}
+            added_count = 0
+            for pid in selected_ids:
+                p = next((x for x in presets if x["id"] == pid), None)
+                if p:
+                    for r in p.get("rules", []):
+                        if r.get("name", "").lower() not in existing_names:
+                            self._rules.append(copy.deepcopy(r))
+                            existing_names.add(r.get("name", "").lower())
+                            added_count += 1
+            if added_count > 0:
+                self._refresh_table()
+                self._table.setCurrentCell(len(self._rules) - 1, 1)
+                self.rules_changed.emit()
 
     def edit_selected_rule(self) -> None:
         """Open Edit Rule dialog for the currently selected row."""
@@ -1217,6 +1417,28 @@ class RulesManagerDialog(QDialog):
 
         header.addStretch()
 
+        # Preset Library Button
+        self._preset_lib_btn = QPushButton("📚 Preset Library...")
+        self._preset_lib_btn.setToolTip("Browse and add curated rule packs for Office, School, 3D, and Code")
+        self._preset_lib_btn.clicked.connect(self.open_preset_library)
+        header.addWidget(self._preset_lib_btn)
+
+        # Import & Export Buttons
+        self._export_btn = QPushButton("📤 Export...")
+        self._export_btn.setToolTip("Export rules configuration to a JSON file")
+        self._export_btn.clicked.connect(self.export_rules)
+        header.addWidget(self._export_btn)
+
+        self._import_btn = QPushButton("📥 Import...")
+        self._import_btn.setToolTip("Import rules from an external JSON file")
+        self._import_btn.clicked.connect(self.import_rules)
+        header.addWidget(self._import_btn)
+
+        self._reset_btn = QPushButton("↺ Defaults")
+        self._reset_btn.setToolTip("Reset rules to factory defaults")
+        self._reset_btn.clicked.connect(self.reset_to_defaults)
+        header.addWidget(self._reset_btn)
+
         # Save Button
         self._save_btn = QPushButton("💾 Save Changes")
         self._save_btn.setStyleSheet(f"""
@@ -1312,6 +1534,91 @@ class RulesManagerDialog(QDialog):
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", f"Failed to save rules: {exc}")
             return False
+
+    def open_preset_library(self) -> None:
+        """Open Preset Library dialog and merge selected presets into draft configuration."""
+        dlg = PresetLibraryDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            selected_ids = dlg.get_selected_preset_ids()
+            draft_config = self.get_current_draft_config()
+            added_total = 0
+            for pid in selected_ids:
+                draft_config, added = suite_data.apply_preset(draft_config, pid)
+                added_total += added
+            if added_total > 0:
+                self._config = draft_config
+                self._keyword_table.load_rules(draft_config.get("keyword_rules", []))
+                self._on_rules_or_project_changed()
+                QMessageBox.information(self, "Presets Added", f"Successfully added {added_total} rule(s) to your configuration. Click 'Save Changes' to commit.")
+
+    def export_rules(self) -> None:
+        """Export current draft rules to a user-selected JSON file."""
+        path, _ = QFileDialog.getSaveFileName(self, "Export Sorter Rules", "download_sorter_rules.json", "JSON Files (*.json)")
+        if path:
+            draft_config = self.get_current_draft_config()
+            ok = suite_data.export_rules_to_file(path, draft_config)
+            if ok:
+                QMessageBox.information(self, "Export Successful", f"Rules successfully exported to:\n{path}")
+
+    def import_rules(self) -> None:
+        """Import rules from a user-selected JSON file with merge or replace options."""
+        path, _ = QFileDialog.getOpenFileName(self, "Import Sorter Rules", "", "JSON Files (*.json)")
+        if not path:
+            return
+        try:
+            imported = suite_data.import_rules_from_file(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Error", f"Failed to import rules: {exc}")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Import Mode",
+            "Do you want to MERGE imported rules with your current rules?\n\nClick 'Yes' to Merge (keeps current rules).\nClick 'No' to REPLACE all current rules.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return
+
+        draft_config = self.get_current_draft_config()
+        if reply == QMessageBox.StandardButton.Yes:
+            existing_kw = {r.get("name", "").lower() for r in draft_config.get("keyword_rules", [])}
+            for r in imported.get("keyword_rules", []):
+                if r.get("name", "").lower() not in existing_kw:
+                    draft_config.setdefault("keyword_rules", []).append(copy.deepcopy(r))
+                    existing_kw.add(r.get("name", "").lower())
+            existing_ext = {r.get("name", "").lower() for r in draft_config.get("extension_rules", [])}
+            for r in imported.get("extension_rules", []):
+                if r.get("name", "").lower() not in existing_ext:
+                    draft_config.setdefault("extension_rules", []).append(copy.deepcopy(r))
+                    existing_ext.add(r.get("name", "").lower())
+        else:
+            if "keyword_rules" in imported:
+                draft_config["keyword_rules"] = copy.deepcopy(imported["keyword_rules"])
+            if "extension_rules" in imported:
+                draft_config["extension_rules"] = copy.deepcopy(imported["extension_rules"])
+
+        self._config = draft_config
+        self._keyword_table.load_rules(draft_config.get("keyword_rules", []))
+        self._extension_table.load_rules(draft_config.get("extension_rules", []))
+        self._on_rules_or_project_changed()
+        QMessageBox.information(self, "Import Complete", "Rules imported successfully into current editor session. Click 'Save Changes' to commit.")
+
+    def reset_to_defaults(self) -> None:
+        """Prompt to reset configuration to factory defaults."""
+        reply = QMessageBox.question(
+            self,
+            "Reset to Defaults",
+            "Are you sure you want to reset all rules to factory defaults?\nAny unsaved changes will be lost.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._config = suite_data.reset_sorter_config_to_defaults()
+            self._keyword_table.load_rules(self._config.get("keyword_rules", []))
+            self._extension_table.load_rules(self._config.get("extension_rules", []))
+            self._on_rules_or_project_changed()
+            QMessageBox.information(self, "Reset Complete", "Rules have been reset to factory defaults.")
+
 
 
 def main() -> int:

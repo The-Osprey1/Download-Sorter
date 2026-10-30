@@ -1,0 +1,65 @@
+name: 🐛 Bug Report
+description: Report a reproducible bug or sorting anomaly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide as much detail as possible to help us reproduce and resolve it quickly.
+
+  - type: input
+    id: version
+    attributes:
+      label: Download Sorter Version
+      placeholder: e.g. 1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_mode
+    attributes:
+      label: Installation Method
+      options:
+        - Standalone Windows Executable (DownloadSorter.exe / ZIP)
+        - Python Virtual Environment (setup.bat / git clone)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os_version
+    attributes:
+      label: Windows OS Version
+      options:
+        - Windows 11 (23H2 or newer)
+        - Windows 11 (22H2 or older)
+        - Windows 10 (22H2)
+        - Windows 10 (other)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction_steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Download file named '...'
+        2. Sorter runs
+        3. File moved to incorrect directory
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output
+      description: Check `%LOCALAPPDATA%\download-sorter\sorter.log` for recent messages.
+      render: text

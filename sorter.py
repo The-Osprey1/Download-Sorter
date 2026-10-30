@@ -74,7 +74,7 @@ DEFAULT_CONFIG: dict = {
         ".dwg", ".dxf", ".nc", ".tap", ".ngc",
     ],
     "documents_ignore_dirs": [
-        "Sorter Recovery", "CAD & 3D Projects", "Arduino", "KiCad", "MAXON",
+        "antigravity", "Sorter Recovery", "CAD & 3D Projects", "Arduino", "KiCad", "MAXON",
         ".git", "node_modules", "My Games", "Saved Games", "Steam",
         "Electronic Arts", "EA Games", "Paradox Interactive", "Rockstar Games",
         "Adobe", "PowerToys", "SOLIDCast", "SOLIDCast Projects",

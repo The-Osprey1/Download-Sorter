@@ -85,6 +85,22 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess | None:
     """Run one of the sibling command-line tools without flashing a console."""
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
+        if getattr(sys, "frozen", False):
+            flag_map = {
+                "rules_manager.py": ["--gui"],
+                "sort_undo.py": ["--undo"],
+                "sort_once.py": ["--sort"],
+                "status.py": ["--status"],
+                "gcode_peek.py": ["--peek"],
+                "unzip_3d.py": ["--unzip-3d"],
+                "unzip_archive.py": ["--unzip"],
+                "clean_old.py": ["--clean"],
+            }
+            mapped = flag_map.get(name, [name])
+            return subprocess.run(
+                [sys.executable, *mapped, *args],
+                capture_output=True, text=True, creationflags=flags, timeout=300,
+            )
         return subprocess.run(
             [str(PYTHON), str(ROOT / name), *args],
             capture_output=True, text=True, creationflags=flags, timeout=300,

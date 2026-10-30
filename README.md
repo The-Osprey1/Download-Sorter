@@ -1,13 +1,15 @@
 # download-sorter
 
+[![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
+[![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
-[![Tests Passing](https://img.shields.io/badge/tests-743%20passed-69E6AD.svg?style=flat)](tests/)
+[![Tests Passing](https://img.shields.io/badge/tests-758%20passed-69E6AD.svg?style=flat)](tests/)
 
 A lightweight, local-first automated file organizer for Windows that keeps your **Downloads** and **Documents** folders organized without sending your data to any cloud service.
 
-Includes a **PySide6 Visual Rules Manager & Live Sandbox GUI**, **System Tray monitor**, **interactive High-DPI Desktop Ribbon toasts**, **reversible Undo**, and **3D Printing / CNC intelligence**.
+Includes a **PySide6 Visual Rules Manager & Live Sandbox GUI**, **Curated Rule Presets Library**, **System Tray monitor**, **interactive High-DPI Desktop Ribbon toasts**, **reversible Undo**, and **3D Printing / CNC intelligence**. Available both as a **standalone Windows executable (no Python required)** and as an extensible Python package.
 
 ---
 
@@ -178,13 +180,25 @@ flowchart TD
 
 ## Installation & Setup
 
-### Prerequisites
-* Windows 10 or 11
-* Python 3.10+
+### Option 1: Standalone Windows App (Recommended for General Users — No Python Needed)
+1. Download the latest **`DownloadSorter-v1.0.0-windows-x64.zip`** from [GitHub Releases](https://github.com/The-Osprey1/Download-Sorter/releases).
+2. Extract the ZIP anywhere on your system (e.g. `C:\Users\<user>\Download-Sorter` or Program Files).
+3. Double-click **`setup.bat`** (or run `.\setup.bat`). It will:
+   - Configure optional automatic startup at login.
+   - Configure right-click Explorer context menus.
+   - Launch the background system tray monitor immediately.
 
-### Quick Start (One-Click)
+---
+
+### Option 2: Python Source Installation (For Developers)
+
+#### Prerequisites
+* Windows 10 or 11
+* Python 3.10+ (setup can also install it automatically via `winget`)
+
+#### Quick Start (One-Click)
 Double-click **`setup.bat`** (or run `.\setup.bat` in PowerShell/CMD). It will automatically:
-1. Verify Python 3.10+ on your system
+1. Detect Python 3.10+ (supporting `python`, official `py -3` launcher, `python3`, or offer `winget` installation)
 2. Create your `.venv` virtual environment
 3. Install dependencies from `requirements.txt`
 4. Optionally configure auto-start at login and Explorer context menus
@@ -203,7 +217,18 @@ Double-click **`update.bat`** (or run `.\update.bat` in PowerShell/CMD). It will
 
 ---
 
-### Manual Setup
+### Clean Uninstallation
+To completely remove Download Sorter:
+1. Double-click **`uninstall.bat`** (or run `powershell -ExecutionPolicy Bypass -File .\uninstall.ps1`).
+2. It will automatically:
+   - Stop running background tray and watcher processes.
+   - Remove the Windows Scheduled Task.
+   - Unregister Explorer context menus from `HKCU`.
+   - Prompt whether you want to preserve or purge `%LOCALAPPDATA%\download-sorter`.
+
+---
+
+### Manual Setup (CLI / Pip)
 ```powershell
 git clone https://github.com/The-Osprey1/Download-Sorter.git
 cd Download-Sorter
@@ -246,6 +271,30 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_startup.ps1
 
 ---
 
+## Command Line Usage
+
+Download Sorter provides a unified CLI dispatcher for terminal automation, scripts, CI/CD pipelines, and power users. Both `DownloadSorter-cli.exe` and `DownloadSorter.cmd` provide native console output with exit codes, while `DownloadSorter.exe` runs silently in windowed mode (ideal for background scheduled tasks).
+
+| Command | Action |
+|:---|:---|
+| `DownloadSorter.exe` / `python main.py` | Launch background system tray monitor (default) |
+| `DownloadSorter-cli --tray` | Launch tray monitor explicitly |
+| `DownloadSorter-cli --gui` | Launch visual Rules Manager & Sandbox Simulator GUI |
+| `DownloadSorter-cli --sort` | Run one-pass sorting batch on Downloads |
+| `DownloadSorter-cli --sort --dry-run` | Simulate sorting without moving files |
+| `DownloadSorter-cli --sort --target <dir>` | Sort a specific folder once |
+| `DownloadSorter-cli --undo` | Reversibly undo previous sort batch |
+| `DownloadSorter-cli --peek <file>` | Inspect 3D print file / CNC toolpath |
+| `DownloadSorter-cli --peek --latest` | Inspect most recent 3D file in Downloads |
+| `DownloadSorter-cli --unzip-3d <zip>` | Flatten and unpack 3D models from archive |
+| `DownloadSorter-cli --unzip <zip>` | Safely unpack archive into `Extracted/` |
+| `DownloadSorter-cli --status` | Print daemon health, memory, and recent moves |
+| `DownloadSorter-cli --clean` | Recycle old installers/archives (>30 days) |
+| `DownloadSorter-cli --version` | Print Download Sorter version |
+| `DownloadSorter-cli --help` | Display command usage and flag details |
+
+---
+
 ## Testing & Quality Assurance
 
 This repository includes a comprehensive 4-Tier test suite covering feature tests, adversarial stress tests, live reload, and simulation parity:
@@ -260,9 +309,41 @@ This repository includes a comprehensive 4-Tier test suite covering feature test
 ## Safety & Privacy
 
 * **100% Offline**: Zero external network requests, analytics, or telemetry. All sorting occurs entirely on your local machine.
-* **Non-Destructive Cleanup**: Clean scripts send items strictly to the Windows Recycle Bin using `send2trash`.
+* **Non-Destructive Cleanup**: Clean scripts send items strictly to the Windows Recycle Bin using native Windows Shell API (`SHFileOperationW` with `FOF_ALLOWUNDO`).
 * **Path Traversal Protection**: Archive extractors reject any archive member with directory traversal markers (`../` or leading root slashes).
 * **Atomic Configuration**: Config persistence creates `.bak` backups before swapping files to guarantee zero configuration loss if interrupted.
+
+---
+
+## Frequently Asked Questions (FAQ)
+
+### Windows SmartScreen displays a warning when running `DownloadSorter.exe`. Is it safe?
+Yes. SmartScreen flags newly released binaries from GitHub that have not yet built up download reputation or are not signed with a paid Extended Validation (EV) code signing certificate. To proceed:
+1. Click **More info**.
+2. Click **Run anyway**.
+The application is 100% open-source, offline, and makes zero network requests. You can inspect the source code and build it locally from scratch at any time.
+
+### Where are my custom rules saved?
+Your personal rule configurations, custom keywords, and category folders are stored in:
+`%LOCALAPPDATA%\download-sorter\config.json`
+This keeps your settings strictly isolated from the application directory. Updating the application or pulling new commits will never overwrite your personal rules.
+
+### How do I undo a sort batch?
+If a batch was sorted into the wrong place, you can immediately revert it:
+* **Via System Tray**: Right-click the Download Sorter icon and click **"Undo last batch"**.
+* **Via File Explorer**: Right-click the background of any folder and click **"Undo Last DownloadSorter Batch"**.
+* **Via Command Line**: Run `DownloadSorter.exe --undo` (or `python sort_undo.py`).
+
+### Does Download Sorter support OneDrive or moved Downloads folders?
+Yes! Download Sorter automatically checks Windows Shell Known Folders (`FOLDERID_Downloads` registry key) to detect your active Downloads folder even if you redirected it to another drive (e.g. `D:\Downloads`). For OneDrive, cloud-only placeholder files (smart sync) are automatically detected via Windows file attributes and skipped until fully downloaded locally.
+
+---
+
+## Contributing & Security
+
+* **Contributing**: Check out [CONTRIBUTING.md](CONTRIBUTING.md) for local development instructions, test guidelines, and how to submit new rule presets.
+* **Security & Privacy**: Read our [SECURITY.md](SECURITY.md) policy detailing our zero-telemetry and offline security model.
+* **Changelog**: See [CHANGELOG.md](CHANGELOG.md) for version release history.
 
 ---
 

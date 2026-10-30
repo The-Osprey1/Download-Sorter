@@ -1,0 +1,35 @@
+name: 📚 Propose a Rule Preset
+description: Suggest a new curated rule pack for the Preset Library
+labels: ["rule-presets"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Suggest rules to be bundled into the built-in Preset Library for all users.
+
+  - type: input
+    id: preset_name
+    attributes:
+      label: Preset / Category Name
+      placeholder: e.g. CAD CAM Tooling, Music Production Stems, Game Assets
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample_files
+    attributes:
+      label: Example Filenames & File Extensions
+      placeholder: |
+        - Haas_VF2_Setup.nc (.nc, .tap)
+        - Kick_Dry_128bpm.wav (.wav, .flac)
+        - character_texture.psd (.psd, .tga)
+    validations:
+      required: true
+
+  - type: input
+    id: target_destination
+    attributes:
+      label: Proposed Destination Folder
+      placeholder: e.g. Documents\Machining or Audio\Samples
+    validations:
+      required: true
