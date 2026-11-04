@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import about
 import ctypes
 from ctypes import wintypes
 import logging
@@ -84,6 +85,7 @@ def format_size(bytes_val: int) -> str:
 def main() -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Safely move old download files to the Windows Recycle Bin.")
+    parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument("-d", "--days", type=float, default=30.0, help="Minimum file age in days (default: 30)")
     parser.add_argument("-n", "--dry-run", action="store_true", help="Preview files to be recycled without touching them")
     parser.add_argument("-a", "--all", action="store_true", help="Include 'Other' folder in addition to Installers & Archives")

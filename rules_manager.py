@@ -18,10 +18,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -34,7 +36,9 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QProgressBar,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -62,6 +66,8 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import about
+
 try:
     import sorter
 except ImportError:
@@ -79,6 +85,7 @@ elif LOCAL_SAMPLES_DIR.exists():
 else:
     HAAS_CONTOUR_SAMPLE = None
     HAAS_BOLT_SAMPLE = None
+MAKERWORLD_SAMPLE = ROOT / "tests" / "fixtures" / "3mf" / "makerworld_model.3mf"
 
 
 # =====================================================================
@@ -734,11 +741,10 @@ class ActiveProjectCard(QFrame):
 
         self._init_ui()
 
-        # Timer for countdown refresh
+        # Timer for countdown refresh (only active when catch-all has expiry)
         self._countdown_timer = QTimer(self)
         self._countdown_timer.setInterval(15000)  # 15 seconds
         self._countdown_timer.timeout.connect(self._update_status_display)
-        self._countdown_timer.start()
 
     def _init_ui(self) -> None:
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -922,6 +928,8 @@ class ActiveProjectCard(QFrame):
         now = time.time()
 
         if not enabled:
+            if hasattr(self, "_countdown_timer") and self._countdown_timer.isActive():
+                self._countdown_timer.stop()
             self._status_badge.setText("○ INACTIVE")
             self._status_badge.setStyleSheet(f"""
                 background: {COLORS['surfaceRaised']};
@@ -934,9 +942,13 @@ class ActiveProjectCard(QFrame):
             return
 
         # Check expiry
-        if self._expires_at is not None and self._expires_at > 0:
+        if self._expires_at is not None and self._expires_at > 0 and self.isVisible():
+            if hasattr(self, "_countdown_timer") and not self._countdown_timer.isActive():
+                self._countdown_timer.start()
             rem = self._expires_at - now
             if rem <= 0:
+                if hasattr(self, "_countdown_timer") and self._countdown_timer.isActive():
+                    self._countdown_timer.stop()
                 self._enable_chk.blockSignals(True)
                 self._enable_chk.setChecked(False)
                 self._enable_chk.blockSignals(False)
@@ -955,6 +967,8 @@ class ActiveProjectCard(QFrame):
                 mins = int((rem % 3600) // 60)
                 time_str = f"expires in {hrs}h {mins}m" if hrs > 0 else f"expires in {mins}m"
         else:
+            if hasattr(self, "_countdown_timer") and self._countdown_timer.isActive():
+                self._countdown_timer.stop()
             time_str = "no expiry (manual toggle)"
 
         self._status_badge.setText("● ACTIVE")
@@ -1016,6 +1030,16 @@ class ActiveProjectCard(QFrame):
 
         self._enable_chk.setChecked(bool(is_enabled))
         self._update_status_display()
+
+    def hideEvent(self, event) -> None:
+        if hasattr(self, "_countdown_timer") and self._countdown_timer.isActive():
+            self._countdown_timer.stop()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:
+        if hasattr(self, "_countdown_timer") and self._countdown_timer.isActive():
+            self._countdown_timer.stop()
+        super().closeEvent(event)
 
 
 # =====================================================================
@@ -1259,6 +1283,8 @@ class LiveSandboxWidget(QFrame):
                 "M104 S220\n"
                 "G1 X10 Y10 E1.0\n"
             )
+        elif "makerworld" in name_lower and MAKERWORLD_SAMPLE.exists():
+            file_path = MAKERWORLD_SAMPLE
 
         if sorter and hasattr(sorter, "evaluate_routing"):
             res = sorter.evaluate_routing(
@@ -1290,6 +1316,7 @@ class LiveSandboxWidget(QFrame):
 
         badges = {
             "active_project": ("[ACTIVE PROJECT]", f"background: {ACCENTS['broncoGold']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
+            "makerworld": ("[MAKERWORLD]", f"background: {ACCENTS['printLibrary']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
             "keyword": ("[KEYWORD RULE]", f"background: {COLORS['success']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
             "gcode_sniffer": ("[GCODE SNIFFER]", f"background: {ACCENTS['suiteCentral']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
             "extension": ("[EXTENSION RULE]", f"background: {COLORS['borderStrong']}; color: {COLORS['text']}; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
@@ -1308,6 +1335,8 @@ class LiveSandboxWidget(QFrame):
             self._trigger_lbl.setText(f"Matched trigger token: '{trigger}'")
         elif match_type == "active_project":
             self._trigger_lbl.setText("Matched active project CAD/3D/CNC extension whitelist")
+        elif match_type == "makerworld":
+            self._trigger_lbl.setText(f"MakerWorld 3MF metadata parsed: {winning_rule}")
         elif match_type == "gcode_sniffer":
             self._trigger_lbl.setText(f"G-code machine sniffer evaluated header: {res.get('sniffer_details')}")
         else:
@@ -1330,6 +1359,419 @@ class LiveSandboxWidget(QFrame):
 # 5. MAIN RULES MANAGER DIALOG
 # =====================================================================
 
+def show_about_dialog(parent: QWidget | None = None) -> None:
+    """Help -> About: version, author credit, repository, and license."""
+    box = QMessageBox(parent)
+    box.setWindowTitle(f"About {about.APP_NAME}")
+    box.setIcon(QMessageBox.Icon.Information)
+    box.setText(f"<b>{about.APP_NAME}</b> {about.__version__}")
+    box.setInformativeText(
+        f"{about.CREDIT}\n\nLicense: {about.LICENSE_NAME}\n{about.REPO_URL}"
+    )
+    box.exec()
+
+
+class RemodelWorker(QThread):
+    scan_finished = Signal(object)
+    apply_finished = Signal(object)
+    error_occurred = Signal(str)
+
+    def __init__(self, mode: str, engine: Any, plan_or_target: Any, card_overrides: Any = None):
+        super().__init__()
+        self.mode = mode
+        self.engine = engine
+        self.plan_or_target = plan_or_target
+        self.card_overrides = card_overrides
+
+    def run(self):
+        try:
+            if self.mode == "scan":
+                scope, target = self.plan_or_target
+                plan = self.engine.scan(target, scope=scope)
+                self.scan_finished.emit(plan)
+            elif self.mode == "apply":
+                plan = self.plan_or_target
+                receipt = self.engine.apply(plan, card_overrides=self.card_overrides)
+                self.apply_finished.emit(receipt)
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
+
+
+class MachineRemodelWidget(QFrame):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("machineRemodelWidget")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self._current_plan: Any = None
+        self._card_buttons: dict[str, QButtonGroup] = {}
+        import remodel
+        self._engine = remodel.RemodelEngine()
+        self._worker: RemodelWorker | None = None
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        header_lbl = QLabel("Automated Machine Remodel & Folder Reorganization")
+        header_lbl.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {COLORS.get('text', '#EDF1F8')};")
+        layout.addWidget(header_lbl)
+
+        sub_lbl = QLabel(
+            "Scan and restructure messy machine directories. Automatically protects CAD assemblies, SOLIDCast, "
+            "MAGMASOFT, KiCad, active projects (<14d), and deduplicates identical files into quarantine."
+        )
+        sub_lbl.setWordWrap(True)
+        sub_lbl.setStyleSheet(f"font-size: 11px; color: {COLORS.get('textMuted', '#8B94A7')};")
+        layout.addWidget(sub_lbl)
+
+        scope_layout = QHBoxLayout()
+        scope_layout.addWidget(QLabel("Scope:"))
+        self._scope_combo = QComboBox()
+        self._scope_combo.addItems([
+            "Downloads (Full deep scan)",
+            "Desktop (Files >30 days, preserves shortcuts)",
+            "Documents (Top-level only)",
+            "Custom Directory...",
+        ])
+        self._scope_combo.currentIndexChanged.connect(self._on_scope_changed)
+        scope_layout.addWidget(self._scope_combo, 1)
+
+        self._custom_path_edit = QLineEdit()
+        self._custom_path_edit.setPlaceholderText("Select custom folder to remodel...")
+        self._custom_path_edit.setEnabled(False)
+        scope_layout.addWidget(self._custom_path_edit, 2)
+
+        self._browse_btn = QPushButton("Browse...")
+        self._browse_btn.setEnabled(False)
+        self._browse_btn.clicked.connect(self._on_browse)
+        scope_layout.addWidget(self._browse_btn)
+
+        self._scan_btn = QPushButton("🔍 Scan & Preview")
+        self._scan_btn.setStyleSheet(f"background-color: {COLORS.get('info', '#61A5FF')}; color: #FFFFFF; font-weight: bold;")
+        self._scan_btn.clicked.connect(self._start_scan)
+        scope_layout.addWidget(self._scan_btn)
+
+        layout.addLayout(scope_layout)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 0)
+        self._progress.setVisible(False)
+        layout.addWidget(self._progress)
+
+        self._summary_lbl = QLabel("Select a scope and click 'Scan & Preview' to inspect proposed actions.")
+        self._summary_lbl.setStyleSheet(f"color: {COLORS.get('textMuted', '#8B94A7')}; font-style: italic;")
+        layout.addWidget(self._summary_lbl)
+
+        self._sub_tabs = QTabWidget()
+
+        self._cards_scroll = QScrollArea()
+        self._cards_scroll.setWidgetResizable(True)
+        self._cards_container = QWidget()
+        self._cards_layout = QVBoxLayout(self._cards_container)
+        self._cards_layout.setContentsMargins(4, 4, 4, 4)
+        self._cards_layout.setSpacing(8)
+        self._cards_layout.addStretch()
+        self._cards_scroll.setWidget(self._cards_container)
+        self._sub_tabs.addTab(self._cards_scroll, "Folder Review Cards")
+
+        table_qss = f"""
+            QTableWidget {{
+                background-color: {COLORS['canvas']};
+                alternate-background-color: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: {RADII['small']}px;
+                color: {COLORS['text']};
+                gridline-color: transparent;
+                selection-background-color: {COLORS['surfaceHover']};
+                selection-color: {COLORS['text']};
+            }}
+            QHeaderView::section {{
+                background-color: {COLORS['surfaceRaised']};
+                color: {COLORS['textMuted']};
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid {COLORS['border']};
+                font-family: '{TYPE['ui']}';
+                font-size: 11px;
+                font-weight: 600;
+            }}
+        """
+
+        self._prot_table = QTableWidget(0, 2)
+        self._prot_table.setStyleSheet(table_qss)
+        self._prot_table.setHorizontalHeaderLabels(["Protected Folder / Item", "Protection Reason"])
+        self._prot_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self._prot_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._sub_tabs.addTab(self._prot_table, "Protected & Skipped (0)")
+
+        self._dupe_table = QTableWidget(0, 3)
+        self._dupe_table.setStyleSheet(table_qss)
+        self._dupe_table.setHorizontalHeaderLabels(["Duplicate File", "Size", "Kept Original"])
+        self._dupe_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self._dupe_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._sub_tabs.addTab(self._dupe_table, "Duplicates to Quarantine (0)")
+
+        layout.addWidget(self._sub_tabs, 1)
+
+        action_layout = QHBoxLayout()
+        self._apply_btn = QPushButton("🚀 Apply Remodel")
+        self._apply_btn.setEnabled(False)
+        self._apply_btn.setStyleSheet(f"background-color: {COLORS.get('success', '#69E6AD')}; color: #000000; font-weight: bold; padding: 6px 16px;")
+        self._apply_btn.clicked.connect(self._start_apply)
+        action_layout.addWidget(self._apply_btn)
+
+        self._undo_btn = QPushButton("↺ Undo Remodel")
+        self._undo_btn.clicked.connect(self._on_undo)
+        action_layout.addWidget(self._undo_btn)
+
+        action_layout.addStretch()
+        self._receipt_btn = QPushButton("📄 Open HTML Receipt")
+        self._receipt_btn.setEnabled(False)
+        self._receipt_btn.clicked.connect(self._open_receipt)
+        action_layout.addWidget(self._receipt_btn)
+
+        layout.addLayout(action_layout)
+
+    def _on_scope_changed(self, idx: int):
+        is_custom = (idx == 3)
+        self._custom_path_edit.setEnabled(is_custom)
+        self._browse_btn.setEnabled(is_custom)
+
+    def _on_browse(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder to Remodel")
+        if folder:
+            self._custom_path_edit.setText(folder)
+
+    def _get_target_path_and_scope(self) -> tuple[str, Path]:
+        idx = self._scope_combo.currentIndex()
+        if idx == 0:
+            return "downloads", sorter.watch_root(self._engine.config)
+        elif idx == 1:
+            desktop = Path(os.environ.get("USERPROFILE", "")) / "Desktop"
+            return "desktop", desktop
+        elif idx == 2:
+            documents = Path(os.environ.get("USERPROFILE", "")) / "Documents"
+            return "documents", documents
+        else:
+            p = self._custom_path_edit.text().strip()
+            return "custom", Path(p) if p else sorter.watch_root(self._engine.config)
+
+    def _start_scan(self):
+        scope, target = self._get_target_path_and_scope()
+        if not target.exists():
+            QMessageBox.warning(self, "Invalid Directory", f"The directory {target} does not exist.")
+            return
+
+        self._scan_btn.setEnabled(False)
+        self._apply_btn.setEnabled(False)
+        self._progress.setVisible(True)
+        self._summary_lbl.setText(f"Scanning {target} ...")
+
+        self._worker = RemodelWorker("scan", self._engine, (scope, target))
+        self._worker.scan_finished.connect(self._on_scan_finished)
+        self._worker.error_occurred.connect(self._on_worker_error)
+        self._worker.start()
+
+    def _on_scan_finished(self, plan: Any):
+        self._progress.setVisible(False)
+        self._scan_btn.setEnabled(True)
+        self._current_plan = plan
+
+        dupe_mb = round(plan.reclaimable_duplicate_bytes / (1024 * 1024), 2)
+        self._summary_lbl.setText(
+            f"Scan Complete: {plan.total_files_scanned} files inspected across {len(plan.cards)} subfolders. "
+            f"{len(plan.duplicates_to_quarantine)} duplicates found ({dupe_mb} MB reclaimable)."
+        )
+        self._apply_btn.setEnabled(len(plan.cards) > 0 or len(plan.loose_files_to_organize) > 0 or len(plan.duplicates_to_quarantine) > 0)
+
+        while self._cards_layout.count() > 1:
+            child = self._cards_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        self._card_buttons.clear()
+
+        for card in plan.cards:
+            card_frame = QFrame()
+            card_frame.setFrameShape(QFrame.Shape.StyledPanel)
+            card_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {COLORS['surfaceRaised']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: {RADII['card']}px; /* 11px */
+                    padding: 8px;
+                }}
+                QRadioButton {{
+                    color: {COLORS['text']};
+                    font-family: '{TYPE['ui']}';
+                    font-size: 11px;
+                    spacing: 6px;
+                }}
+                QRadioButton::indicator {{
+                    width: 14px;
+                    height: 14px;
+                    border: 1px solid {COLORS['borderStrong']};
+                    border-radius: 7px;
+                    background: {COLORS['canvas']};
+                }}
+                QRadioButton::indicator:hover {{
+                    border-color: {ACCENTS['downloadSorter']};
+                }}
+                QRadioButton::indicator:checked {{
+                    background: {ACCENTS['downloadSorter']};
+                    border-color: {ACCENTS['downloadSorter']};
+                }}
+            """)
+            c_layout = QVBoxLayout(card_frame)
+
+            top_h = QHBoxLayout()
+            name_lbl = QLabel(f"📁 {card.folder_path.name}")
+            name_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
+            top_h.addWidget(name_lbl)
+
+            if card.protection.is_protected:
+                badge = QLabel(f"PROTECTED: {card.protection.reason}")
+                badge.setStyleSheet(f"background: {COLORS['successSubtle']}; color: {COLORS['success']}; border: 1px solid {COLORS['successBorder']}; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: {RADII['small']}px;")
+                top_h.addWidget(badge)
+            else:
+                badge = QLabel("ORGANIZE CANDIDATE")
+                badge.setStyleSheet(f"background: {COLORS['infoSubtle']}; color: {COLORS['info']}; border: 1px solid {COLORS['infoBorder']}; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: {RADII['small']}px;")
+                top_h.addWidget(badge)
+            top_h.addStretch()
+
+            c_layout.addLayout(top_h)
+
+            info_lbl = QLabel(f"Files: {card.file_count} · Size: {card.total_size_mb} MB · Path: {card.folder_path}")
+            info_lbl.setStyleSheet(f"font-size: 11px; color: {COLORS.get('textMuted', '#8B94A7')};")
+            c_layout.addWidget(info_lbl)
+
+            btn_group = QButtonGroup(card_frame)
+            rad_h = QHBoxLayout()
+            rb_org = QRadioButton("Organize into Categories")
+            rb_keep = QRadioButton("Keep Intact (Untouched)")
+            rb_skip = QRadioButton("Skip")
+
+            btn_group.addButton(rb_org, 1)
+            btn_group.addButton(rb_keep, 2)
+            btn_group.addButton(rb_skip, 3)
+
+            if card.action == "organize":
+                rb_org.setChecked(True)
+            elif card.action == "keep_intact":
+                rb_keep.setChecked(True)
+            else:
+                rb_skip.setChecked(True)
+
+            self._card_buttons[str(card.folder_path)] = btn_group
+
+            rad_h.addWidget(rb_org)
+            rad_h.addWidget(rb_keep)
+            rad_h.addWidget(rb_skip)
+            rad_h.addStretch()
+            c_layout.addLayout(rad_h)
+
+            self._cards_layout.insertWidget(self._cards_layout.count() - 1, card_frame)
+
+        self._prot_table.setRowCount(len(plan.protected_items))
+        for row, (p, reason) in enumerate(plan.protected_items):
+            self._prot_table.setItem(row, 0, QTableWidgetItem(str(p)))
+            self._prot_table.setItem(row, 1, QTableWidgetItem(reason))
+        self._sub_tabs.setTabText(1, f"Protected & Skipped ({len(plan.protected_items)})")
+
+        self._dupe_table.setRowCount(len(plan.duplicates_to_quarantine))
+        for row, (src, _q, keeper) in enumerate(plan.duplicates_to_quarantine):
+            try:
+                sz_str = f"{round(src.stat().st_size / 1024, 1)} KB"
+            except OSError:
+                sz_str = "0 KB"
+            self._dupe_table.setItem(row, 0, QTableWidgetItem(src.name))
+            self._dupe_table.setItem(row, 1, QTableWidgetItem(sz_str))
+            self._dupe_table.setItem(row, 2, QTableWidgetItem(keeper))
+        self._sub_tabs.setTabText(2, f"Duplicates to Quarantine ({len(plan.duplicates_to_quarantine)})")
+
+    def _start_apply(self):
+        if not self._current_plan:
+            return
+
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Machine Remodel",
+            f"Are you ready to remodel {self._current_plan.target_root}?\n\n"
+            f"All moves are journaled and 100% reversible via the Undo button.\n"
+            f"A 'Where did my files go.html' receipt will be placed in the folder root.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        overrides: dict[str, str] = {}
+        for folder_str, grp in self._card_buttons.items():
+            checked_id = grp.checkedId()
+            if checked_id == 1:
+                overrides[folder_str] = "organize"
+            elif checked_id == 2:
+                overrides[folder_str] = "keep_intact"
+            elif checked_id == 3:
+                overrides[folder_str] = "skip"
+
+        self._apply_btn.setEnabled(False)
+        self._progress.setVisible(True)
+        self._summary_lbl.setText("Applying remodel...")
+
+        self._worker = RemodelWorker("apply", self._engine, self._current_plan, overrides)
+        self._worker.apply_finished.connect(self._on_apply_finished)
+        self._worker.error_occurred.connect(self._on_worker_error)
+        self._worker.start()
+
+    def _on_apply_finished(self, receipt: Any):
+        self._progress.setVisible(False)
+        executed = len(receipt.get("executed_moves", []))
+        skipped = len(receipt.get("skipped_items", []))
+        self._summary_lbl.setText(
+            f"✓ Remodel Completed: {executed} files organized, {skipped} items protected. "
+            f"Receipt created at {self._current_plan.target_root / 'Where did my files go.html'}"
+        )
+        self._receipt_btn.setEnabled(True)
+        QMessageBox.information(
+            self,
+            "Remodel Complete",
+            f"Remodel successfully completed!\n\n"
+            f"• Organized: {executed} files\n"
+            f"• Protected: {skipped} items\n\n"
+            f"A searchable 'Where did my files go.html' receipt has been created in your folder.",
+        )
+
+    def _on_undo(self):
+        confirm = QMessageBox.question(
+            self,
+            "Undo Remodel",
+            "Do you want to restore the most recent machine remodel and return all files to their original locations?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        res = self._engine.undo()
+        if res.get("ok"):
+            QMessageBox.information(self, "Undo Complete", res.get("message", "Restored files successfully."))
+            self._summary_lbl.setText(f"✓ {res.get('message')}")
+        else:
+            QMessageBox.warning(self, "Undo Failed", res.get("message", "Failed to undo remodel."))
+
+    def _open_receipt(self):
+        if self._current_plan:
+            receipt_f = self._current_plan.target_root / "Where did my files go.html"
+            if receipt_f.exists() and sys.platform == "win32":
+                os.startfile(str(receipt_f))
+
+    def _on_worker_error(self, err_msg: str):
+        self._progress.setVisible(False)
+        self._scan_btn.setEnabled(True)
+        self._apply_btn.setEnabled(True)
+        QMessageBox.critical(self, "Remodel Error", f"An error occurred during remodel operation:\n\n{err_msg}")
+
+
 class RulesManagerDialog(QDialog):
     """Visual Rules Manager & Live Sorter Sandbox Dialog for Suite Central."""
 
@@ -1338,6 +1780,17 @@ class RulesManagerDialog(QDialog):
         self.setWindowTitle("Visual Rules Manager & Live Sorter Sandbox")
         self.setMinimumSize(880, 800)
         self.resize(920, 850)
+
+        # Clean up any lingering top-level headless dialogs to prevent Qt window registry leaks
+        app = QApplication.instance()
+        if app is not None:
+            for top_win in list(app.topLevelWidgets()):
+                if isinstance(top_win, RulesManagerDialog) and top_win is not self:
+                    try:
+                        top_win.close()
+                        top_win.deleteLater()
+                    except Exception:
+                        pass
 
         self._config: dict[str, Any] = {}
         self._init_ui()
@@ -1439,6 +1892,12 @@ class RulesManagerDialog(QDialog):
         self._reset_btn.clicked.connect(self.reset_to_defaults)
         header.addWidget(self._reset_btn)
 
+        # Help -> About
+        self._about_btn = QPushButton("ⓘ About")
+        self._about_btn.setToolTip(f"About {about.APP_NAME} {about.__version__}")
+        self._about_btn.clicked.connect(lambda: show_about_dialog(self))
+        header.addWidget(self._about_btn)
+
         # Save Button
         self._save_btn = QPushButton("💾 Save Changes")
         self._save_btn.setStyleSheet(f"""
@@ -1484,6 +1943,9 @@ class RulesManagerDialog(QDialog):
         self._extension_table.rules_changed.connect(self._on_rules_or_project_changed)
         self._tabs.addTab(self._extension_table, "Extension Rules (Fallback Categories)")
 
+        self._remodel_widget = MachineRemodelWidget()
+        self._tabs.addTab(self._remodel_widget, "Machine Remodel")
+
         main_layout.addWidget(self._tabs, 1)
 
         # -------------------------------------------------------------
@@ -1491,6 +1953,13 @@ class RulesManagerDialog(QDialog):
         # -------------------------------------------------------------
         self._sandbox = LiveSandboxWidget()
         main_layout.addWidget(self._sandbox)
+
+        # Footer credit (single-sourced from about.py)
+        self._credit_lbl = QLabel(f"{about.APP_NAME} {about.__version__} · {about.CREDIT}")
+        self._credit_lbl.setObjectName("creditFooter")
+        self._credit_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._credit_lbl.setStyleSheet(f"color: {COLORS['textFaint']}; font-size: 10px;")
+        main_layout.addWidget(self._credit_lbl)
 
     def load_data(self) -> None:
         """Load persistent config and active project state into UI."""
@@ -1529,7 +1998,13 @@ class RulesManagerDialog(QDialog):
             suite_data.save_active_project(proj_state)
 
             self._save_btn.setText("✓ Saved!")
-            QTimer.singleShot(2000, lambda: self._save_btn.setText("💾 Save Changes"))
+            if self.isVisible():
+                if hasattr(self, "_save_timer") and self._save_timer is not None:
+                    self._save_timer.stop()
+                self._save_timer = QTimer(self)
+                self._save_timer.setSingleShot(True)
+                self._save_timer.timeout.connect(lambda: self._save_btn.setText("💾 Save Changes") if hasattr(self, "_save_btn") else None)
+                self._save_timer.start(2000)
             return True
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", f"Failed to save rules: {exc}")
@@ -1619,10 +2094,25 @@ class RulesManagerDialog(QDialog):
             self._on_rules_or_project_changed()
             QMessageBox.information(self, "Reset Complete", "Rules have been reset to factory defaults.")
 
+    def closeEvent(self, event) -> None:
+        if hasattr(self, "_save_timer") and self._save_timer is not None:
+            self._save_timer.stop()
+        if hasattr(self, "_active_project_card") and hasattr(self._active_project_card, "_countdown_timer"):
+            self._active_project_card._countdown_timer.stop()
+        super().closeEvent(event)
+
+    def hideEvent(self, event) -> None:
+        if hasattr(self, "_save_timer") and self._save_timer is not None:
+            self._save_timer.stop()
+        if hasattr(self, "_active_project_card") and hasattr(self._active_project_card, "_countdown_timer"):
+            self._active_project_card._countdown_timer.stop()
+        super().hideEvent(event)
 
 
 def main() -> int:
     """Launch the Rules Manager dialog standalone."""
+    if about.handle_version_flag():
+        return 0
     from PySide6.QtWidgets import QApplication
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QGuiApplication
@@ -1634,12 +2124,20 @@ def main() -> int:
     except Exception:
         pass
 
+    import argparse
+    parser = argparse.ArgumentParser(description="Visual Rules Manager for Download Sorter.")
+    parser.add_argument("--version", action="version", version=about.version_string())
+    parser.add_argument("--tab", type=str, default="", help="Active tab to display on startup.")
+    args, _unknown = parser.parse_known_args()
+
     app = QApplication.instance()
     owns_app = False
     if app is None:
         app = QApplication(sys.argv)
         owns_app = True
     dialog = RulesManagerDialog()
+    if args.tab.lower() == "remodel":
+        dialog._tabs.setCurrentWidget(dialog._remodel_widget)
     dialog.show()
     if owns_app:
         return app.exec()

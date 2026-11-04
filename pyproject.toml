@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "download-sorter"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Local-first automated Downloads and Documents organizer with background daemon, visual rules editor, live sandbox simulator, and 3D/CNC intelligence."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "Devyn"}
+    {name = "Devyn Fidel"}
 ]
 keywords = [
     "downloads",
@@ -40,7 +40,8 @@ dependencies = [
     "watchdog>=6.0.0",
     "pystray>=0.19.5",
     "pillow>=12.0.0",
-    "PySide6>=6.8.0"
+    "PySide6>=6.8.0",
+    "defusedxml>=0.7.1"
 ]
 
 [project.urls]
@@ -49,6 +50,7 @@ Documentation = "https://github.com/The-Osprey1/Download-Sorter#readme"
 Repository = "https://github.com/The-Osprey1/Download-Sorter.git"
 Issues = "https://github.com/The-Osprey1/Download-Sorter/issues"
 Changelog = "https://github.com/The-Osprey1/Download-Sorter/blob/main/CHANGELOG.md"
+Source = "https://github.com/The-Osprey1/Download-Sorter"
 
 [project.optional-dependencies]
 dev = [
@@ -67,8 +69,41 @@ download-sorter-undo = "sort_undo:main"
 gcode-peek = "gcode_peek:main"
 unzip-3d = "unzip_3d:main"
 unzip-archive = "unzip_archive:main"
+download-sorter-remodel = "remodel:main"
+
+[tool.setuptools]
+py-modules = [
+    "about",
+    "batch_handoff",
+    "clean_old",
+    "config_manager",
+    "gcode_peek",
+    "hold_manager",
+    "quick_switcher",
+    "remodel",
+    "ribbon_popup",
+    "rules_manager",
+    "safe_ops",
+    "sort_once",
+    "sort_undo",
+    "sorter",
+    "status",
+    "suite_theme",
+    "toggle_pause",
+    "tray",
+    "unzip_3d",
+    "unzip_archive",
+    "watch",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "about.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "."]
 python_files = ["test_*.py"]
 addopts = "-q"
+markers = [
+    "desktop: needs a live interactive Windows desktop (real dialogs/windows); deselect with -m \"not desktop\"",
+    "ntfs: needs a real NTFS volume (hardlinks, file indexes, cloud attributes)",
+]

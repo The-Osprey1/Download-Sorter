@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import about
 import json
 import logging
 import shutil
@@ -11,9 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 import uuid
 
+import safe_ops
 from sorter import (
     HISTORY_FILE,
     LOG_DIR,
+    NON_MOVE_ACTIONS,
     setup_logging,
     unique_destination,
 )
@@ -55,7 +58,7 @@ def get_active_moves(records: list[dict]) -> list[dict]:
 
     active: list[dict] = []
     for rec in records:
-        if rec.get("action") != "undo" and rec.get("id") not in undone_ids:
+        if rec.get("action") not in NON_MOVE_ACTIONS and rec.get("id") not in undone_ids:
             active.append(rec)
     return active
 
@@ -95,8 +98,11 @@ def undo_moves(targets: list[dict], dry_run: bool = False) -> int:
 
         target_dir.mkdir(parents=True, exist_ok=True)
         try:
-            shutil.move(str(dest_path), str(target_file))
-            record_undo(rec_id, str(target_file), str(dest_path))
+            restored = safe_ops.restore(rec)
+            if restored is None:
+                logging.warning("Cannot undo %s: file not found at %s", dest_path.name, dest_path)
+                continue
+            target_file = restored
             logging.info("Restored: %s -> %s", dest_path.name, target_file)
             restored_count += 1
             if dismiss_active_ribbons:
@@ -111,6 +117,8 @@ def undo_moves(targets: list[dict], dry_run: bool = False) -> int:
                         clear_recent_file()
                 except Exception:
                     pass
+        except safe_ops.Refused as refusal:
+            logging.warning("Skipped undo of %s (%s); try again when it is no longer in use", dest_path.name, refusal.reason)
         except OSError as exc:
             logging.error("Failed to restore %s: %s", dest_path, exc)
 
@@ -120,6 +128,7 @@ def undo_moves(targets: list[dict], dry_run: bool = False) -> int:
 def main() -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Undo recent download-sorter moves.")
+    parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument(
         "-n", "--dry-run", action="store_true", help="Preview undo operations without moving files"
     )

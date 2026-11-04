@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import os
 import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import MagicMock, patch
 
 if sys.platform == "win32":
     import ctypes
@@ -232,5 +239,248 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
                 pill.close()
 
 
+class QuickSwitcherBatchTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.test_root = Path(self.temp_dir.name)
+        clear_recent_file()
+
+    def tearDown(self) -> None:
+        clear_recent_file()
+        self.temp_dir.cleanup()
+
+    def test_batch_coalescing_and_limits(self) -> None:
+        import batch_handoff
+        # Record 3 files within 10 seconds of each other
+        f1 = self.test_root / "part1.stl"
+        f2 = self.test_root / "part2.stl"
+        f3 = self.test_root / "part3.stl"
+        for f in (f1, f2, f3):
+            f.write_text("mesh")
+
+        t0 = time.time() - 20.0
+        batch_handoff.record_recent_file(f1, downloads_root=self.test_root, now=t0)
+        batch_handoff.record_recent_file(f2, downloads_root=self.test_root, now=t0 + 5.0)
+        batch_handoff.record_recent_file(f3, downloads_root=self.test_root, now=t0 + 10.0)
+
+        data = get_recent_file()
+        self.assertIsNotNone(data)
+        self.assertEqual(data["batch_count"], 3)
+        self.assertEqual(len(data["items"]), 3)
+        self.assertEqual(data["items"][-1]["name"], "part3.stl")
+
+        # Gap > 25s starts a new batch
+        f4 = self.test_root / "part4.stl"
+        f4.write_text("mesh")
+        batch_handoff.record_recent_file(f4, downloads_root=self.test_root, now=t0 + 40.0)
+        data2 = get_recent_file(max_age_sec=300.0)
+        self.assertIsNotNone(data2)
+        self.assertEqual(data2["batch_count"], 1)
+        self.assertEqual(data2["items"][0]["name"], "part4.stl")
+
+    def test_batch_cap_enforced(self) -> None:
+        import batch_handoff
+        settings = batch_handoff.batch_settings()
+        settings["max_files"] = 5
+        files = []
+        base = time.time() - 10.0
+        for i in range(8):
+            p = self.test_root / f"model_{i}.stl"
+            p.write_text("mesh")
+            files.append(p)
+            batch_handoff.record_recent_file(p, downloads_root=self.test_root, settings=settings, now=base + i)
+
+        data = get_recent_file()
+        self.assertIsNotNone(data)
+        self.assertEqual(data["batch_count"], 5)
+        # Oldest 3 should have been dropped (0, 1, 2)
+        names = [item["name"] for item in data["items"]]
+        self.assertEqual(names, ["model_3.stl", "model_4.stl", "model_5.stl", "model_6.stl", "model_7.stl"])
+
+    def test_batch_select_latest_leaves_remaining(self) -> None:
+        from unittest.mock import MagicMock, patch
+        from quick_switcher import QuickSwitcherPill
+
+        f1 = self.test_root / "batch1.step"
+        f2 = self.test_root / "batch2.step"
+        f1.write_text("step1")
+        f2.write_text("step2")
+        record_recent_file(f1, downloads_root=self.test_root)
+        record_recent_file(f2, downloads_root=self.test_root)
+
+        recent = get_recent_file()
+        self.assertIsNotNone(recent)
+        self.assertTrue(len(recent["items"]) == 2)
+
+        mock_tk = MagicMock()
+        mock_tk.winfo_id.return_value = 0
+        mock_tk.winfo_fpixels.return_value = 96.0
+
+        with patch("quick_switcher.tk.Tk", return_value=mock_tk), \
+             patch.object(QuickSwitcherPill, "_build_ui"), \
+             patch.object(QuickSwitcherPill, "_position_pill"), \
+             patch.object(QuickSwitcherPill, "_register_hotkey"):
+            pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=recent)
+            pill.action_btn = MagicMock()
+
+            with patch("quick_switcher.inject_file_into_dialog", return_value=True):
+                pill.select_file()
+                # f2 was consumed, f1 must remain in the batch
+                rem = get_recent_file()
+                self.assertIsNotNone(rem)
+                self.assertEqual(rem["name"], "batch1.step")
+
+            pill.close()
+
+    def test_batch_copy_files(self) -> None:
+        import batch_handoff
+        f1 = self.test_root / "clip1.stl"
+        f2 = self.test_root / "clip2.stl"
+        f1.write_text("data")
+        f2.write_text("data")
+
+        # Test build_dropfiles directly
+        drop_bytes = batch_handoff.build_dropfiles([f1, f2])
+        self.assertIsNotNone(drop_bytes)
+        self.assertTrue(len(drop_bytes) > 20)
+        # Verify wide char null-terminated structure contains both file names
+        self.assertIn("clip1.stl".encode("utf-16-le"), drop_bytes)
+        self.assertIn("clip2.stl".encode("utf-16-le"), drop_bytes)
+
+    def test_staging_fallback_and_cleanup(self) -> None:
+        import batch_handoff
+        d1 = self.test_root / "FolderA"
+        d2 = self.test_root / "FolderB"
+        d1.mkdir()
+        d2.mkdir()
+        f1 = d1 / "fileA.stl"
+        f2 = d2 / "fileB.stl"
+        f1.write_text("meshA")
+        f2.write_text("meshB")
+
+        # Files in different folders trigger staging
+        plan = batch_handoff.plan_injection([f1, f2], downloads_root=self.test_root)
+        self.assertEqual(plan.kind, "staged")
+        self.assertEqual(len(plan.names), 2)
+
+        # Stage batch creates stage folder and hardlinks/copies
+        stage, staged = batch_handoff.stage_batch(plan.paths, "test_b", self.test_root)
+        self.assertTrue(stage.exists())
+        self.assertEqual(len(staged), 2)
+
+        # Prune stages removes stage folders
+        # Force mtime into the past
+        old_time = time.time() - 7200.0
+        os.utime(stage, (old_time, old_time))
+        batch_handoff.prune_stages(self.test_root, max_age_hours=1.0)
+        self.assertFalse(stage.exists())
+
+
+class QuickSwitcherFixesTests(unittest.TestCase):
+    """Regression tests for Milestone 2 Quick Switcher fixes and theme alignment."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.test_root = Path(self.temp_dir.name)
+        clear_recent_file()
+
+    def tearDown(self) -> None:
+        clear_recent_file()
+        self.temp_dir.cleanup()
+
+    def test_action_color_defaults_to_mint_accent(self) -> None:
+        import quick_switcher
+        from suite_theme import ACCENTS
+        self.assertEqual(quick_switcher.ACTION_COLOR, ACCENTS["downloadSorter"])
+        self.assertEqual(quick_switcher.ACTION_COLOR, "#69E6AD")
+
+    def test_no_forbidden_hex_codes_in_quick_switcher(self) -> None:
+        import re
+        qs_file = REPO_ROOT / "quick_switcher.py"
+        content = qs_file.read_text(encoding="utf-8")
+        forbidden = ["#171C26", "#212836", "#282F3D"]
+        for code in forbidden:
+            matches = re.findall(re.escape(code), content, re.IGNORECASE)
+            self.assertEqual(matches, [], f"Forbidden off-palette hex code {code} found in quick_switcher.py")
+
+    def test_empty_selection_guards(self) -> None:
+        """select_all and copy_files must guard when 0 files are checked and alert user."""
+        import quick_switcher
+        f1 = self.test_root / "part1.stl"
+        f1.write_text("mesh")
+        recent = {
+            "name": f1.name,
+            "path": str(f1),
+            "is_batch": True,
+            "items": [{"name": f1.name, "path": str(f1)}],
+            "batch_id": "b_test",
+        }
+        mock_tk_inst = MagicMock()
+        mock_tk_inst.winfo_id.return_value = 0
+        mock_tk_inst.winfo_fpixels.return_value = 96.0
+
+        with patch("quick_switcher.tk.Tk", return_value=mock_tk_inst), \
+             patch.object(quick_switcher.QuickSwitcherPill, "_build_ui"), \
+             patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
+             patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
+            pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=123, recent_data=recent)
+            pill.all_btn = MagicMock()
+            pill.copy_btn = MagicMock()
+            pill._flash = MagicMock()
+
+            # Empty selection: untick f1
+            pill.checked[str(f1)] = False
+            self.assertEqual(len(pill._checked_paths()), 0)
+
+            # select_all guard
+            with patch("batch_handoff.inject_files_into_dialog") as mock_inject:
+                pill.select_all()
+                mock_inject.assert_not_called()
+                pill._flash.assert_called_with(pill.all_btn, "✕ No files selected", False)
+
+            pill._flash.reset_mock()
+
+            # copy_files guard
+            with patch("batch_handoff.copy_files_to_clipboard") as mock_copy:
+                pill.copy_files()
+                mock_copy.assert_not_called()
+                pill._flash.assert_called_with(pill.copy_btn, "✕ No files selected", False)
+
+            pill.close()
+
+    def test_checklist_collapse_mousewheel_cleanup(self) -> None:
+        """_collapse_checklist must call unbind_all('<MouseWheel>') on canvas."""
+        import quick_switcher
+        f1 = self.test_root / "part1.stl"
+        f1.write_text("mesh")
+        recent = {
+            "name": f1.name,
+            "path": str(f1),
+            "is_batch": True,
+            "items": [{"name": f1.name, "path": str(f1)}],
+        }
+        mock_tk_inst = MagicMock()
+        mock_tk_inst.winfo_id.return_value = 0
+        mock_tk_inst.winfo_fpixels.return_value = 96.0
+
+        with patch("quick_switcher.tk.Tk", return_value=mock_tk_inst), \
+             patch.object(quick_switcher.QuickSwitcherPill, "_build_ui"), \
+             patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
+             patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
+            pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=recent)
+            mock_canvas = MagicMock()
+            mock_win = MagicMock()
+            pill.checklist_canvas = mock_canvas
+            pill.checklist_win = mock_win
+
+            pill._collapse_checklist()
+            mock_canvas.unbind_all.assert_called_once_with("<MouseWheel>")
+            mock_win.destroy.assert_called_once()
+            self.assertIsNone(pill.checklist_canvas)
+            self.assertIsNone(pill.checklist_win)
+
+            pill.close()
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main()

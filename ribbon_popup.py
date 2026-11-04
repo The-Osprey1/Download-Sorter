@@ -19,8 +19,10 @@ Features:
 from __future__ import annotations
 
 import argparse
+import about
 from contextlib import contextmanager
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -59,6 +61,8 @@ if not PYTHON.exists():
 try:
     from suite_theme import ACCENTS, COLORS, RIBBON, TYPE
     BG_COLOR = COLORS.get("surface", "#12151C")
+    SURFACE_RAISED = COLORS.get("surfaceRaised", "#171B24")
+    SURFACE_HOVER = COLORS.get("surfaceHover", "#1D222C")
     BORDER_COLOR = COLORS.get("border", "#2A303B")
     DEFAULT_ACCENT = ACCENTS.get("downloadSorter", "#69E6AD")
     TEXT_MAIN = COLORS.get("text", "#EDF1F8")
@@ -82,6 +86,8 @@ except Exception:
         "timeoutMs": 8000, "maxVisible": 4, "opacity": 0.88,
     }
     BG_COLOR = "#12151C"
+    SURFACE_RAISED = "#171B24"
+    SURFACE_HOVER = "#1D222C"
     BORDER_COLOR = "#2A303B"
     DEFAULT_ACCENT = "#69E6AD"
     TEXT_MAIN = "#EDF1F8"
@@ -547,7 +553,21 @@ class RibbonPopup:
         dest_path: Path,
         downloads_root: Path | None = None,
         enable_animation: bool = True,
+        is_held: bool = False,
+        planned_dest: Path | None = None,
     ) -> None:
+        self.is_held = is_held
+        self.planned_dest = Path(planned_dest).resolve() if planned_dest else None
+        if not self.is_held and Path(dest_path).suffix.lower() == ".3mf":
+            try:
+                import hold_manager
+                if hold_manager.is_held(dest_path):
+                    self.is_held = True
+                    rec = hold_manager.get_held(dest_path)
+                    if rec and rec.get("planned_dest"):
+                        self.planned_dest = Path(rec["planned_dest"])
+            except Exception:
+                pass
         self.dest_path = dest_path.resolve()
         self.downloads_root = downloads_root.resolve() if downloads_root else Path.home() / "Downloads"
         self.pid = os.getpid()
@@ -676,7 +696,20 @@ class RibbonPopup:
         self.stripe.pack(side="left", fill="y")
 
         # Category Emblem Badge (anti-aliased Pillow icon or high-contrast fallback)
-        icon_img = render_category_icon(self.category_type, self.accent_color, size=icon_size)
+        icon_img = None
+        if self.dest_path.suffix.lower() == ".3mf" and HAS_PIL:
+            try:
+                from gcode_peek import parse_3mf
+                import io
+                meta_3mf = parse_3mf(self.dest_path)
+                if meta_3mf.get("has_thumbnail") and meta_3mf.get("thumbnail_data"):
+                    timg = Image.open(io.BytesIO(meta_3mf["thumbnail_data"]))
+                    timg.thumbnail((icon_size, icon_size), Image.Resampling.LANCZOS)
+                    icon_img = timg
+            except Exception:
+                pass
+        if icon_img is None:
+            icon_img = render_category_icon(self.category_type, self.accent_color, size=icon_size)
         if icon_img and HAS_PIL:
             self.icon_photo = ImageTk.PhotoImage(icon_img)
             self.status = tk.Label(
@@ -711,7 +744,10 @@ class RibbonPopup:
         folder_upper = self.folder_disp.upper()
         if len(folder_upper) > 22:
             folder_upper = folder_upper[:20] + "…"
-        tag_text = f"●  SORTED  ·  {folder_upper}"
+        if self.is_held:
+            tag_text = f"●  3MF HOLD  ·  {folder_upper}"
+        else:
+            tag_text = f"●  SORTED  ·  {folder_upper}"
 
         self.tag_lbl = tk.Label(
             self.top_row,
@@ -749,8 +785,8 @@ class RibbonPopup:
         self.close_frame.bind("<Button-1>", lambda e: (self.close(), "break")[1])
 
         def on_close_enter(_e):
-            self.close_btn.config(fg=CLOSE_HOVER, bg="#282F3D")
-            self.close_frame.config(bg="#282F3D")
+            self.close_btn.config(fg=CLOSE_HOVER, bg=SURFACE_HOVER)
+            self.close_frame.config(bg=SURFACE_HOVER)
 
         def on_close_leave(_e):
             curr_bg = HOVER_BG if self.is_hovered else BG_COLOR
@@ -795,18 +831,51 @@ class RibbonPopup:
         )
         self.action_lbl.pack(side="left")
 
-        # Explicit interactive "Jump to File" pill button
+        # Explicit interactive "Jump to File" pill button (or File now / Keep here when held)
         self.jump_btn = tk.Label(
             self.bottom_row,
             text="Jump to File ›",
             font=(FONT_FAMILY, 8, "bold"),
             fg=ACTION_COLOR,
-            bg="#181D26",
+            bg=SURFACE_RAISED,
             cursor="hand2",
             padx=int(6 * scale),
             pady=int(1 * scale),
         )
-        self.jump_btn.pack(side="right")
+        if self.is_held:
+            folder_text = "Holding in Downloads (Bambu Studio)"
+            self.action_lbl.config(text=folder_text)
+            self.file_now_btn = tk.Label(
+                self.bottom_row,
+                text="📁 File now",
+                font=(FONT_FAMILY, 8, "bold"),
+                fg=COLORS.get("canvas", "#0B0D12"),
+                bg=self.accent_color,
+                cursor="hand2",
+                padx=int(5 * scale),
+                pady=int(1 * scale),
+            )
+            self.file_now_btn.pack(side="right", padx=(int(3 * scale), 0))
+            self.file_now_btn.bind("<Button-1>", lambda e: (self._on_file_now(), "break")[1])
+            self.file_now_btn.bind("<Enter>", self.on_enter)
+            self.file_now_btn.bind("<Leave>", self.on_leave)
+
+            self.keep_here_btn = tk.Label(
+                self.bottom_row,
+                text="📌 Keep here",
+                font=(FONT_FAMILY, 8, "bold"),
+                fg=TEXT_MAIN,
+                bg=SURFACE_RAISED,
+                cursor="hand2",
+                padx=int(5 * scale),
+                pady=int(1 * scale),
+            )
+            self.keep_here_btn.pack(side="right")
+            self.keep_here_btn.bind("<Button-1>", lambda e: (self._on_keep_here(), "break")[1])
+            self.keep_here_btn.bind("<Enter>", self.on_enter)
+            self.keep_here_btn.bind("<Leave>", self.on_leave)
+        else:
+            self.jump_btn.pack(side="right")
 
         # Bind hover and click events across all interactive surface widgets
         interactive_widgets = [
@@ -820,7 +889,7 @@ class RibbonPopup:
             widget.bind("<Leave>", self.on_leave)
 
         # Subtle progress track underlay & active timer progress bar
-        self.progress_track = tk.Frame(self.container, bg="#181C25", height=progress_h)
+        self.progress_track = tk.Frame(self.container, bg=SURFACE_RAISED, height=progress_h)
         self.progress_track.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
 
         self.progress = tk.Frame(self.container, bg=self.accent_color, height=progress_h)
@@ -919,7 +988,7 @@ class RibbonPopup:
         border = self.hover_border if hovered else self.normal_border
         action_col = ACTION_COLOR if hovered else TEXT_MUTED
         bar_col = self.accent_glow if hovered else self.accent_color
-        btn_bg = "#212836" if hovered else "#181D26"
+        btn_bg = SURFACE_HOVER if hovered else SURFACE_RAISED
         btn_fg = self.accent_color if hovered else ACTION_COLOR
 
         self.root.config(bg=border)
@@ -931,10 +1000,28 @@ class RibbonPopup:
         self.bottom_row.config(bg=bg)
         self.action_lbl.config(bg=bg, fg=action_col)
         self.jump_btn.config(bg=btn_bg, fg=btn_fg)
+        if hasattr(self, "keep_here_btn"):
+            self.keep_here_btn.config(bg=btn_bg)
         self.status.config(bg=bg)
         self.close_frame.config(bg=bg)
         self.close_btn.config(bg=bg)
         self.progress.config(bg=bar_col)
+
+    def _on_file_now(self) -> None:
+        try:
+            import hold_manager
+            hold_manager.file_now(self.dest_path)
+        except Exception as exc:
+            logging.debug("File now failed: %s", exc)
+        self.close()
+
+    def _on_keep_here(self) -> None:
+        try:
+            import hold_manager
+            hold_manager.keep_here(self.dest_path)
+        except Exception as exc:
+            logging.debug("Keep here failed: %s", exc)
+        self.close()
 
     def on_click(self, _event=None) -> None:
         """Trigger reveal in File Explorer and play a fast exit dismiss animation."""
@@ -1054,6 +1141,26 @@ class RibbonPopup:
             release_slot(self.slot, self.pid)
 
 
+def notify_file_held(
+    dest_path: str | Path,
+    planned_dest: str | Path,
+    meta: dict | None = None,
+    downloads_root: str | Path | None = None,
+) -> None:
+    """Spawn the ribbon popup in held mode."""
+    dest = Path(dest_path).resolve()
+    planned = Path(planned_dest).resolve()
+    args = [str(PYTHON), str(Path(__file__).resolve()), str(dest)]
+    if downloads_root:
+        args.append(str(Path(downloads_root).resolve()))
+    args.extend(["--held", "--planned", str(planned)])
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        subprocess.Popen(args, creationflags=flags)
+    except Exception as exc:
+        logging.debug("Failed to spawn ribbon hold notification: %s", exc)
+
+
 def notify_file_moved(dest_path: str | Path, downloads_root: str | Path | None = None) -> None:
     """Spawn the ribbon popup non-blocking in a separate detached process."""
     dest = Path(dest_path).resolve()
@@ -1082,10 +1189,13 @@ def notify_file_moved(dest_path: str | Path, downloads_root: str | Path | None =
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Show a top-right download ribbon notification.")
+    parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument("dest_path", nargs="?", default="", help="Path to the destination file.")
     parser.add_argument("downloads_root", nargs="?", default="", help="Root Downloads folder.")
     parser.add_argument("--test", action="store_true", help="Show a test notification.")
     parser.add_argument("--no-anim", action="store_true", help="Disable slide animations.")
+    parser.add_argument("--held", action="store_true", help="Show held preview ribbon with File now / Keep here.")
+    parser.add_argument("--planned", type=str, default="", help="Planned destination path when held.")
     args = parser.parse_args()
 
     enable_anim = not args.no_anim
@@ -1096,7 +1206,8 @@ def main() -> int:
     else:
         dest = Path(args.dest_path)
         dl_root = Path(args.downloads_root) if args.downloads_root else None
-        popup = RibbonPopup(dest, dl_root, enable_animation=enable_anim)
+        planned = Path(args.planned) if args.planned else None
+        popup = RibbonPopup(dest, dl_root, enable_animation=enable_anim, is_held=args.held, planned_dest=planned)
 
     popup.run()
     return 0

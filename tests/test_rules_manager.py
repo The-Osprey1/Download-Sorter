@@ -36,7 +36,9 @@ def qapp():
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    return app
+    yield app
+    app.closeAllWindows()
+    app.processEvents()
 
 
 # ---- Test Suite Data: Sorter Config & Active Project Persistence ----
@@ -171,18 +173,23 @@ def test_rule_edit_dialog_keyword_rule(qapp):
         "enabled": True
     }
     dlg = RuleEditDialog(rule=initial, rule_type="keyword")
-    assert dlg._name_input.text() == "Exam Prep"
-    assert dlg._folder_input.text() == "School/Exams"
-    assert "Exam" in dlg._keywords_input.text()
-    assert ".pdf" in dlg._exts_input.text()
-    assert dlg._active_chk.isChecked()
+    try:
+        assert dlg._name_input.text() == "Exam Prep"
+        assert dlg._folder_input.text() == "School/Exams"
+        assert "Exam" in dlg._keywords_input.text()
+        assert ".pdf" in dlg._exts_input.text()
+        assert dlg._active_chk.isChecked()
 
-    dlg._name_input.setText("Exam Prep Updated")
-    res = dlg.get_rule_data()
-    assert res["name"] == "Exam Prep Updated"
-    assert res["folder"] == "School/Exams"
-    assert "exam" in res["match"]
-    assert res["enabled"] is True
+        dlg._name_input.setText("Exam Prep Updated")
+        res = dlg.get_rule_data()
+        assert res["name"] == "Exam Prep Updated"
+        assert res["folder"] == "School/Exams"
+        assert "exam" in res["match"]
+        assert res["enabled"] is True
+    finally:
+        dlg.close()
+        dlg.deleteLater()
+        qapp.processEvents()
 
 
 def test_rule_edit_dialog_extension_rule(qapp):
@@ -193,13 +200,18 @@ def test_rule_edit_dialog_extension_rule(qapp):
         "enabled": True
     }
     dlg = RuleEditDialog(rule=initial, rule_type="extension")
-    assert dlg._name_input.text() == "GCode"
-    assert ".gcode" in dlg._exts_input.text()
-    assert not hasattr(dlg, "_keywords_input")
+    try:
+        assert dlg._name_input.text() == "GCode"
+        assert ".gcode" in dlg._exts_input.text()
+        assert not hasattr(dlg, "_keywords_input")
 
-    res = dlg.get_rule_data()
-    assert res["name"] == "GCode"
-    assert ".gcode" in res["extensions"]
+        res = dlg.get_rule_data()
+        assert res["name"] == "GCode"
+        assert ".gcode" in res["extensions"]
+    finally:
+        dlg.close()
+        dlg.deleteLater()
+        qapp.processEvents()
 
 
 # ---- UI Component Tests: RuleTableWidget ----
@@ -211,132 +223,151 @@ def test_rule_table_widget_operations(qapp):
         {"name": "Rule 3", "folder": "Folder3", "match": ["k3"], "extensions": [".xlsx"], "enabled": True},
     ]
     table_widget = RuleTableWidget(rule_type="keyword")
-    table_widget.load_rules(rules)
-    assert table_widget._table.rowCount() == 3
+    try:
+        table_widget.load_rules(rules)
+        assert table_widget._table.rowCount() == 3
 
-    # Check precedence numbers
-    assert table_widget._table.item(0, 0).text() == "#1"
-    assert table_widget._table.item(1, 0).text() == "#2"
-    assert table_widget._table.item(2, 0).text() == "#3"
+        # Check precedence numbers
+        assert table_widget._table.item(0, 0).text() == "#1"
+        assert table_widget._table.item(1, 0).text() == "#2"
+        assert table_widget._table.item(2, 0).text() == "#3"
 
-    # Toggle active checkbox
-    item = table_widget._table.item(1, 5)
-    assert item.checkState() == Qt.CheckState.Unchecked
-    item.setCheckState(Qt.CheckState.Checked)
-    out_rules = table_widget.get_rules()
-    assert out_rules[1]["enabled"] is True
+        # Toggle active checkbox
+        item = table_widget._table.item(1, 5)
+        assert item.checkState() == Qt.CheckState.Unchecked
+        item.setCheckState(Qt.CheckState.Checked)
+        out_rules = table_widget.get_rules()
+        assert out_rules[1]["enabled"] is True
 
-    # Move down Rule 1 -> precedence #2
-    table_widget._table.selectRow(0)
-    table_widget.move_rule_down()
-    new_rules = table_widget.get_rules()
-    assert new_rules[0]["name"] == "Rule 2"
-    assert new_rules[1]["name"] == "Rule 1"
+        # Move down Rule 1 -> precedence #2
+        table_widget._table.selectRow(0)
+        table_widget.move_rule_down()
+        new_rules = table_widget.get_rules()
+        assert new_rules[0]["name"] == "Rule 2"
+        assert new_rules[1]["name"] == "Rule 1"
 
-    # Move up Rule 1 -> back to precedence #1
-    table_widget._table.selectRow(1)
-    table_widget.move_rule_up()
-    back_rules = table_widget.get_rules()
-    assert back_rules[0]["name"] == "Rule 1"
+        # Move up Rule 1 -> back to precedence #1
+        table_widget._table.selectRow(1)
+        table_widget.move_rule_up()
+        back_rules = table_widget.get_rules()
+        assert back_rules[0]["name"] == "Rule 1"
 
-    # Delete Rule 3
-    table_widget._table.selectRow(2)
-    table_widget.delete_selected_rule()
-    assert table_widget._table.rowCount() == 2
-    del_rules = table_widget.get_rules()
-    assert len(del_rules) == 2
-    assert del_rules[0]["name"] == "Rule 1"
-    assert del_rules[1]["name"] == "Rule 2"
+        # Delete Rule 3
+        table_widget._table.selectRow(2)
+        table_widget.delete_selected_rule()
+        assert table_widget._table.rowCount() == 2
+        del_rules = table_widget.get_rules()
+        assert len(del_rules) == 2
+        assert del_rules[0]["name"] == "Rule 1"
+        assert del_rules[1]["name"] == "Rule 2"
+    finally:
+        table_widget.close()
+        table_widget.deleteLater()
+        qapp.processEvents()
 
 
 # ---- UI Component Tests: ActiveProjectCard ----
 
 def test_active_project_card_toggle_and_expiry(qapp, tmp_path):
     card = ActiveProjectCard()
+    try:
+        # Initial state disabled
+        assert not card._enable_chk.isChecked()
+        state = card.get_state()
+        assert state["enabled"] is False
 
-    # Initial state disabled
-    assert not card._enable_chk.isChecked()
-    state = card.get_state()
-    assert state["enabled"] is False
+        # Enable and choose custom directory
+        card._enable_chk.setChecked(True)
+        custom_dir = str(tmp_path / "MyProject")
+        card._dir_edit.setText(custom_dir)
 
-    # Enable and choose custom directory
-    card._enable_chk.setChecked(True)
-    custom_dir = str(tmp_path / "MyProject")
-    card._dir_edit.setText(custom_dir)
+        # Select 4 Hours expiry
+        card._expiry_combo.setCurrentText("4 Hours")
 
-    # Select 4 Hours expiry
-    card._expiry_combo.setCurrentText("4 Hours")
-
-    active_data = card.get_state()
-    assert active_data["enabled"] is True
-    assert active_data["target_directory"] == custom_dir
-    assert active_data["expires_at"] > time.time() + 3500
+        active_data = card.get_state()
+        assert active_data["enabled"] is True
+        assert active_data["target_directory"] == custom_dir
+        assert active_data["expires_at"] > time.time() + 3500
+    finally:
+        card._countdown_timer.stop()
+        card.close()
+        card.deleteLater()
+        qapp.processEvents()
 
 
 # ---- UI Component Tests: LiveSandboxWidget ----
 
 def test_live_sandbox_evaluation(qapp):
     sandbox = LiveSandboxWidget()
+    try:
+        # Empty filename
+        res_empty = sandbox.evaluate("")
+        assert res_empty is None
+        assert sandbox._badge_lbl.text() == "[WAITING]"
 
-    # Empty filename
-    res_empty = sandbox.evaluate("")
-    assert res_empty is None
-    assert sandbox._badge_lbl.text() == "[WAITING]"
+        # Keyword rule test
+        cfg = {
+            "watch": {"folder": "C:/Users/devyn/Downloads"},
+            "keyword_rules": [
+                {"name": "University Exam", "folder": "School/Exams", "match": ["me3210"], "extensions": [".pdf"], "enabled": True},
+                {"name": "CNC Toolpath", "folder": "CNC/GCode", "match": ["haas"], "extensions": [".nc"], "enabled": True}
+            ],
+            "extension_rules": [],
+            "default_folder": "Other"
+        }
+        sandbox.set_config_and_project(config=cfg, active_project=None)
 
-    # Keyword rule test
-    cfg = {
-        "watch": {"folder": "C:/Users/devyn/Downloads"},
-        "keyword_rules": [
-            {"name": "University Exam", "folder": "School/Exams", "match": ["me3210"], "extensions": [".pdf"], "enabled": True},
-            {"name": "CNC Toolpath", "folder": "CNC/GCode", "match": ["haas"], "extensions": [".nc"], "enabled": True}
-        ],
-        "extension_rules": [],
-        "default_folder": "Other"
-    }
-    sandbox.set_config_and_project(config=cfg, active_project=None)
+        # Test ME3210
+        res_exam = sandbox.evaluate("ME3210_Midterm_Study_Guide.pdf")
+        assert res_exam is not None
+        assert res_exam["match_type"] == "keyword"
+        assert res_exam["winning_rule"] == "University Exam"
+        assert res_exam["destination"] == "School/Exams"
+        assert "[KEYWORD RULE]" in sandbox._badge_lbl.text()
 
-    # Test ME3210
-    res_exam = sandbox.evaluate("ME3210_Midterm_Study_Guide.pdf")
-    assert res_exam is not None
-    assert res_exam["match_type"] == "keyword"
-    assert res_exam["winning_rule"] == "University Exam"
-    assert res_exam["destination"] == "School/Exams"
-    assert "[KEYWORD RULE]" in sandbox._badge_lbl.text()
+        # Test Active Project mode
+        active_proj = {
+            "enabled": True,
+            "name": "Bambu Dual Gear Extruder",
+            "target_directory": "C:/Projects/Extruder",
+            "folder": "C:/Projects/Extruder",
+            "expires_at": time.time() + 3600
+        }
+        sandbox.set_config_and_project(config=cfg, active_project=active_proj)
 
-    # Test Active Project mode
-    active_proj = {
-        "enabled": True,
-        "name": "Bambu Dual Gear Extruder",
-        "target_directory": "C:/Projects/Extruder",
-        "folder": "C:/Projects/Extruder",
-        "expires_at": time.time() + 3600
-    }
-    sandbox.set_config_and_project(config=cfg, active_project=active_proj)
+        # 3D model should route to active project
+        res_model = sandbox.evaluate("gears_plate1.3mf")
+        assert res_model is not None
+        assert res_model["match_type"] == "active_project"
+        assert res_model["destination"] == "C:/Projects/Extruder"
+        assert "[ACTIVE PROJECT]" in sandbox._badge_lbl.text()
 
-    # 3D model should route to active project
-    res_model = sandbox.evaluate("gears_plate1.3mf")
-    assert res_model is not None
-    assert res_model["match_type"] == "active_project"
-    assert res_model["destination"] == "C:/Projects/Extruder"
-    assert "[ACTIVE PROJECT]" in sandbox._badge_lbl.text()
-
-    # School document still takes precedence over active project catch-all
-    res_exam_ap = sandbox.evaluate("ME3210_Homework.pdf")
-    assert res_exam_ap is not None
-    assert res_exam_ap["match_type"] == "keyword"
-    assert res_exam_ap["winning_rule"] == "University Exam"
+        # School document still takes precedence over active project catch-all
+        res_exam_ap = sandbox.evaluate("ME3210_Homework.pdf")
+        assert res_exam_ap is not None
+        assert res_exam_ap["match_type"] == "keyword"
+        assert res_exam_ap["winning_rule"] == "University Exam"
+    finally:
+        sandbox.close()
+        sandbox.deleteLater()
+        qapp.processEvents()
 
 
 def test_live_sandbox_preset_chips(qapp):
     sandbox = LiveSandboxWidget()
-    # Click chip Haas CNC .nc
-    sandbox._set_input("bracket_op1.nc")
-    assert sandbox._input.text() == "bracket_op1.nc"
-    assert sandbox._dest_lbl.text() != "—"
+    try:
+        # Click chip Haas CNC .nc
+        sandbox._set_input("bracket_op1.nc")
+        assert sandbox._input.text() == "bracket_op1.nc"
+        assert sandbox._dest_lbl.text() != "—"
 
-    # Click chip 3MF Model
-    sandbox._set_input("turbine_bracket.3mf")
-    assert sandbox._input.text() == "turbine_bracket.3mf"
+        # Click chip 3MF Model
+        sandbox._set_input("turbine_bracket.3mf")
+        assert sandbox._input.text() == "turbine_bracket.3mf"
+    finally:
+        sandbox.close()
+        sandbox.deleteLater()
+        qapp.processEvents()
 
 
 # ---- Comprehensive Dialog Integration Test ----
@@ -360,21 +391,86 @@ def test_rules_manager_dialog_draft_and_persistence(qapp, tmp_path, monkeypatch)
     monkeypatch.setattr(suite_data, "ACTIVE_PROJECT_FILE", proj_file)
 
     dlg = RulesManagerDialog()
-    assert dlg._tabs.count() == 2
-    assert dlg._keyword_table._table.rowCount() == 1
-    assert dlg._extension_table._table.rowCount() == 1
+    try:
+        assert dlg._tabs.count() == 3
+        assert dlg._keyword_table._table.rowCount() == 1
+        assert dlg._extension_table._table.rowCount() == 1
 
-    # Add a new extension rule to draft
-    new_ext_rule = {"name": "CAD Models", "folder": "Engineering/CAD", "extensions": [".step", ".stp"], "enabled": True}
-    current_ext_rules = dlg._extension_table.get_rules()
-    current_ext_rules.append(new_ext_rule)
-    dlg._extension_table.load_rules(current_ext_rules)
-    assert dlg._extension_table._table.rowCount() == 2
+        # Add a new extension rule to draft
+        new_ext_rule = {"name": "CAD Models", "folder": "Engineering/CAD", "extensions": [".step", ".stp"], "enabled": True}
+        current_ext_rules = dlg._extension_table.get_rules()
+        current_ext_rules.append(new_ext_rule)
+        dlg._extension_table.load_rules(current_ext_rules)
+        assert dlg._extension_table._table.rowCount() == 2
 
-    # Save changes
-    dlg.save_changes()
+        # Save changes
+        dlg.save_changes()
 
-    # Verify saved file
-    saved_cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
-    assert len(saved_cfg["extension_rules"]) == 2
-    assert saved_cfg["extension_rules"][1]["name"] == "CAD Models"
+        # Verify saved file
+        saved_cfg = json.loads(cfg_file.read_text(encoding="utf-8"))
+        assert len(saved_cfg["extension_rules"]) == 2
+        assert saved_cfg["extension_rules"][1]["name"] == "CAD Models"
+    finally:
+        dlg.close()
+        dlg.deleteLater()
+        qapp.processEvents()
+
+
+def test_live_sandbox_makerworld_badge_and_routing(qapp):
+    """Verify LiveSandboxWidget accurately displays [MAKERWORLD] badge for MakerWorld results."""
+    sandbox = LiveSandboxWidget()
+    try:
+        res = {
+            "destination": "3D Models\\MakerWorld\\Author",
+            "match_type": "makerworld",
+            "winning_rule": "MakerWorld (Author)",
+            "matched_trigger": "MakerWorld model 'Dragon' by Author",
+            "is_active_project": False,
+            "sniffer_details": None,
+            "rule_trace": [],
+        }
+        sandbox._update_display(res)
+        assert sandbox._badge_lbl.text() == "[MAKERWORLD]"
+        assert "MakerWorld" in sandbox._rule_lbl.text()
+    finally:
+        sandbox.close()
+        sandbox.deleteLater()
+        qapp.processEvents()
+
+
+def test_machine_remodel_widget_styling_and_tables(qapp, tmp_path):
+    """Verify MachineRemodelWidget styles review cards, indicators, and tables according to suite_theme."""
+    from rules_manager import MachineRemodelWidget
+    import remodel
+
+    widget = MachineRemodelWidget()
+    widget._engine.config = {"downloads_dir": str(tmp_path)}
+    try:
+        # Verify table stylesheets match suite_theme
+        assert "background-color: #0B0D12" in widget._prot_table.styleSheet() or "COLORS['canvas']" in widget._prot_table.styleSheet() or "#0B0D12" in widget._prot_table.styleSheet()
+        assert "background-color: #0B0D12" in widget._dupe_table.styleSheet() or "COLORS['canvas']" in widget._dupe_table.styleSheet() or "#0B0D12" in widget._dupe_table.styleSheet()
+
+        # Populate a mock plan to inspect folder review card styles
+        test_dir = tmp_path / "SubProject"
+        test_dir.mkdir()
+        prot = remodel.ProtectionCheck(True, "SOLIDCast test", "solidcast")
+        card = remodel.FolderCard(test_dir, "keep_intact", 5, 2.5, prot, {"CAD": 5})
+        plan = remodel.RemodelPlan(
+            remodel_id="test_remodel",
+            target_root=tmp_path,
+            created_at="2026-01-01T00:00:00Z",
+            cards=[card],
+            loose_files_to_organize=[],
+            duplicates_to_quarantine=[],
+            protected_items=[(test_dir, "SOLIDCast test")],
+            total_files_scanned=5,
+            reclaimable_duplicate_bytes=0,
+        )
+        widget._on_scan_finished(plan)
+
+        # Confirm card was constructed
+        assert len(widget._card_buttons) == 1
+    finally:
+        widget.close()
+        widget.deleteLater()
+        qapp.processEvents()

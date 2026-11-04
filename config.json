@@ -1,7 +1,8 @@
 {
+  "schema_version": 2,
   "watch": {
     "folder": "${USERPROFILE}\\Downloads",
-    "settle_seconds": 1.5,
+    "settle_seconds": 3.0,
     "min_age_minutes": 0,
     "auto_unpack_3d_zips": false,
     "auto_unzip": true,
@@ -338,5 +339,39 @@
       "enabled": true
     }
   ],
-  "default_folder": "Other"
+  "default_folder": "Other",
+  "batch_handoff": {
+    "enabled": true,
+    "gap_seconds": 25,
+    "max_span_seconds": 120,
+    "max_files": 50,
+    "hotkey_latest": "Ctrl+G",
+    "hotkey_all": "Ctrl+Shift+G",
+    "hotkey_copy": "Ctrl+Shift+C",
+    "stage_copy_limit_mb": 200,
+    "stage_prune_hours": 24
+  },
+  "hold": {
+    "enabled": true,
+    "extensions": [
+      ".3mf"
+    ],
+    "hold_days": 7,
+    "max_held": 15,
+    "slicers": [
+      "bambu-studio.exe",
+      "orca-slicer.exe",
+      "prusa-slicer.exe"
+    ]
+  },
+  "mirror": {
+    "enabled": false
+  },
+  "remodel": {
+    "enabled": true,
+    "quarantine_days": 30,
+    "active_folder_days": 14,
+    "desktop_min_age_days": 30
+  },
+  "makerworld_destination": "3D Models\\MakerWorld"
 }

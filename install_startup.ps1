@@ -1,3 +1,6 @@
+# Download Sorter
+# Made by Devyn Fidel (2026)
+
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $exe = Join-Path $root "DownloadSorter.exe"

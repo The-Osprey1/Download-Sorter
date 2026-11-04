@@ -19,6 +19,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 import pystray
 
+import about
 import watch
 from sorter import (
     HISTORY_FILE,
@@ -52,8 +53,8 @@ ACCENT_LIGHT = (105, 230, 173)   # suite mint tab & arrow
 PAUSED_GREY = (101, 112, 132)    # textFaint
 
 
-def make_icon(paused: bool) -> Image.Image:
-    """A folder with a down arrow, greyed out while paused."""
+def make_icon(paused: bool = False, held_count: int = 0) -> Image.Image:
+    """A folder with a down arrow, greyed out while paused, with held badge if held_count > 0."""
     body = PAUSED_GREY if paused else ACCENT
     tab = PAUSED_GREY if paused else ACCENT_LIGHT
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
@@ -66,6 +67,11 @@ def make_icon(paused: bool) -> Image.Image:
     else:
         draw.polygon([(32, 46), (21, 33), (43, 33)], fill=tab)
         draw.rectangle((28, 24, 36, 34), fill=tab)
+    if held_count > 0:
+        # Amber/orange indicator badge dot on top-right (COLORS["warning"] #F5AD62)
+        badge_fill = (245, 173, 98)
+        badge_border = (11, 13, 18)
+        draw.ellipse((42, 6, 58, 22), fill=badge_fill, outline=badge_border, width=2)
     return image
 
 
@@ -118,25 +124,35 @@ class SorterTray:
         self.watcher_failed = False
         self.icon = pystray.Icon(
             "download-sorter",
-            icon=make_icon(is_paused()),
+            icon=make_icon(is_paused(), self._held_count()),
             title=self.tooltip(),
             menu=self.build_menu(),
         )
 
     # ---- presentation ----
 
+    def _held_count(self) -> int:
+        try:
+            import hold_manager
+            return hold_manager.get_held_summary().get("total_held", 0)
+        except Exception:
+            return 0
+
     def tooltip(self) -> str:
         state = "Paused" if is_paused() else "Watching Downloads"
-        return f"Download Sorter - {state}\n{moves_today()} file(s) filed today"
+        held = self._held_count()
+        held_line = f"\n{held} 3MF(s) held in Downloads" if held > 0 else ""
+        return f"{about.APP_NAME} - {state}\n{moves_today()} file(s) filed today{held_line}\n{about.CREDIT}"
 
     def refresh(self) -> None:
-        self.icon.icon = make_icon(is_paused())
+        self.icon.icon = make_icon(is_paused(), self._held_count())
         self.icon.title = self.tooltip()
         self.icon.update_menu()
 
     def build_menu(self) -> pystray.Menu:
         return pystray.Menu(
             pystray.MenuItem(lambda _i: f"{moves_today()} file(s) filed today", None, enabled=False),
+            pystray.MenuItem(lambda _i: f"{self._held_count()} 3MF(s) held in Downloads", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 lambda _i: "Resume sorting" if is_paused() else "Pause sorting",
@@ -146,9 +162,13 @@ class SorterTray:
             pystray.MenuItem("Sort Downloads now", self.on_sort_now),
             pystray.MenuItem("Undo last batch", self.on_undo),
             pystray.MenuItem("Configure Rules & Simulator...", self.on_open_rules_manager),
+            pystray.MenuItem("Remodel Messy Folders...", self.on_remodel),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open Downloads", self.on_open_downloads),
             pystray.MenuItem("Open log folder", self.on_open_logs),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(f"About {about.APP_NAME}", self.on_about),
+            pystray.MenuItem(about.CREDIT, None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", self.on_quit),
         )
@@ -194,11 +214,19 @@ class SorterTray:
             run_script("rules_manager.py")
         threading.Thread(target=work, daemon=True).start()
 
+    def on_remodel(self, _icon=None, _item=None) -> None:
+        def work() -> None:
+            run_script("rules_manager.py", "--tab", "remodel")
+        threading.Thread(target=work, daemon=True).start()
+
     def on_open_downloads(self, _icon=None, _item=None) -> None:
         open_in_explorer(self.downloads)
 
     def on_open_logs(self, _icon=None, _item=None) -> None:
         open_in_explorer(LOG_DIR if LOG_DIR.exists() else LOG_FILE.parent)
+
+    def on_about(self, _icon=None, _item=None) -> None:
+        self.notify(f"{about.__version__} - {about.CREDIT}\n{about.REPO_URL}", f"About {about.APP_NAME}")
 
     def on_quit(self, _icon=None, _item=None) -> None:
         logging.info("Tray quit requested; stopping the watcher")
@@ -236,6 +264,8 @@ class SorterTray:
 
 
 def main() -> int:
+    if about.handle_version_flag():
+        return 0
     setup_logging()
     lock = watch.acquire_single_instance_lock()
     if not lock:

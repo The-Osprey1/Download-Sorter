@@ -19,6 +19,7 @@ import uuid
 from collections import defaultdict
 from pathlib import Path
 
+import about
 from sorter import (
     LOG_FILE,
     document_roots,
@@ -163,6 +164,7 @@ def apply(plan: list[dict]) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Restore files the sorter moved out of Documents.")
+    parser.add_argument("-V", "--version", action="version", version=about.version_string())
     parser.add_argument("--apply", action="store_true", help="actually move the files back")
     parser.add_argument("--only", action="append", default=[],
                         help="limit to an extension, e.g. --only .prproj (repeatable)")

@@ -8,9 +8,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import about
 from sorter import (
     FAILURE_FILE,
     HISTORY_FILE,
+    NON_MOVE_ACTIONS,
     RUNTIME_STATE_FILE,
     is_paused,
     load_config,
@@ -93,7 +95,7 @@ def get_history_summary() -> tuple[int, str | None, str | None]:
                 if not line:
                     continue
                 rec = json.loads(line)
-                if rec.get("action") != "undo":
+                if rec.get("action") not in NON_MOVE_ACTIONS:
                     total_moves += 1
                     last_batch = rec.get("batch_id")
                     last_time = rec.get("timestamp")
@@ -138,6 +140,9 @@ def main() -> int:
     except Exception:
         pass
 
+    if about.handle_version_flag():
+        return 0
+
     config = load_config()
     downloads = watch_root(config)
 
@@ -152,6 +157,7 @@ def main() -> int:
 
     print("\n" + "=" * 55)
     print("           DOWNLOAD-SORTER SYSTEM DASHBOARD")
+    print(f"           {about.APP_NAME} {about.__version__} - {about.CREDIT}")
     print("=" * 55)
 
     # Watcher Service
@@ -196,6 +202,21 @@ def main() -> int:
             print(f"    • {cat:<20} {count:>4} file(s)")
     else:
         print("    (No categorized subfolders yet)")
+
+    # 3MF Grace-Period Hold
+    try:
+        import hold_manager
+        hold_sum = hold_manager.get_held_summary()
+        held_count = hold_sum.get("total_held", 0)
+        kept_count = hold_sum.get("kept_here", 0)
+        next_rel_str = hold_sum.get("next_release_str", "None")
+        if held_count > 0 or kept_count > 0:
+            print("-" * 55)
+            print(f"  Held 3MF Files:      {held_count} holding in Downloads (Next release: {next_rel_str})")
+            if kept_count > 0:
+                print(f"                       {kept_count} permanently kept in Downloads")
+    except Exception:
+        pass
 
     # Janitor
     print("-" * 55)

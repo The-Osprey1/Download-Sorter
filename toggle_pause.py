@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import about
 import sys
 from sorter import is_paused, set_paused
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Toggle or inspect pause state of download-sorter.")
+    parser.add_argument("--version", action="version", version=about.version_string())
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--pause", action="store_true", help="Explicitly pause download-sorter")
     group.add_argument("--resume", action="store_true", help="Explicitly resume download-sorter")

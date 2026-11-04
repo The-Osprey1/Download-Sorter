@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
+import about
 from sorter import HISTORY_FILE
 
 
@@ -60,6 +61,7 @@ def clean_history(path: Path, apply: bool = False) -> tuple[int, int, Path | Non
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-V", "--version", action="version", version=about.version_string())
     parser.add_argument("--apply", action="store_true", help="Back up and rewrite the live history")
     parser.add_argument("--path", type=Path, default=HISTORY_FILE, help="History file to inspect")
     args = parser.parse_args()

@@ -31,6 +31,49 @@ ACTIVE_PROJECT_FILE = LOG_DIR / "active_project.json"
 RUNTIME_STATE_FILE = LOG_DIR / "runtime_state.json"
 SERVICE_DISABLED_FILE = LOG_DIR / "service_disabled"
 
+# History records whose "action" is one of these are bookkeeping, not user-visible moves:
+# they are never counted as "files filed today" and Undo never offers to reverse them.
+NON_MOVE_ACTIONS = frozenset({
+    "undo", "planned", "aborted", "needs_review", "aux_move", "link",
+})
+
+# Default minimum quiet time before a file is considered finished being written.
+DEFAULT_SETTLE_SECONDS = 3.0
+
+MAKERWORLD_FOLDER = "3D Models\\MakerWorld"
+
+# Release 2.x feature blocks (schema_version 2).  Every block carries its own
+# on/off switch so any feature can be disabled without touching the others.
+V2_DEFAULTS: dict = {
+    "schema_version": 2,
+    "batch_handoff": {
+        "enabled": True,
+        "gap_seconds": 25,
+        "max_span_seconds": 120,
+        "max_files": 50,
+        "hotkey_latest": "Ctrl+G",
+        "hotkey_all": "Ctrl+Shift+G",
+        "hotkey_copy": "Ctrl+Shift+C",
+        "stage_copy_limit_mb": 200,
+        "stage_prune_hours": 24,
+    },
+    "hold": {
+        "enabled": True,
+        "extensions": [".3mf"],
+        "hold_days": 7,
+        "max_held": 15,
+        "slicers": ["bambu-studio.exe", "orca-slicer.exe", "prusa-slicer.exe"],
+    },
+    "mirror": {"enabled": False},
+    "remodel": {
+        "enabled": True,
+        "quarantine_days": 30,
+        "active_folder_days": 14,
+        "desktop_min_age_days": 30,
+    },
+    "makerworld_destination": MAKERWORLD_FOLDER,
+}
+
 # All 27 CAD / 3D / CNC extensions captured by Active Project catch-all
 CAD_EXTENSIONS: set[str] = {
     ".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs",
@@ -47,7 +90,7 @@ GCODE_SNIFFER_EXTENSIONS: set[str] = {
 DEFAULT_CONFIG: dict = {
     "watch": {
         "folder": "${USERPROFILE}\\Downloads",
-        "settle_seconds": 1.5,
+        "settle_seconds": 3.0,
         "min_age_minutes": 0,
         "auto_unpack_3d_zips": False,
         "auto_unzip": True,
@@ -129,6 +172,30 @@ DEFAULT_CONFIG: dict = {
     ],
     "default_folder": "Other",
 }
+DEFAULT_CONFIG.update(copy.deepcopy(V2_DEFAULTS))
+
+
+def apply_v2_defaults(config: dict) -> dict:
+    """Fill any missing schema-v2 blocks in place; never overwrites user values.
+
+    Unknown keys are preserved untouched.  A legacy config that still carries the old
+    1.5 s default settle time is moved to the new 3 s default.
+    """
+    if not isinstance(config, dict):
+        return config
+    legacy = config.get("schema_version") is None
+    for key, default in V2_DEFAULTS.items():
+        if key not in config:
+            config[key] = copy.deepcopy(default)
+        elif isinstance(default, dict) and isinstance(config[key], dict):
+            for sub_key, sub_default in default.items():
+                config[key].setdefault(sub_key, copy.deepcopy(sub_default))
+    if legacy:
+        config["schema_version"] = 2
+        watch_block = config.get("watch")
+        if isinstance(watch_block, dict) and watch_block.get("settle_seconds") in (None, 1.5):
+            watch_block["settle_seconds"] = DEFAULT_SETTLE_SECONDS
+    return config
 
 
 @dataclass(frozen=True)
@@ -365,7 +432,7 @@ class IncrementalHistoryReader:
             if not isinstance(record, dict):
                 continue
             self._recent.append(record)
-            if record.get("action") == "undo":
+            if record.get("action") in NON_MOVE_ACTIONS:
                 continue
             try:
                 when = datetime.fromisoformat(str(record.get("timestamp", ""))).astimezone().date()
@@ -505,7 +572,7 @@ def load_config() -> dict:
                         logging.info("Initialized user config from %s to %s", DEFAULT_CONFIG_PATH, USER_CONFIG_PATH)
                     except OSError:
                         pass
-                    return data
+                    return apply_v2_defaults(data)
             except Exception as exc:
                 logging.warning("Failed loading template config from %s (%s)", DEFAULT_CONFIG_PATH, exc)
         logging.info("Config file %s does not exist; using default config", target)
@@ -514,7 +581,7 @@ def load_config() -> dict:
         with target.open(encoding="utf-8") as handle:
             data = json.load(handle)
         if isinstance(data, dict):
-            return data
+            return apply_v2_defaults(data)
         logging.warning("Config at %s is not a dictionary; using default config", target)
         return get_default_config()
     except (OSError, json.JSONDecodeError, Exception) as exc:
@@ -533,6 +600,7 @@ def collect_category_folders(config: dict) -> list[str]:
     if "gcode_destination" in config:
         folders.append(config["gcode_destination"])
     folders.append(config.get("default_folder", "Other"))
+    folders.append(config.get("makerworld_destination") or MAKERWORLD_FOLDER)
     # Keep unique order
     seen: set[str] = set()
     ordered: list[str] = []
@@ -765,7 +833,17 @@ def is_incomplete(
     # Hidden dot files: .DS_Store, .git, etc.
     if name.startswith(".") and ext != "":
         return True
+    # Slicer / editor temp saves (e.g. model.3mf.tmp) - shared with safe_ops
+    import safe_ops
+    if safe_ops.is_temp_save(name):
+        return True
     return False
+
+
+def is_keep_protected(path: Path) -> bool:
+    """True when path sits under a folder carrying a .download-sorter-keep marker."""
+    import safe_ops
+    return safe_ops.keep_marker_dir(path) is not None
 
 
 def is_managed_path(path: Path, root: Path, folders: list[str]) -> bool:
@@ -777,6 +855,11 @@ def is_managed_path(path: Path, root: Path, folders: list[str]) -> bool:
         return True
     top = relative.parts[0]
     return any(top.lower() == split_folder(folder)[0].lower() for folder in folders)
+
+
+def sanitize_folder_segment(name: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*]', '_', str(name or "")).strip(" .")
+    return cleaned if cleaned else "Unknown"
 
 
 def matches_keyword(name: str, token: str) -> bool:
@@ -1058,6 +1141,38 @@ def evaluate_routing(
         else:
             rule_trace.append({"tier": "gcode_sniffer", "status": "extension_not_gcode"})
 
+    # --- Tier 3.5: MakerWorld 3MF Sniffer ---
+    if ext == ".3mf" and file_path is not None:
+        p_file = Path(file_path)
+        if p_file.exists() and p_file.is_file():
+            try:
+                from gcode_peek import parse_3mf
+                meta_3mf = parse_3mf(p_file)
+                if meta_3mf.get("is_makerworld"):
+                    mw = meta_3mf.get("makerworld_meta", {})
+                    author = sanitize_folder_segment(mw.get("designer") or "MakerWorld")
+                    model_title = sanitize_folder_segment(mw.get("title") or p_file.stem)
+                    base_mw = config.get("makerworld_destination") or MAKERWORLD_FOLDER
+                    mw_dest = f"{base_mw}\\{author}\\{model_title}"
+                    rule_trace.append({
+                        "tier": "makerworld",
+                        "status": "matched",
+                        "designer": author,
+                        "title": model_title,
+                        "destination": mw_dest,
+                    })
+                    return {
+                        "destination": mw_dest,
+                        "match_type": "makerworld",
+                        "winning_rule": f"MakerWorld ({author})",
+                        "matched_trigger": f"MakerWorld model '{model_title}' by {author}",
+                        "is_active_project": False,
+                        "sniffer_details": meta_3mf,
+                        "rule_trace": rule_trace,
+                    }
+            except Exception as exc:
+                logging.debug("MakerWorld 3MF check error: %s", exc)
+
     # --- Tier 4: Extension Rules (R1) ---
     for rule_index, rule in enumerate(config.get("extension_rules", [])):
         rule_name = rule.get("name") or rule.get("folder", "Extension Rule")
@@ -1164,6 +1279,21 @@ def unique_destination(directory: Path, name: str) -> Path:
         index += 1
     import uuid
     return directory / f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+
+
+def sort_destination(path: Path | str, config: dict | None = None) -> Path:
+    """Compute the planned destination path for a file according to active rules."""
+    p = Path(path)
+    cfg = config if config is not None else load_config()
+    file_path = p if p.is_absolute() and p.exists() else None
+    routing = evaluate_routing(p.name, cfg, file_path=file_path)
+    if routing.get("is_active_project") or Path(routing.get("destination", "")).is_absolute():
+        dest_dir = Path(routing["destination"])
+    else:
+        dest_folder = routing.get("destination", "")
+        downloads = watch_root(cfg)
+        dest_dir = folder_path(downloads, dest_folder) if dest_folder else downloads
+    return unique_destination(dest_dir, p.name)
 
 
 def is_file_locked(path: Path) -> bool:
@@ -1278,6 +1408,8 @@ def move_file(
         return None
     if is_quarantined(path):
         return None
+    if is_keep_protected(path):
+        return None
     if is_managed_path(path, from_root, folders) and path.parent != from_root:
         return None
     if path.parent != from_root:
@@ -1288,7 +1420,7 @@ def move_file(
         if not is_old_enough(path, min_age):
             return None
 
-    settle = float(config.get("watch", {}).get("settle_seconds", 1.5))
+    settle = float(config.get("watch", {}).get("settle_seconds", DEFAULT_SETTLE_SECONDS))
     if not dry_run and not is_file_ready_to_move(path, settle):
         return None
 
@@ -1322,6 +1454,35 @@ def move_file(
             logging.warning("Could not remove redundant duplicate %s: %s", path.name, exc)
 
     destination = unique_destination(destination_dir, path.name)
+    # Check 3MF grace-period hold
+    hold_cfg = config.get("hold", {})
+    hold_exts = [e.lower() for e in hold_cfg.get("extensions", [".3mf"])]
+    if (
+        hold_cfg.get("enabled", True)
+        and path.suffix.lower() in hold_exts
+        and batch_id != "file_now"
+        and batch_id != "hold_release"
+    ):
+        import hold_manager
+        if hold_manager.is_keep_here(path):
+            logging.debug("3MF file %s is marked keep_here; skipping move", path.name)
+            return None
+        meta_3mf = None
+        try:
+            from gcode_peek import parse_3mf
+            meta_3mf = parse_3mf(path)
+        except Exception:
+            pass
+        if hold_manager.hold_file(path, config, destination, meta=meta_3mf):
+            logging.info("3MF file held in Downloads: %s (planned: %s)", path.name, destination)
+            if config.get("ribbon_enabled", True) and config.get("notifications", True):
+                try:
+                    from ribbon_popup import notify_file_held
+                    notify_file_held(path, destination, meta_3mf, downloads_root=downloads)
+                except Exception as err:
+                    logging.debug("Ribbon hold notification skipped: %s", err)
+            return None
+
 
     auto_unpack = config.get("watch", {}).get("auto_unpack_3d_zips", config.get("auto_unpack_3d_zips", False))
     if path.suffix.lower() == ".zip" and auto_unpack:
@@ -1364,15 +1525,19 @@ def move_file(
         logging.info("[DRY-RUN] Would move %s -> %s (%s)", path.name, dest_display, reason)
         return destination
 
+    import safe_ops
     destination_dir.mkdir(parents=True, exist_ok=True)
     source = path.resolve()
     try:
-        shutil.move(str(path), str(destination))
+        destination = safe_ops.move(path, destination, batch_id=batch_id, settle_seconds=settle)
+    except safe_ops.Refused as refusal:
+        logging.debug("Left %s alone: %s", path.name, refusal.reason)
+        return None
     except OSError as exc:
         record_move_failure(path, exc)
         return None
     clear_failure(path)
-    record_history(source, destination, batch_id)
+    dest_display = destination.relative_to(downloads) if is_under(destination, downloads) else str(destination)
     logging.info("Moved %s -> %s (%s)", source, dest_display, reason)
     return destination
 
@@ -1392,7 +1557,7 @@ def relocate_from_documents(
     if not any(is_under(path, source) for source in document_roots(config)):
         return None
 
-    settle = float(config.get("watch", {}).get("settle_seconds", 1.5))
+    settle = float(config.get("watch", {}).get("settle_seconds", DEFAULT_SETTLE_SECONDS))
     if not dry_run and not is_file_ready_to_move(path, settle):
         return None
 
@@ -1404,6 +1569,35 @@ def relocate_from_documents(
     else:
         destination_dir = folder_path(downloads, folder)
     destination = unique_destination(destination_dir, path.name)
+    # Check 3MF grace-period hold
+    hold_cfg = config.get("hold", {})
+    hold_exts = [e.lower() for e in hold_cfg.get("extensions", [".3mf"])]
+    if (
+        hold_cfg.get("enabled", True)
+        and path.suffix.lower() in hold_exts
+        and batch_id != "file_now"
+        and batch_id != "hold_release"
+    ):
+        import hold_manager
+        if hold_manager.is_keep_here(path):
+            logging.debug("3MF file %s is marked keep_here; skipping move", path.name)
+            return None
+        meta_3mf = None
+        try:
+            from gcode_peek import parse_3mf
+            meta_3mf = parse_3mf(path)
+        except Exception:
+            pass
+        if hold_manager.hold_file(path, config, destination, meta=meta_3mf):
+            logging.info("3MF file held in Downloads: %s (planned: %s)", path.name, destination)
+            if config.get("ribbon_enabled", True) and config.get("notifications", True):
+                try:
+                    from ribbon_popup import notify_file_held
+                    notify_file_held(path, destination, meta_3mf)
+                except Exception as err:
+                    logging.debug("Ribbon hold notification skipped: %s", err)
+            return None
+
 
     dest_display = destination.relative_to(downloads) if is_under(destination, downloads) else str(destination)
     if dry_run:
@@ -1415,15 +1609,19 @@ def relocate_from_documents(
         )
         return destination
 
+    import safe_ops
     destination_dir.mkdir(parents=True, exist_ok=True)
     source = path.resolve()
     try:
-        shutil.move(str(path), str(destination))
+        destination = safe_ops.move(path, destination, batch_id=batch_id, settle_seconds=settle)
+    except safe_ops.Refused as refusal:
+        logging.debug("Left %s alone: %s", path.name, refusal.reason)
+        return None
     except OSError as exc:
         record_move_failure(path, exc)
         return None
     clear_failure(path)
-    record_history(source, destination, batch_id)
+    dest_display = destination.relative_to(downloads) if is_under(destination, downloads) else str(destination)
     logging.info(
         "Moved from Documents %s -> %s (%s)",
         source,
@@ -1534,7 +1732,7 @@ def reclassify_misplaced_file(
     if current_folder.lower() == target_folder.lower():
         return None
 
-    settle = float(config.get("watch", {}).get("settle_seconds", 1.5))
+    settle = float(config.get("watch", {}).get("settle_seconds", DEFAULT_SETTLE_SECONDS))
     if not dry_run and not is_file_ready_to_move(path, settle):
         return None
 
@@ -1543,22 +1741,55 @@ def reclassify_misplaced_file(
     else:
         destination_dir = folder_path(downloads, target_folder)
     destination = unique_destination(destination_dir, path.name)
+    # Check 3MF grace-period hold
+    hold_cfg = config.get("hold", {})
+    hold_exts = [e.lower() for e in hold_cfg.get("extensions", [".3mf"])]
+    if (
+        hold_cfg.get("enabled", True)
+        and path.suffix.lower() in hold_exts
+        and batch_id != "file_now"
+        and batch_id != "hold_release"
+    ):
+        import hold_manager
+        if hold_manager.is_keep_here(path):
+            logging.debug("3MF file %s is marked keep_here; skipping move", path.name)
+            return None
+        meta_3mf = None
+        try:
+            from gcode_peek import parse_3mf
+            meta_3mf = parse_3mf(path)
+        except Exception:
+            pass
+        if hold_manager.hold_file(path, config, destination, meta=meta_3mf):
+            logging.info("3MF file held in Downloads: %s (planned: %s)", path.name, destination)
+            if config.get("ribbon_enabled", True) and config.get("notifications", True):
+                try:
+                    from ribbon_popup import notify_file_held
+                    notify_file_held(path, destination, meta_3mf)
+                except Exception as err:
+                    logging.debug("Ribbon hold notification skipped: %s", err)
+            return None
+
 
     dest_display = destination.relative_to(downloads) if is_under(destination, downloads) else str(destination)
     if dry_run:
         logging.info("[DRY-RUN] Would reclassify %s -> %s (%s)", path.name, dest_display, reason)
         return destination
 
+    import safe_ops
     destination_dir.mkdir(parents=True, exist_ok=True)
     source = path.resolve()
     try:
-        shutil.move(str(source), str(destination))
+        destination = safe_ops.move(source, destination, batch_id=batch_id, settle_seconds=settle)
+    except safe_ops.Refused as refusal:
+        logging.debug("Left %s alone: %s", path.name, refusal.reason)
+        return None
     except OSError as exc:
         record_move_failure(path, exc)
         return None
 
     clear_failure(path)
-    record_history(source, destination, batch_id)
+    dest_display = destination.relative_to(downloads) if is_under(destination, downloads) else str(destination)
     logging.info("Auto-corrected misplaced file: %s from '%s' -> '%s'", source.name, current_folder, dest_display)
     return destination
 

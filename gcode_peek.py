@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import about
+import io
 import json
 import os
 import re
 import sys
+import threading
 import zipfile
 from pathlib import Path
+
+try:
+    import defusedxml.ElementTree as SafeET
+except ImportError:
+    import xml.etree.ElementTree as SafeET  # fallback
 
 
 def format_duration(seconds: float | int) -> str:
@@ -25,7 +33,65 @@ def format_duration(seconds: float | int) -> str:
     return " ".join(parts)
 
 
-def parse_3mf(path: Path) -> dict:
+MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB
+MAX_ZIP_ENTRIES = 2000
+MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024  # 5 MB
+MAX_THUMBNAIL_DIM = 1024
+
+_PARSED_3MF_CACHE: dict[tuple[str, int, float], dict] = {}
+
+
+def _validate_zip_safety(z: zipfile.ZipFile) -> None:
+    infolist = z.infolist()
+    if len(infolist) > MAX_ZIP_ENTRIES:
+        raise ValueError(f"Exceeded max zip entries: {len(infolist)} > {MAX_ZIP_ENTRIES}")
+
+    total_uncompressed = 0
+    for info in infolist:
+        name = info.filename
+        parts = name.replace("\\", "/").split("/")
+        if ".." in parts:
+            raise ValueError(f"Path traversal detected in 3MF archive: {name}")
+        if os.path.isabs(name) or (len(name) > 1 and name[1] == ":"):
+            raise ValueError(f"Absolute path detected in 3MF archive: {name}")
+        total_uncompressed += info.file_size
+        if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
+            raise ValueError(f"Exceeded max uncompressed size: {total_uncompressed} > {MAX_UNCOMPRESSED_BYTES}")
+
+
+def _safe_read_thumbnail(z: zipfile.ZipFile, thumb_name: str) -> tuple[bytes | None, str | None]:
+    try:
+        info = z.getinfo(thumb_name)
+    except KeyError:
+        return None, "Thumbnail not found"
+    if info.file_size > MAX_THUMBNAIL_BYTES:
+        return None, f"Thumbnail exceeds 5 MB limit ({info.file_size} bytes)"
+
+    raw = z.read(thumb_name)
+    if not raw:
+        return None, "Thumbnail is empty"
+    if len(raw) > MAX_THUMBNAIL_BYTES:
+        return None, "Thumbnail uncompressed size exceeds limit"
+
+    try:
+        from PIL import Image
+
+        try:
+            img = Image.open(io.BytesIO(raw))
+            w, h = img.size
+            if w > MAX_THUMBNAIL_DIM or h > MAX_THUMBNAIL_DIM:
+                img.thumbnail((MAX_THUMBNAIL_DIM, MAX_THUMBNAIL_DIM), Image.Resampling.LANCZOS)
+                out = io.BytesIO()
+                img.save(out, format="PNG")
+                return out.getvalue(), None
+            return raw, None
+        except Exception as img_err:
+            return None, f"Invalid image format: {img_err}"
+    except ImportError:
+        return raw, None
+
+
+def _parse_3mf_worker(path: Path) -> dict:
     meta: dict = {
         "format": "3MF",
         "file": path.name,
@@ -45,29 +111,93 @@ def parse_3mf(path: Path) -> dict:
         "bed_type": None,
         "has_thumbnail": False,
         "thumbnail_data": None,
+        "is_makerworld": False,
+        "makerworld_meta": {},
+        "error": None,
     }
 
     try:
         with zipfile.ZipFile(path, "r") as z:
+            _validate_zip_safety(z)
             names = z.namelist()
+            names_lower = {n.lower(): n for n in names}
 
             # Check for thumbnails
-            for thumb_name in ["Metadata/plate_1.png", "Metadata/plate_no_light_1.png", "Metadata/thumbnail.png", "thumbnail.png"]:
-                if thumb_name in names:
-                    meta["has_thumbnail"] = True
-                    meta["thumbnail_name"] = thumb_name
-                    meta["thumbnail_data"] = z.read(thumb_name)
-                    break
+            for candidate in [
+                "Metadata/plate_1.png",
+                "Metadata/plate_no_light_1.png",
+                "Metadata/thumbnail.png",
+                "thumbnail.png",
+            ]:
+                actual_name = names_lower.get(candidate.lower())
+                if actual_name:
+                    thumb_data, thumb_err = _safe_read_thumbnail(z, actual_name)
+                    if thumb_data:
+                        meta["has_thumbnail"] = True
+                        meta["thumbnail_name"] = actual_name
+                        meta["thumbnail_data"] = thumb_data
+                        break
 
-            # Slicer Client Info
+            # 3D Model XML inspection via defusedxml
+            for model_name in ["3d/3dmodel.model", "3D/3dmodel.model"]:
+                if model_name in names:
+                    try:
+                        raw_xml = z.read(model_name)
+                        SafeET.fromstring(raw_xml)
+                    except Exception as xml_err:
+                        meta["error"] = f"Malformed 3MF XML: {xml_err}"
+
+            # PrusaSlicer detection
+            if any("prusa_slicer" in n for n in names_lower):
+                meta["slicer"] = "PrusaSlicer"
+
+            # Slicer Client Info & Header items
+            origin = ""
+            design_model_id = ""
+            design_profile_id = ""
+            profile_title = ""
+            designer = ""
+            profile_cover = ""
+
             if "Metadata/slice_info.config" in names:
                 slice_info = z.read("Metadata/slice_info.config").decode("utf-8", errors="ignore")
-                client_type = re.search(r'header_item\s+key="X-BBL-Client-Type"\s+value="([^"]+)"', slice_info)
-                client_ver = re.search(r'header_item\s+key="X-BBL-Client-Version"\s+value="([^"]+)"', slice_info)
-                if client_type:
-                    meta["slicer"] = "Bambu Studio / OrcaSlicer"
-                if client_ver:
-                    meta["slicer_version"] = client_ver.group(1)
+                try:
+                    root_elem = SafeET.fromstring(slice_info)
+                    for item in root_elem.iter("header_item"):
+                        k = (item.attrib.get("key") or "").strip()
+                        v = (item.attrib.get("value") or "").strip()
+                        if k.lower() == "origin":
+                            origin = v
+                        elif k.lower() == "x-bbl-client-type":
+                            if "orcaslicer" in v.lower():
+                                meta["slicer"] = "OrcaSlicer"
+                            elif "bambustudio" in v.lower():
+                                meta["slicer"] = "Bambu Studio"
+                            else:
+                                meta["slicer"] = v
+                        elif k.lower() == "x-bbl-client-version":
+                            meta["slicer_version"] = v
+                        elif k.lower() == "designmodelid":
+                            design_model_id = v
+                        elif k.lower() == "designprofileid":
+                            design_profile_id = v
+                except Exception:
+                    client_type = re.search(r'header_item\s+key="X-BBL-Client-Type"\s+value="([^"]+)"', slice_info)
+                    client_ver = re.search(r'header_item\s+key="X-BBL-Client-Version"\s+value="([^"]+)"', slice_info)
+                    origin_match = re.search(r'header_item\s+key="Origin"\s+value="([^"]+)"', slice_info, re.I)
+                    mid_match = re.search(r'header_item\s+key="DesignModelId"\s+value="([^"]+)"', slice_info, re.I)
+                    pid_match = re.search(r'header_item\s+key="DesignProfileId"\s+value="([^"]+)"', slice_info, re.I)
+                    if client_type:
+                        c_val = client_type.group(1)
+                        meta["slicer"] = "OrcaSlicer" if "orcaslicer" in c_val.lower() else ("Bambu Studio" if "bambustudio" in c_val.lower() else "Bambu Studio / OrcaSlicer")
+                    if client_ver:
+                        meta["slicer_version"] = client_ver.group(1)
+                    if origin_match:
+                        origin = origin_match.group(1)
+                    if mid_match:
+                        design_model_id = mid_match.group(1)
+                    if pid_match:
+                        design_profile_id = pid_match.group(1)
 
             # Plate 1 JSON
             if "Metadata/plate_1.json" in names:
@@ -102,6 +232,14 @@ def parse_3mf(path: Path) -> dict:
                         meta["bed_type"] = cfg["curr_bed_type"]
                     if "layer_height" in cfg and cfg["layer_height"] and not meta["layer_height"]:
                         meta["layer_height"] = cfg["layer_height"]
+                    if "origin" in cfg and not origin:
+                        origin = str(cfg["origin"])
+                    if "profile_title" in cfg:
+                        profile_title = str(cfg["profile_title"])
+                    if "designer" in cfg:
+                        designer = str(cfg["designer"])
+                    if "profile_cover" in cfg:
+                        profile_cover = str(cfg["profile_cover"])
                 except Exception:
                     pass
 
@@ -114,10 +252,74 @@ def parse_3mf(path: Path) -> dict:
                         meta["print_time"] = format_duration(float(time_match.group(1)))
                 except Exception:
                     pass
+
+            # Empirical MakerWorld classification
+            has_mw_origin = "makerworld" in origin.lower()
+            has_mw_ids = bool(design_model_id or design_profile_id)
+            has_mw_cover_and_title = bool(profile_cover and (profile_title or designer))
+            has_aux_pictures = any(n.lower().startswith("auxiliaries/model pictures") for n in names) and bool(designer)
+
+            is_makerworld = has_mw_origin or has_mw_ids or has_mw_cover_and_title or has_aux_pictures
+
+            meta["is_makerworld"] = is_makerworld
+            if is_makerworld:
+                clean_title = profile_title or path.stem
+                clean_designer = designer or "MakerWorld"
+                meta["makerworld_meta"] = {
+                    "model_id": design_model_id,
+                    "profile_id": design_profile_id,
+                    "title": clean_title,
+                    "designer": clean_designer,
+                    "origin": origin or "makerworld.com",
+                    "cover_image": profile_cover,
+                }
     except Exception as exc:
         meta["error"] = str(exc)
 
     return meta
+
+
+def parse_3mf(path: Path) -> dict:
+    resolved = Path(path).resolve()
+    try:
+        st = resolved.stat()
+        cache_key = (str(resolved), st.st_size, st.st_mtime)
+        if cache_key in _PARSED_3MF_CACHE:
+            return dict(_PARSED_3MF_CACHE[cache_key])
+    except OSError:
+        cache_key = None
+
+    worker_result: dict = {}
+
+    def _target():
+        nonlocal worker_result
+        try:
+            worker_result = _parse_3mf_worker(resolved)
+        except Exception as exc:
+            worker_result = {"error": str(exc), "format": "3MF", "file": resolved.name}
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    t.join(timeout=2.0)
+
+    if t.is_alive():
+        res = {
+            "format": "3MF",
+            "file": resolved.name,
+            "path": str(resolved),
+            "error": "Parsing timed out after 2.0s",
+            "is_makerworld": False,
+            "makerworld_meta": {},
+            "has_thumbnail": False,
+            "thumbnail_data": None,
+        }
+    else:
+        res = worker_result or {"format": "3MF", "file": resolved.name, "error": "Worker produced no result"}
+
+    if cache_key is not None:
+        _PARSED_3MF_CACHE[cache_key] = res
+
+    return dict(res)
 
 
 def parse_gcode(path: Path) -> dict:
@@ -486,6 +688,7 @@ def main() -> int:
     except Exception:
         pass
     parser = argparse.ArgumentParser(description="Inspect 3D print metadata and thumbnails from .gcode and .3mf files.")
+    parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument("file", nargs="?", type=str, help="Path to .gcode, .bgcode, or .3mf file")
     parser.add_argument("-l", "--latest", action="store_true", help="Inspect the most recent 3D print file in Downloads")
     parser.add_argument("-t", "--thumb", action="store_true", help="Extract and open embedded thumbnail image")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import about
 import logging
 import os
 import math
@@ -12,6 +13,7 @@ import time
 import zipfile
 from pathlib import Path
 
+import safe_ops
 from sorter import (
     classify,
     folder_path,
@@ -169,9 +171,9 @@ def unpack_3d_archive(
                 else str(zip_destination)
             )
             try:
-                shutil.move(str(archive_path), str(zip_destination))
+                safe_ops.move(archive_path, zip_destination, settle_seconds=0.0, undoable=False, honor_keep=False, skip_preflight=True)
                 logging.info("Moved original zip -> %s", zip_display)
-            except OSError as exc:
+            except (OSError, safe_ops.Refused) as exc:
                 logging.warning("Could not move zip %s: %s", archive_path.name, exc)
 
     except Exception as exc:
@@ -183,6 +185,7 @@ def unpack_3d_archive(
 def main() -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Extract 3D models from zip archives (flattens nested folders).")
+    parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument("archive", nargs="?", type=str, help="Path to .zip archive to unpack")
     parser.add_argument("-n", "--dry-run", action="store_true", help="Simulate extraction without writing files")
     parser.add_argument("-a", "--all", action="store_true", help="Scan top of Downloads for 3D zip archives and unpack all")

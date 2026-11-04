@@ -23,6 +23,7 @@ from sorter import (
     DEFAULT_CONFIG_PATH,
     LOG_DIR,
     USER_CONFIG_PATH,
+    apply_v2_defaults,
 )
 
 CAD_EXTENSIONS: list[str] = sorted(list(SORTER_CAD_EXTENSIONS))
@@ -62,7 +63,7 @@ def load_sorter_config(config_path: Path | str | None = None) -> dict[str, Any]:
             if raw.strip():
                 data = json.loads(raw)
                 if isinstance(data, dict) and "keyword_rules" in data and "extension_rules" in data:
-                    return data
+                    return apply_v2_defaults(data)
         except Exception:
             pass
 
@@ -74,7 +75,7 @@ def load_sorter_config(config_path: Path | str | None = None) -> dict[str, Any]:
             if raw_bak.strip():
                 bak_data = json.loads(raw_bak)
                 if isinstance(bak_data, dict) and "keyword_rules" in bak_data:
-                    return bak_data
+                    return apply_v2_defaults(bak_data)
         except Exception:
             pass
 
@@ -89,12 +90,28 @@ def load_sorter_config(config_path: Path | str | None = None) -> dict[str, Any]:
                         save_sorter_config(tmpl_data, config_path=target)
                     except Exception:
                         pass
-                    return tmpl_data
+                    return apply_v2_defaults(tmpl_data)
         except Exception:
             pass
 
     # 4. Safe fallback defaults
     return copy.deepcopy(DEFAULT_SORTER_CONFIG)
+
+
+def _backup_v1_config(target: Path) -> None:
+    """Keep a one-time pristine copy (config.v1.json) before the first schema-v2 write."""
+    backup = target.with_name("config.v1.json")
+    if backup.exists() or not target.exists():
+        return
+    try:
+        existing = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(existing, dict) and existing.get("schema_version") is None:
+        try:
+            shutil.copy2(target, backup)
+        except OSError:
+            pass
 
 
 def save_sorter_config(config: dict[str, Any], config_path: Path | str | None = None) -> bool:
@@ -114,7 +131,9 @@ def save_sorter_config(config: dict[str, Any], config_path: Path | str | None = 
     target = Path(config_path) if config_path else SORTER_CONFIG_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target.parent / f"{target.name}.tmp.{uuid.uuid4().hex}"
-    content = json.dumps(config, indent=2, ensure_ascii=False)
+    # Persist schema v2 (unknown user keys are kept; caller's dict is not mutated).
+    payload = apply_v2_defaults(copy.deepcopy(config))
+    content = json.dumps(payload, indent=2, ensure_ascii=False)
 
     try:
         with open(temp_path, "w", encoding="utf-8") as f:
@@ -130,6 +149,7 @@ def save_sorter_config(config: dict[str, Any], config_path: Path | str | None = 
         raise
 
     with _sorter_config_write_lock:
+        _backup_v1_config(target)
         # 4. Backup existing config
         bak_path = target.with_name(target.name + ".bak")
         if target.exists():

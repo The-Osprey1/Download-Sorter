@@ -15,6 +15,7 @@ if /i "%~1"=="/quiet" set "SILENT=1"
 
 echo =======================================================
 echo          Download Sorter - Quick Setup
+echo          Made by Devyn Fidel (2026)
 echo =======================================================
 echo.
 
@@ -154,6 +155,14 @@ if /i not "!INSTALL_MENU!"=="n" (
 echo.
 echo [*] Starting Download Sorter system tray icon...
 start "" ".venv\Scripts\pythonw.exe" tray.py
+
+echo.
+set /p RUN_REMODEL="Do you have old/messy folders you'd like to remodel and organize? [y/N]: "
+if /i "%RUN_REMODEL%"=="y" (
+    echo [*] Opening Machine Remodel Wizard...
+    start "" ".venv\Scripts\pythonw.exe" rules_manager.py --tab remodel
+)
+
 echo.
 echo =======================================================
 echo  Setup complete! Look for the folder icon in your tray.

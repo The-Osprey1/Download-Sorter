@@ -4,6 +4,7 @@ cd /d "%~dp0"
 
 echo =======================================================
 echo          Download Sorter - One-Click Updater
+echo          Made by Devyn Fidel (2026)
 echo =======================================================
 echo.
 

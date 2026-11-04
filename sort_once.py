@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import about
 from pathlib import Path
 import sys
 import uuid
@@ -19,6 +20,7 @@ from sorter import (
 def main() -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Sort Downloads and sweep Documents.")
+    parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument(
         "-n",
         "--dry-run",

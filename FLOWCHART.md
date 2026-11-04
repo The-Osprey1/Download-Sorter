@@ -1,5 +1,7 @@
 # Download Sorter Architecture & Processing Flowchart
 
+_Made by Devyn Fidel (2026)_
+
 This document details the complete end-to-end decision lifecycle of files processed by the Download Sorter background daemon, interactive desktop modules, and configuration management engine.
 
 ---

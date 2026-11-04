@@ -1,11 +1,14 @@
-# download-sorter
+# Download Sorter
+
+> **Made by Devyn Fidel (2026)** · v2.0.0 · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
-[![Tests Passing](https://img.shields.io/badge/tests-758%20passed-69E6AD.svg?style=flat)](tests/)
+[![Author: Devyn Fidel](https://img.shields.io/badge/author-Devyn%20Fidel-69E6AD.svg)](https://github.com/The-Osprey1/Download-Sorter)
+[![Tests Passing](https://img.shields.io/badge/tests-1064%20passed-69E6AD.svg?style=flat)](tests/)
 
 A lightweight, local-first automated file organizer for Windows that keeps your **Downloads** and **Documents** folders organized without sending your data to any cloud service.
 
@@ -347,6 +350,15 @@ Yes! Download Sorter automatically checks Windows Shell Known Folders (`FOLDERID
 
 ---
 
+## Credits
+
+**Download Sorter** was created by **Devyn Fidel** (2026).
+Source: https://github.com/The-Osprey1/Download-Sorter
+
+Every surface that shows credit (tray tooltip and menu, `status`, the Rules Manager footer and *About* dialog, every CLI's `--version`, `setup.bat`, `update.bat`) reads it from the single `about.py` module, so the credit line is always identical.
+
+---
+
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](LICENSE) - Copyright (c) 2026 Devyn Fidel.

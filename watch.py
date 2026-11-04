@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import logging
 from pathlib import Path
@@ -16,6 +17,7 @@ from watchdog.observers import Observer
 from sorter import (
     ACTIVE_PROJECT_FILE,
     CONFIG_PATH,
+    DEFAULT_SETTLE_SECONDS,
     DEFAULT_CONFIG_PATH,
     PAUSE_FILE,
     RoutingContext,
@@ -23,6 +25,7 @@ from sorter import (
     get_default_config,
     document_roots,
     is_incomplete,
+    is_keep_protected,
     is_file_ready_to_move,
     is_cloud_placeholder,
     is_ignored_directory,
@@ -52,9 +55,9 @@ WAKE_EVENT = threading.Event()
 
 def _settle_seconds(config: dict) -> float:
     try:
-        return max(0.0, float(config.get("watch", {}).get("settle_seconds", 1.5)))
+        return max(0.0, float(config.get("watch", {}).get("settle_seconds", DEFAULT_SETTLE_SECONDS)))
     except (TypeError, ValueError):
-        return 1.5
+        return DEFAULT_SETTLE_SECONDS
 
 
 def _enqueue(kind: str, bucket: set[Path], path: Path, config: dict) -> None:
@@ -226,7 +229,12 @@ class DocumentsHandler(FileSystemEventHandler):
             self._queue(event.src_path)
 
 
-def _handle_post_move(dest: Path, target_root: Path, config: dict) -> None:
+def _handle_post_move(
+    dest: Path,
+    target_root: Path,
+    config: dict,
+    batch_id: str | None = None,
+) -> None:
     """Notify user via ribbon popup and record recent file for quick switcher, gated by config."""
     if config.get("ribbon_enabled", True) and config.get("notifications", True):
         try:
@@ -237,7 +245,10 @@ def _handle_post_move(dest: Path, target_root: Path, config: dict) -> None:
     if config.get("quick_switcher_enabled", True):
         try:
             from quick_switcher import record_recent_file
-            record_recent_file(dest, target_root)
+            if batch_id is not None:
+                record_recent_file(dest, target_root, batch_id=batch_id)
+            else:
+                record_recent_file(dest, target_root)
         except Exception as err:
             logging.debug("Quick switcher record skipped: %s", err)
 
@@ -246,6 +257,7 @@ def drain(
     config: dict,
     root: Path | None = None,
     routing_context: RoutingContext | None = None,
+    on_activity: Callable[[int], None] | None = None,
 ) -> int:
     moved_count = 0
     if is_paused():
@@ -267,15 +279,24 @@ def drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    _handle_post_move(dest, target_root, config)
+                    _handle_post_move(dest, target_root, config, batch_id=batch_id)
                 elif (
                     path.exists()
                     and path.is_file()
                     and not is_quarantined(path)
                     and not is_cloud_placeholder(path)
                     and not is_incomplete(path, config, routing_context)
+                    and not is_keep_protected(path)
                 ):
-                    _retry("download", PENDING_DOWNLOADS, path)
+                    import hold_manager
+                    if hold_manager.is_held(path):
+                        if on_activity is not None:
+                            try:
+                                on_activity(0)
+                            except Exception:
+                                logging.debug("Activity callback for held file failed")
+                    else:
+                        _retry("download", PENDING_DOWNLOADS, path)
             except Exception:
                 logging.exception("Failed sorting %s", path)
 
@@ -298,7 +319,7 @@ def drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    _handle_post_move(dest, target_root, config)
+                    _handle_post_move(dest, target_root, config, batch_id=batch_id)
             except Exception:
                 logging.exception("Failed relocating %s", path)
 
@@ -321,9 +342,26 @@ def drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    _handle_post_move(dest, target_root, config)
+                    _handle_post_move(dest, target_root, config, batch_id=batch_id)
             except Exception:
                 logging.exception("Failed auto-correcting misplaced file for %s", path)
+
+    # Check held 3MF releases
+    try:
+        import hold_manager
+        releases = hold_manager.check_releases(config)
+        for src, dest in releases:
+            try:
+                import safe_ops
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                final = safe_ops.move(src, dest, batch_id="hold_release")
+                moved_count += 1
+                _handle_post_move(final, target_root, config, batch_id="hold_release")
+            except Exception as exc:
+                logging.warning("Failed moving released held file %s: %s", src, exc)
+    except Exception as exc:
+        logging.debug("Hold manager check releases skipped: %s", exc)
+
     return moved_count
 
 
@@ -610,7 +648,7 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
                 for dh in doc_handlers:
                     dh.update_config(config, routing_context)
 
-            moved = drain(config, root=root, routing_context=routing_context)
+            moved = drain(config, root=root, routing_context=routing_context, on_activity=on_sorted)
             if moved and on_sorted is not None:
                 try:
                     on_sorted(moved)
@@ -626,6 +664,9 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
 
 
 def main() -> int:
+    import about
+    if about.handle_version_flag():
+        return 0
     setup_logging()
     lock = acquire_single_instance_lock()
     if not lock:

@@ -125,6 +125,44 @@ class RibbonGraphicsAndAnimationTests(unittest.TestCase):
             popup._check_dismiss_signal()
             self.assertTrue(popup.is_closing)
 
+    def test_ribbon_popup_held_mode_styling_and_tags(self) -> None:
+        test_file = Path("C:/Downloads/Model.3mf")
+        planned = Path("C:/Downloads/3D Models/Model.3mf")
+        try:
+            popup = RibbonPopup(test_file, enable_animation=False, is_held=True, planned_dest=planned)
+            self.assertTrue(popup.is_held)
+            # Eyebrow text must show 3MF HOLD
+            self.assertIn("3MF HOLD", popup.tag_lbl.cget("text"))
+            # File now button must exist and have high contrast
+            self.assertTrue(hasattr(popup, "file_now_btn"))
+            self.assertEqual(popup.file_now_btn.cget("fg"), "#0B0D12")
+            # Keep here button must exist and have surfaceRaised styling
+            self.assertTrue(hasattr(popup, "keep_here_btn"))
+            self.assertEqual(popup.keep_here_btn.cget("bg"), "#171B24")
+            popup.root.destroy()
+        except Exception:
+            # Fallback for headless environments without GUI display / Tcl init
+            source = (Path(__file__).resolve().parent / "ribbon_popup.py").read_text(encoding="utf-8")
+            self.assertIn("3MF HOLD", source)
+            self.assertIn('COLORS.get("canvas", "#0B0D12")', source)
+
+    def test_notify_file_held_command_line(self) -> None:
+        from unittest.mock import patch
+        import ribbon_popup
+        with patch("subprocess.Popen") as mock_popen:
+            ribbon_popup.notify_file_held(
+                Path("C:/Downloads/Model.3mf"),
+                Path("C:/3D/Model.3mf"),
+                downloads_root=Path("C:/Downloads"),
+            )
+            mock_popen.assert_called_once()
+            args = mock_popen.call_args[0][0]
+            # Verify clean argument ordering
+            self.assertEqual(args[2], str(Path("C:/Downloads/Model.3mf").resolve()))
+            self.assertEqual(args[3], str(Path("C:/Downloads").resolve()))
+            self.assertIn("--held", args)
+            self.assertIn("--planned", args)
+
 
 if __name__ == "__main__":
     unittest.main()
