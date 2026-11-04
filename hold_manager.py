@@ -224,6 +224,12 @@ def hold_file(
         if key in held and held[key].get("keep_here"):
             return True
 
+        # Already held and unchanged (e.g. the startup sweep sees it again): keep the
+        # existing schedule instead of pushing the release out by another hold period.
+        existing = held.get(key)
+        if existing and int(existing.get("size", -1)) == size and abs(float(existing.get("mtime", 0)) - mtime) <= 2.0:
+            return True
+
         # Enforce max held cap
         if len(held) >= max_held and key not in held:
             # Drop or release the oldest eligible file
@@ -295,36 +301,38 @@ def remove_held(path: Path | str) -> None:
 
 
 def file_now(path: Path | str, config: dict | None = None) -> Path | None:
-    """User chosen override: immediately file this .3mf file to its planned destination."""
+    """User chosen override: immediately file this .3mf file to its planned destination.
+
+    The hold is only removed once the move has succeeded; if it fails the file keeps
+    its hold (and its scheduled release) so nothing is forgotten.
+    """
     p = Path(path).resolve()
     key = str(p)
     dest_target: Path | None = None
 
     with state_lock():
         state = read_state()
-        held = state.get("held", {})
-        rec = held.get(key)
+        rec = state.get("held", {}).get(key)
         if rec and rec.get("planned_dest"):
             dest_target = Path(rec["planned_dest"])
-        if key in held:
-            del held[key]
-            write_state(state)
 
     if not p.exists():
+        remove_held(p)
         return None
 
     if dest_target is None:
         cfg = config if config is not None else sorter.load_config()
         dest_target = sorter.sort_destination(p, cfg)
 
-    dest_target.parent.mkdir(parents=True, exist_ok=True)
     try:
+        dest_target.parent.mkdir(parents=True, exist_ok=True)
         final_dest = safe_ops.move(p, dest_target, batch_id="file_now", settle_seconds=0.0)
-        logging.info("3MF 'File Now' completed: %s -> %s", p.name, final_dest)
-        return final_dest
     except Exception as exc:
         logging.error("Failed executing 'File Now' for %s: %s", p, exc)
         return None
+    remove_held(p)
+    logging.info("3MF 'File Now' completed: %s -> %s", p.name, final_dest)
+    return final_dest
 
 
 def check_releases(
@@ -393,8 +401,9 @@ def check_releases(
             if not planned or str(planned) == ".":
                 planned = sorter.sort_destination(p, config)
 
+            # The record stays until the caller reports a successful move
+            # (remove_held) or a failure (release_failed).
             ready.append((p, planned))
-            to_delete.append(key)
 
         if to_delete or to_update:
             for k in to_delete:
@@ -404,6 +413,27 @@ def check_releases(
             write_state(state)
 
     return ready
+
+
+RELEASE_RETRY_SECONDS = 3600.0
+
+
+def release_failed(path: Path | str, error: object = "", retry_seconds: float = RELEASE_RETRY_SECONDS) -> None:
+    """Keep a hold whose release move failed, and try again after ``retry_seconds``."""
+    key = str(Path(path).resolve())
+    with state_lock():
+        state = read_state()
+        rec = state.get("held", {}).get(key)
+        if not rec:
+            return
+        rec["release_failures"] = int(rec.get("release_failures", 0)) + 1
+        rec["last_release_error"] = str(error)
+        rec["release_at"] = time.time() + float(retry_seconds)
+        try:
+            rec["mtime"] = Path(key).stat().st_mtime
+        except OSError:
+            pass
+        write_state(state)
 
 
 def get_held_summary() -> dict:

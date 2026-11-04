@@ -14,7 +14,7 @@ from sorter import HISTORY_FILE
 
 
 def is_test_record(record: dict) -> bool:
-    values = (str(record.get("src", "")), str(record.get("dest", "")))
+    values = (str(record.get("src", "")), str(record.get("dest", "")), str(record.get("archive", "")))
     return any("\\Temp\\pytest-of-" in value or "/Temp/pytest-of-" in value for value in values)
 
 

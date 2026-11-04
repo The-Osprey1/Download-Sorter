@@ -34,7 +34,7 @@ SERVICE_DISABLED_FILE = LOG_DIR / "service_disabled"
 # History records whose "action" is one of these are bookkeeping, not user-visible moves:
 # they are never counted as "files filed today" and Undo never offers to reverse them.
 NON_MOVE_ACTIONS = frozenset({
-    "undo", "planned", "aborted", "needs_review", "aux_move", "link",
+    "undo", "planned", "aborted", "needs_review", "aux_move", "link", "extract",
 })
 
 # Default minimum quiet time before a file is considered finished being written.
@@ -344,6 +344,29 @@ def record_history(src: Path, dest: Path, batch_id: str = "") -> None:
         logging.warning("Failed to write history record: %s", exc)
 
 
+def record_extraction(archive: Path, outputs: list[Path], batch_id: str = "") -> None:
+    """Note what an archive was extracted to.
+
+    This is bookkeeping, not a move: the zip's own trip to Archives is recorded as a
+    normal (undoable) move by safe_ops, and Undo restores the zip from there.  The
+    extracted copies are left in place for the user to keep or delete.
+    """
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        record = {
+            "id": uuid.uuid4().hex,
+            "action": "extract",
+            "batch_id": batch_id or uuid.uuid4().hex[:8],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "archive": str(Path(archive)),
+            "outputs": [str(Path(o)) for o in outputs],
+        }
+        with HISTORY_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception as exc:
+        logging.warning("Failed to write extraction record: %s", exc)
+
+
 def write_runtime_state(status: str, detail: str = "") -> None:
     """Atomically persist a low-frequency lifecycle/heartbeat snapshot."""
     try:
@@ -527,6 +550,75 @@ def clear_failure(path: Path) -> None:
     failures = load_failures()
     if failures.pop(failure_key(path), None) is not None:
         save_failures()
+
+
+# ---------------------------------------------------------------------------
+# Files put back by Undo
+# ---------------------------------------------------------------------------
+# When Undo restores a file to Downloads (or Documents), the watcher sees it arrive
+# and would sort it straight back out again.  A restored file is therefore left
+# where it is until it changes (edited, renamed or replaced), exactly like the
+# move-failure list above.
+
+def _restored_file() -> Path:
+    return Path(LOG_DIR) / "restored_files.json"
+
+
+def _load_restored() -> dict:
+    try:
+        with _restored_file().open(encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_restored(data: dict) -> None:
+    target = _restored_file()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+        temp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(temp, target)
+    except OSError as exc:
+        logging.debug("Could not save restored-file list: %s", exc)
+
+
+def remember_restored(path: Path) -> None:
+    """Mark a file Undo just put back so the sorter leaves it alone until it changes."""
+    path = Path(path)
+    data = {k: v for k, v in _load_restored().items() if Path(v.get("path", "")).exists()}
+    if path.is_file():
+        data[failure_key(path)] = {
+            "path": str(path),
+            "signature": file_signature(path),
+            "restored_at": datetime.now(timezone.utc).isoformat(),
+        }
+    elif path.is_dir():
+        for child in path.rglob("*"):
+            if child.is_file():
+                data[failure_key(child)] = {
+                    "path": str(child),
+                    "signature": file_signature(child),
+                    "restored_at": datetime.now(timezone.utc).isoformat(),
+                }
+    _save_restored(data)
+
+
+def is_restored_by_undo(path: Path) -> bool:
+    """True while ``path`` is a file Undo put back and nobody has changed it since."""
+    data = _load_restored()
+    if not data:
+        return False
+    key = failure_key(Path(path))
+    entry = data.get(key)
+    if not entry:
+        return False
+    if entry.get("signature") == file_signature(Path(path)):
+        return True
+    data.pop(key, None)
+    _save_restored(data)
+    return False
 
 
 def record_move_failure(path: Path, exc: Exception) -> None:
@@ -1388,6 +1480,84 @@ def is_file_ready_to_move(path: Path, settle_seconds: float) -> bool:
         return False
 
 
+DUPLICATES_DIR_NAME = "_Duplicates"
+
+# Download Sorter's own working folders inside Downloads; never sorted or rescued.
+INTERNAL_DIR_NAMES = frozenset({DUPLICATES_DIR_NAME.lower(), "_remodel quarantine", ".batch_stage"})
+
+
+def is_internal_path(path: Path, root: Path) -> bool:
+    """True for files inside Download Sorter's own working folders under ``root``."""
+    try:
+        rel = Path(path).resolve().relative_to(Path(root).resolve())
+    except (ValueError, OSError):
+        return False
+    return bool(rel.parts) and rel.parts[0].lower() in INTERNAL_DIR_NAMES
+
+
+def hold_applies(path: Path, config: dict, batch_id: str = "") -> bool:
+    """True when the grace-period hold covers this file (and this is not a release)."""
+    hold_cfg = config.get("hold", {})
+    hold_exts = [e.lower() for e in hold_cfg.get("extensions", [".3mf"])]
+    return (
+        bool(hold_cfg.get("enabled", True))
+        and path.suffix.lower() in hold_exts
+        and batch_id not in ("file_now", "hold_release")
+    )
+
+
+def hold_in_place(
+    path: Path,
+    config: dict,
+    destination: Path,
+    batch_id: str = "",
+    dry_run: bool = False,
+    downloads: Path | None = None,
+) -> bool:
+    """Decide whether the hold keeps ``path`` where it is.
+
+    Returns True when the file must stay put (marked "Keep here", or newly held).
+    A dry run only reports what would happen: it never registers or resets a hold
+    and never shows a notification.
+    """
+    if not hold_applies(path, config, batch_id):
+        return False
+    import hold_manager
+    if hold_manager.is_keep_here(path):
+        logging.debug("3MF file %s is marked keep_here; skipping move", path.name)
+        return True
+    if dry_run:
+        if hold_manager.is_held(path):
+            logging.info("[DRY-RUN] %s is already held in place (planned: %s)", path.name, destination)
+        else:
+            logging.info("[DRY-RUN] Would hold %s in place (planned: %s)", path.name, destination)
+        return True
+    meta_3mf = None
+    try:
+        from gcode_peek import parse_3mf
+        meta_3mf = parse_3mf(path)
+    except Exception:
+        pass
+    if not hold_manager.hold_file(path, config, destination, meta=meta_3mf):
+        return False
+    logging.info("3MF file held in place: %s (planned: %s)", path.name, destination)
+    if config.get("ribbon_enabled", True) and config.get("notifications", True):
+        try:
+            from ribbon_popup import notify_file_held
+            if downloads is not None:
+                notify_file_held(path, destination, meta_3mf, downloads_root=downloads)
+            else:
+                notify_file_held(path, destination, meta_3mf)
+        except Exception as err:
+            logging.debug("Ribbon hold notification skipped: %s", err)
+    return True
+
+
+def duplicates_folder(downloads: Path) -> Path:
+    """Where exact duplicates go instead of being deleted: Downloads\\_Duplicates\\YYYY-MM."""
+    return Path(downloads) / DUPLICATES_DIR_NAME / datetime.now().strftime("%Y-%m")
+
+
 def move_file(
     path: Path,
     config: dict,
@@ -1405,6 +1575,8 @@ def move_file(
     if is_incomplete(path, config, routing_context):
         return None
     if is_cloud_placeholder(path):
+        return None
+    if is_restored_by_undo(path):
         return None
     if is_quarantined(path):
         return None
@@ -1440,47 +1612,36 @@ def move_file(
 
     reason = routing["matched_trigger"]
     primary_target = destination_dir / path.name
-
-    # Intelligent Deduplication: if exact duplicate already exists in target folder, prune redundant download
-    if primary_target.exists() and are_files_identical(path, primary_target):
-        if dry_run:
-            logging.info("[DRY-RUN] Exact duplicate already exists in %s; would delete download %s", destination_dir, path.name)
-            return primary_target
-        try:
-            path.unlink()
-            logging.info("Exact duplicate already exists at %s; removed download %s", primary_target, path.name)
-            return primary_target
-        except OSError as exc:
-            logging.warning("Could not remove redundant duplicate %s: %s", path.name, exc)
-
     destination = unique_destination(destination_dir, path.name)
-    # Check 3MF grace-period hold
-    hold_cfg = config.get("hold", {})
-    hold_exts = [e.lower() for e in hold_cfg.get("extensions", [".3mf"])]
-    if (
-        hold_cfg.get("enabled", True)
-        and path.suffix.lower() in hold_exts
-        and batch_id != "file_now"
-        and batch_id != "hold_release"
-    ):
-        import hold_manager
-        if hold_manager.is_keep_here(path):
-            logging.debug("3MF file %s is marked keep_here; skipping move", path.name)
-            return None
-        meta_3mf = None
+
+    # Retention first: "Keep here" and the grace-period hold win over everything
+    # else, including duplicate cleanup (a slicer may have the held copy open).
+    if hold_in_place(path, config, destination, batch_id, dry_run, downloads=downloads):
+        return None
+
+    # Exact duplicate of a file already filed: quarantine it (journaled, so Undo can
+    # bring it back) instead of deleting it.
+    if primary_target.exists() and are_files_identical(path, primary_target):
+        dup_dir = duplicates_folder(downloads)
+        if dry_run:
+            logging.info(
+                "[DRY-RUN] Exact duplicate already exists at %s; would move %s to %s",
+                primary_target, path.name, dup_dir,
+            )
+            return primary_target
+        import safe_ops
         try:
-            from gcode_peek import parse_3mf
-            meta_3mf = parse_3mf(path)
-        except Exception:
-            pass
-        if hold_manager.hold_file(path, config, destination, meta=meta_3mf):
-            logging.info("3MF file held in Downloads: %s (planned: %s)", path.name, destination)
-            if config.get("ribbon_enabled", True) and config.get("notifications", True):
-                try:
-                    from ribbon_popup import notify_file_held
-                    notify_file_held(path, destination, meta_3mf, downloads_root=downloads)
-                except Exception as err:
-                    logging.debug("Ribbon hold notification skipped: %s", err)
+            parked = safe_ops.quarantine(path, dup_dir, batch_id=batch_id)
+            logging.info(
+                "Exact duplicate already exists at %s; moved download %s to %s",
+                primary_target, path.name, parked,
+            )
+            return primary_target
+        except safe_ops.Refused as refusal:
+            logging.debug("Left duplicate %s alone: %s", path.name, refusal.reason)
+            return None
+        except OSError as exc:
+            record_move_failure(path, exc)
             return None
 
 
@@ -1494,10 +1655,10 @@ def move_file(
                     logging.info("[DRY-RUN] Would auto-unpack %d 3D model(s) from %s into %s", len(model_files), path.name, destination_dir)
                     return destination
                 active_proj_arg = load_active_project() if routing["is_active_project"] else None
-                extracted = unpack_3d_archive(path, config, active_project=active_proj_arg)
+                extracted = unpack_3d_archive(path, config, active_project=active_proj_arg, batch_id=batch_id)
                 if extracted:
                     logging.info("Auto-unpacked %d 3D model file(s) from %s", len(extracted), path.name)
-                    record_history(path, extracted[0], batch_id)
+                    record_extraction(path, extracted, batch_id)
                     return extracted[0]
         except Exception as exc:
             logging.warning("Auto-unpack check failed for %s: %s", path.name, exc)
@@ -1512,10 +1673,10 @@ def move_file(
                 logging.info("[DRY-RUN] Would auto-unzip archive %s into %s", path.name, sim_dest)
                 return sim_dest
             active_proj_arg = load_active_project() if routing["is_active_project"] else None
-            landing_folder = unpack_archive(path, config, active_project=active_proj_arg)
+            landing_folder = unpack_archive(path, config, active_project=active_proj_arg, batch_id=batch_id)
             if landing_folder:
                 logging.info("Auto-unzipped archive %s -> %s", path.name, landing_folder)
-                record_history(path, landing_folder, batch_id)
+                record_extraction(path, [landing_folder], batch_id)
                 return landing_folder
         except Exception as exc:
             logging.warning("Auto-unzip failed for %s: %s", path.name, exc)
@@ -1552,6 +1713,8 @@ def relocate_from_documents(
     downloads = watch_root(config)
     if not should_relocate_from_documents(path, config, routing_context):
         return None
+    if is_restored_by_undo(path):
+        return None
     if is_under(path, downloads):
         return None
     if not any(is_under(path, source) for source in document_roots(config)):
@@ -1569,34 +1732,9 @@ def relocate_from_documents(
     else:
         destination_dir = folder_path(downloads, folder)
     destination = unique_destination(destination_dir, path.name)
-    # Check 3MF grace-period hold
-    hold_cfg = config.get("hold", {})
-    hold_exts = [e.lower() for e in hold_cfg.get("extensions", [".3mf"])]
-    if (
-        hold_cfg.get("enabled", True)
-        and path.suffix.lower() in hold_exts
-        and batch_id != "file_now"
-        and batch_id != "hold_release"
-    ):
-        import hold_manager
-        if hold_manager.is_keep_here(path):
-            logging.debug("3MF file %s is marked keep_here; skipping move", path.name)
-            return None
-        meta_3mf = None
-        try:
-            from gcode_peek import parse_3mf
-            meta_3mf = parse_3mf(path)
-        except Exception:
-            pass
-        if hold_manager.hold_file(path, config, destination, meta=meta_3mf):
-            logging.info("3MF file held in Downloads: %s (planned: %s)", path.name, destination)
-            if config.get("ribbon_enabled", True) and config.get("notifications", True):
-                try:
-                    from ribbon_popup import notify_file_held
-                    notify_file_held(path, destination, meta_3mf)
-                except Exception as err:
-                    logging.debug("Ribbon hold notification skipped: %s", err)
-            return None
+    # Retention first; a dry run never writes hold state or notifies.
+    if hold_in_place(path, config, destination, batch_id, dry_run):
+        return None
 
 
     dest_display = destination.relative_to(downloads) if is_under(destination, downloads) else str(destination)
@@ -1694,6 +1832,8 @@ def reclassify_misplaced_file(
     downloads = watch_root(config)
     if not path.exists() or not path.is_file():
         return None
+    if is_restored_by_undo(path) or is_internal_path(path, downloads):
+        return None
     if is_incomplete(path, config, routing_context):
         return None
     if is_cloud_placeholder(path):
@@ -1741,34 +1881,9 @@ def reclassify_misplaced_file(
     else:
         destination_dir = folder_path(downloads, target_folder)
     destination = unique_destination(destination_dir, path.name)
-    # Check 3MF grace-period hold
-    hold_cfg = config.get("hold", {})
-    hold_exts = [e.lower() for e in hold_cfg.get("extensions", [".3mf"])]
-    if (
-        hold_cfg.get("enabled", True)
-        and path.suffix.lower() in hold_exts
-        and batch_id != "file_now"
-        and batch_id != "hold_release"
-    ):
-        import hold_manager
-        if hold_manager.is_keep_here(path):
-            logging.debug("3MF file %s is marked keep_here; skipping move", path.name)
-            return None
-        meta_3mf = None
-        try:
-            from gcode_peek import parse_3mf
-            meta_3mf = parse_3mf(path)
-        except Exception:
-            pass
-        if hold_manager.hold_file(path, config, destination, meta=meta_3mf):
-            logging.info("3MF file held in Downloads: %s (planned: %s)", path.name, destination)
-            if config.get("ribbon_enabled", True) and config.get("notifications", True):
-                try:
-                    from ribbon_popup import notify_file_held
-                    notify_file_held(path, destination, meta_3mf)
-                except Exception as err:
-                    logging.debug("Ribbon hold notification skipped: %s", err)
-            return None
+    # Retention first; a dry run never writes hold state or notifies.
+    if hold_in_place(path, config, destination, batch_id, dry_run):
+        return None
 
 
     dest_display = destination.relative_to(downloads) if is_under(destination, downloads) else str(destination)

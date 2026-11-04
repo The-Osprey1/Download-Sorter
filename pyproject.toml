@@ -79,6 +79,7 @@ py-modules = [
     "config_manager",
     "gcode_peek",
     "hold_manager",
+    "main",
     "quick_switcher",
     "remodel",
     "ribbon_popup",

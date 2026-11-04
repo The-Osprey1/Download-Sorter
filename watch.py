@@ -25,7 +25,9 @@ from sorter import (
     get_default_config,
     document_roots,
     is_incomplete,
+    is_internal_path,
     is_keep_protected,
+    is_restored_by_undo,
     is_file_ready_to_move,
     is_cloud_placeholder,
     is_ignored_directory,
@@ -156,6 +158,10 @@ class DownloadsHandler(FileSystemEventHandler):
         try:
             rel = path.resolve().relative_to(self.root)
         except (ValueError, OSError):
+            return
+
+        # Download Sorter's own working folders (_Duplicates, remodel quarantine, batch staging)
+        if is_internal_path(path, self.root):
             return
 
         # Case 1: File is sitting directly at the top level of Downloads
@@ -300,6 +306,7 @@ def drain(
                     and not is_cloud_placeholder(path)
                     and not is_incomplete(path, config, routing_context)
                     and not is_keep_protected(path)
+                    and not is_restored_by_undo(path)
                 ):
                     import hold_manager
                     if hold_manager.is_held(path):
@@ -359,23 +366,42 @@ def drain(
             except Exception:
                 logging.exception("Failed auto-correcting misplaced file for %s", path)
 
-    # Check held 3MF releases
-    try:
-        import hold_manager
-        releases = hold_manager.check_releases(config)
-        for src, dest in releases:
-            try:
-                import safe_ops
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                final = safe_ops.move(src, dest, batch_id="hold_release")
-                moved_count += 1
-                _handle_post_move(final, target_root, config, batch_id="hold_release")
-            except Exception as exc:
-                logging.warning("Failed moving released held file %s: %s", src, exc)
-    except Exception as exc:
-        logging.debug("Hold manager check releases skipped: %s", exc)
+    moved_count += process_hold_releases(config, target_root)
 
     return moved_count
+
+
+def process_hold_releases(config: dict, target_root: Path) -> int:
+    """File every held .3mf whose grace period is over.
+
+    A hold is only dropped after its file has actually been moved.  If the move is
+    refused or fails, the hold stays and is retried later (see
+    ``hold_manager.release_failed``), so a file is never left unsorted with no
+    record of why.
+    """
+    moved = 0
+    try:
+        import hold_manager
+        import safe_ops
+        releases = hold_manager.check_releases(config)
+    except Exception as exc:
+        logging.debug("Hold manager check releases skipped: %s", exc)
+        return 0
+    for src, dest in releases:
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            final = safe_ops.move(src, dest, batch_id="hold_release")
+        except Exception as exc:
+            hold_manager.release_failed(src, exc)
+            logging.warning("Could not file held %s yet (%s); will retry", src.name, exc)
+            continue
+        hold_manager.remove_held(src)
+        moved += 1
+        try:
+            _handle_post_move(final, target_root, config, batch_id="hold_release")
+        except Exception:
+            logging.exception("Post-move handling failed for %s", final)
+    return moved
 
 
 class ConfigReloader:
@@ -568,6 +594,75 @@ class WatchCoordinator:
         return fallback_due
 
 
+class FolderWatches:
+    """The Downloads and Documents subscriptions of one observer.
+
+    Live reload used to update the handlers' settings but keep the subscriptions
+    made at startup, so changing the watched folders needed a restart.
+    ``retarget`` compares the folders a new config asks for with the ones being
+    watched and re-subscribes when they differ.
+    """
+
+    def __init__(self, observer) -> None:
+        self.observer = observer
+        self.root: Path | None = None
+        self.sources: tuple[Path, ...] = ()
+        self.downloads_handler: DownloadsHandler | None = None
+        self.doc_handlers: list[DocumentsHandler] = []
+        self._watches: list = []
+
+    @staticmethod
+    def targets(config: dict) -> tuple[Path, tuple[Path, ...]]:
+        root = watch_root(config).resolve()
+        sources = tuple(Path(s).resolve() for s in document_roots(config))
+        return root, sources
+
+    def build(self, config: dict, routing_context: RoutingContext | None = None) -> None:
+        root, sources = self.targets(config)
+        self.root, self.sources = root, sources
+        self.downloads_handler = DownloadsHandler(root, config, routing_context)
+        self._watches = [self.observer.schedule(self.downloads_handler, str(root), recursive=True)]
+        logging.info("Watching %s (recursive, with category auto-correction)", root)
+        self.doc_handlers = []
+        for source in sources:
+            handler = DocumentsHandler(list(sources), root, config, routing_context)
+            self.doc_handlers.append(handler)
+            self._watches.append(self.observer.schedule(handler, str(source), recursive=True))
+            logging.info("Watching %s (recursive)", source)
+        if not sources:
+            logging.warning("No Documents sources found to watch")
+
+    def update_config(self, config: dict, routing_context: RoutingContext | None = None) -> None:
+        if self.downloads_handler is not None:
+            self.downloads_handler.update_config(config, routing_context)
+        for handler in self.doc_handlers:
+            handler.update_config(config, routing_context)
+
+    def retarget(self, config: dict, routing_context: RoutingContext | None = None) -> bool:
+        """Re-subscribe if the watched folders changed.  Returns True when they did."""
+        root, sources = self.targets(config)
+        if root == self.root and sources == self.sources:
+            return False
+        logging.info(
+            "Watched folders changed (%s, %d Documents source(s) -> %s, %d); re-subscribing",
+            self.root, len(self.sources), root, len(sources),
+        )
+        for watch in self._watches:
+            try:
+                self.observer.unschedule(watch)
+            except Exception as exc:  # pragma: no cover - observer already dropped it
+                logging.debug("Unschedule failed: %s", exc)
+        # Pending events belong to the old folders; the sweep after a retarget
+        # picks up anything that is in the new ones.
+        with QUEUE_LOCK:
+            PENDING_DOWNLOADS.clear()
+            PENDING_DOCUMENTS.clear()
+            PENDING_MISPLACED.clear()
+            PENDING_DEADLINES.clear()
+        self.build(config, routing_context)
+        return True
+
+
 def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
     """Watch the folders until stop is set. Safe to call from a background thread.
 
@@ -581,24 +676,8 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
 
     observer = Observer()
     coordinator = WatchCoordinator()
-    downloads_handler = DownloadsHandler(root, config, routing_context)
-    observer.schedule(downloads_handler, str(root), recursive=True)
-    logging.info("Watching %s (recursive, with category auto-correction)", root)
-
-    doc_handlers: list[DocumentsHandler] = []
-    sources = document_roots(config)
-    if sources:
-        dh0 = DocumentsHandler(sources, root, config, routing_context)
-        doc_handlers.append(dh0)
-        observer.schedule(dh0, str(sources[0]), recursive=True)
-        for extra in sources[1:]:
-            dhe = DocumentsHandler(sources, root, config, routing_context)
-            doc_handlers.append(dhe)
-            observer.schedule(dhe, str(extra), recursive=True)
-        for source in sources:
-            logging.info("Watching %s (recursive)", source)
-    else:
-        logging.warning("No Documents sources found to watch")
+    folders = FolderWatches(observer)
+    folders.build(config, routing_context)
 
     control_handler = ControlFileHandler(reloader)
     control_dirs = {CONFIG_PATH.resolve().parent, ACTIVE_PROJECT_FILE.resolve().parent, DEFAULT_CONFIG_PATH.resolve().parent}
@@ -657,9 +736,15 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
             if changed:
                 config = new_config
                 routing_context = reloader.routing_context
-                downloads_handler.update_config(config, routing_context)
-                for dh in doc_handlers:
-                    dh.update_config(config, routing_context)
+                if folders.retarget(config, routing_context):
+                    # Watched folders changed: behave as a restart would for the new
+                    # folders (sweep what is already there).
+                    root = watch_root(config)
+                    sweep_id = uuid.uuid4().hex[:8]
+                    sort_existing(config, batch_id=sweep_id, routing_context=routing_context)
+                    sort_existing_documents(config, batch_id=sweep_id, routing_context=routing_context)
+                else:
+                    folders.update_config(config, routing_context)
 
             moved = drain(config, root=root, routing_context=routing_context, on_activity=on_sorted)
             if moved and on_sorted is not None:

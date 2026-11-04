@@ -118,7 +118,14 @@ def undo_moves(targets: list[dict], dry_run: bool = False) -> int:
                 except Exception:
                     pass
         except safe_ops.Refused as refusal:
-            logging.warning("Skipped undo of %s (%s); try again when it is no longer in use", dest_path.name, refusal.reason)
+            if refusal.reason == "extraction-record":
+                logging.warning(
+                    "Skipped %s: it was extracted from %s, which is in your Archives folder; "
+                    "the extracted folder was left as it is",
+                    dest_path.name, src_path.name,
+                )
+            else:
+                logging.warning("Skipped undo of %s (%s); try again when it is no longer in use", dest_path.name, refusal.reason)
         except OSError as exc:
             logging.error("Failed to restore %s: %s", dest_path, exc)
 

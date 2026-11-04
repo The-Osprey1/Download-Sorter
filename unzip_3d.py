@@ -7,7 +7,6 @@ import about
 import logging
 import os
 import math
-import shutil
 import sys
 import time
 import zipfile
@@ -73,8 +72,15 @@ def unpack_3d_archive(
     config: dict,
     dry_run: bool = False,
     active_project: dict | None = None,
+    batch_id: str = "",
 ) -> list[Path]:
-    """Extract 3D models from zip archive into 3D Models directory or active project and move zip to Archives."""
+    """Extract 3D models from zip archive into 3D Models directory or active project and move zip to Archives.
+
+    The archive is checked against ``config["archive_limits"]`` before anything is
+    decompressed; if a limit is exceeded, or extraction fails part-way, the files this
+    call already wrote are removed again and an empty list is returned.  The move of
+    the original zip to Archives is an ordinary, undoable move.
+    """
     archive_path = archive_path.resolve()
     if not archive_path.exists() or not archive_path.is_file():
         return []
@@ -127,6 +133,15 @@ def unpack_3d_archive(
 
     try:
         with zipfile.ZipFile(archive_path, "r") as z:
+            budget = [0]
+            if not dry_run:
+                from unzip_archive import ArchiveLimitError, archive_limits, check_archive_limits
+                members = [z.getinfo(name) for name in model_files]
+                try:
+                    budget = [check_archive_limits(z, members, target_root, archive_limits(config))]
+                except ArchiveLimitError as exc:
+                    logging.warning("Not unpacking %s: %s", archive_path.name, exc)
+                    return []
             for zip_internal_path in model_files:
                 file_name = Path(zip_internal_path).name
 
@@ -156,10 +171,10 @@ def unpack_3d_archive(
                     continue
 
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                with z.open(zip_internal_path) as src, open(target_file, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                logging.info("Extracted %s -> %s", file_name, dest_display)
+                from unzip_archive import copy_member_limited
                 extracted_paths.append(target_file)
+                copy_member_limited(z, z.getinfo(zip_internal_path), target_file, budget)
+                logging.info("Extracted %s -> %s", file_name, dest_display)
 
         # Move original zip to Archives
         if not dry_run:
@@ -171,13 +186,21 @@ def unpack_3d_archive(
                 else str(zip_destination)
             )
             try:
-                safe_ops.move(archive_path, zip_destination, settle_seconds=0.0, undoable=False, honor_keep=False, skip_preflight=True)
+                safe_ops.move(archive_path, zip_destination, batch_id=batch_id, settle_seconds=0.0, honor_keep=False, skip_preflight=True)
                 logging.info("Moved original zip -> %s", zip_display)
             except (OSError, safe_ops.Refused) as exc:
                 logging.warning("Could not move zip %s: %s", archive_path.name, exc)
 
     except Exception as exc:
         logging.error("Failed unpacking %s: %s", archive_path.name, exc)
+        if not dry_run:
+            # Roll back the files this call created; the zip itself was not touched.
+            for created in extracted_paths:
+                try:
+                    created.unlink()
+                except OSError:
+                    pass
+            return []
 
     return extracted_paths
 

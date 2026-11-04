@@ -55,6 +55,9 @@ TEMP_SAVE_PATTERNS: tuple[str, ...] = (
 
 _JOURNAL_LOCK = threading.RLock()
 
+# Archive types the sorter extracts; used to recognise old extraction records.
+ARCHIVE_SUFFIXES: frozenset[str] = frozenset({".zip"})
+
 
 class Refused(Exception):
     """A pre-flight safety check declined the operation (nothing was touched)."""
@@ -374,6 +377,11 @@ def restore(entry: dict[str, Any], *, settle_seconds: float = 0.0) -> Path | Non
     src_path = Path(entry["src"])
     if not dest_path.exists():
         return None
+    if dest_path.is_dir() and src_path.suffix.lower() in ARCHIVE_SUFFIXES:
+        # Pre-2.0.2 extraction record ("archive.zip -> extracted folder").  Moving the
+        # folder back would leave a directory named like the zip; the zip itself is in
+        # Archives.  Refuse instead of producing that.
+        raise Refused("extraction-record", dest_path)
     if dest_path.is_file():
         why = preflight(dest_path, settle_seconds, honor_keep=False)
         if why:
@@ -388,6 +396,10 @@ def restore(entry: dict[str, Any], *, settle_seconds: float = 0.0) -> Path | Non
         if dest_path.exists() and not final.exists():
             _abort(op_id, f"{type(exc).__name__}: {exc}")
         raise
+    try:
+        sorter.remember_restored(final)
+    except Exception as exc:  # pragma: no cover - bookkeeping only
+        logging.debug("Could not mark %s as restored: %s", final, exc)
     append_journal({
         "id": uuid.uuid4().hex,
         "action": "undo",
