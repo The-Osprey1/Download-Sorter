@@ -12,7 +12,7 @@
 
 A lightweight, local-first automated file organizer for Windows that keeps your **Downloads** and **Documents** folders organized without sending your data to any cloud service.
 
-Includes a **PySide6 Visual Rules Manager & Live Sandbox GUI**, **Curated Rule Presets Library**, **System Tray monitor**, **interactive High-DPI Desktop Ribbon toasts**, **reversible Undo**, and **3D Printing / CNC intelligence**. Available both as a **standalone Windows executable (no Python required)** and as an extensible Python package.
+Includes a **PySide6 Visual Rules Manager & Machine Remodel Wizard**, **Curated Rule Presets Library**, **3-Path Batch File Handoff Quick Switcher**, **3MF Grace-Period Hold for Bambu Studio**, **Staged Machine Remodel Engine**, **System Tray monitor**, **interactive High-DPI Desktop Ribbon toasts**, **reversible Undo**, and **3D Printing / CNC intelligence**. Available both as a **standalone Windows executable (no Python required)** and as an extensible Python package.
 
 ---
 
@@ -23,6 +23,7 @@ Newly downloaded files are routed into an organized tree directly inside your Do
 ```text
 Downloads/
   ├── 3D Models/
+  │     ├── MakerWorld/ (<Author>/<Model>/<Plate>.3mf)
   │     ├── STL/
   │     ├── 3MF/
   │     ├── OBJ/
@@ -49,162 +50,141 @@ Targeted CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`) found in Windows Docume
 
 ---
 
-## Key Features
+## Key Features in Version 2.0
 
-### 1. Visual Rules Manager & Live Simulator GUI (`rules_manager.py`)
-A sleek dark-mode desktop GUI built with **PySide6**:
-* **Rule Reordering & Precedence**: Drag or use Up/Down buttons to adjust precedence order between keyword rules and extension rules.
-* **Instant Keyword & Folder Editing**: Create custom rules, edit target paths, and toggle rules active/inactive with validation.
+### 1. Visual Rules Manager & Remodel Wizard (`rules_manager.py`)
+A sleek dark-mode desktop GUI built with **PySide6** and styled to the **Devyn Personal Suite** (`suite_theme.py`) design tokens:
+* **3 Dedicated Tabs**:
+  1. **Keyword Rules**: Reorder, add, edit, or disable keyword-based routing with drag-and-drop precedence.
+  2. **Extension Rules**: Organize file extensions into category folders.
+  3. **Machine Remodel**: Interactive folder cards to scan and remodel messy machine architectures with **Organize**, **Keep intact**, and **Skip** actions.
 * **Live Sandbox & Real-time Simulator**: Type any hypothetical filename (e.g. `ME3210_Exam_Review.pdf`, `bracket_op1.nc`, `vase_multicolor.3mf`) to watch the rule engine evaluate the match chain in real time, showing the winning rule, matched trigger, destination path, and classification badge.
-* **Temporary "Active Project" Catch-All**: Working on a sprint or engineering build? Flip on Active Project mode to route all incoming CAD, 3D models, and CNC programs directly to your active project directory with optional auto-expiry.
-* **Safe Atomic Persistence**: Changes are verified with schema validation, written to a temporary buffer with `fsync`, backed up to `config.json.bak`, and replaced atomically with transient lock retry handling.
+* **Curated Rule Presets Library**: Browse and 1-click import preset packs for School, Office, CAD/CAM, and Dev setups.
+* **Temporary "Active Project" Catch-All**: Route all incoming CAD, 3D models, and CNC programs directly to your active project directory with optional auto-expiry.
+* **Safe Atomic Persistence**: Changes are verified with schema validation, written with `fsync`, backed up to `config.json.bak`, and replaced atomically.
 
 ```powershell
 # Launch the Visual Rules Manager GUI
-.\.venv\Scripts\python.exe rules_manager.py
+download-sorter-gui
+# Or open directly to the Remodel tab
+download-sorter-gui --tab remodel
 ```
 
-### 2. Low-Resource Background Daemon & System Tray (`tray.py`)
-Run the unobtrusive system tray application:
-* **Background Watchdog**: Watches top-level Downloads and recursive Documents using low-CPU event hooks.
+### 2. 3-Path Batch File Handoff Quick Switcher (`quick_switcher.py`)
+Downloading multi-part models, document batches, or asset sets? The Quick Switcher coalesces downloads arriving within a 25-second window:
+* **Floating Switcher Pill**: Docks an unobtrusive floating pill directly beside any active Windows File Open / Upload dialog.
+* **3 Handoff Paths**:
+  * **`↵ Latest`** (`Ctrl+G`): Instantly injects the most recent file into the dialog.
+  * **`⇉ All N`** (`Ctrl+Shift+G`): Injects the entire batch simultaneously using hidden `.batch_stage` NTFS hardlinks (no disk duplication).
+  * **`⧉ Copy`** (`Ctrl+Shift+C`): Copies all batch files to the Windows clipboard as a native `CF_HDROP` file list for immediate pasting with `Ctrl+V`.
+* **Native OLE Drag & Drop**: Drag the pill or individual files directly into CAD, slicers, or Explorer folders.
+* **Interactive Hover Checklist**: Hover over the pill to untick unwanted files before committing the handoff.
+
+### 3. 3MF Grace-Period Hold & MakerWorld Intelligence (`hold_manager.py`)
+Moving `.3mf` files immediately often breaks Bambu Studio's in-app shortcuts, recent projects, and `Ctrl+S` incremental saves. Version 2 solves this:
+* **7-Day Idle Hold**: Incoming `.3mf` files remain in `Downloads\` for up to 7 days without relocation.
+* **Slicer Process Awareness**: Checks if Bambu Studio, OrcaSlicer, or PrusaSlicer are running or holding file locks; holds are extended up to 14 days while actively in use.
+* **Desktop Ribbon Thumbnail Preview**: Parses and displays the embedded plate preview thumbnail inside the ribbon banner, with **`File now`** and **`Keep here`** buttons.
+* **Empirical MakerWorld Detection**: Secure `defusedxml` parser distinguishes MakerWorld downloads from local saves, routing models to `3D Models\MakerWorld\<Author>\<Model>\<Plate>.3mf`.
+* **System Tray Indicator**: Real-time tray badge showing currently held 3MF counts and remaining hold duration.
+
+### 4. Staged Machine Remodel Engine (`remodel.py`)
+Safely remodel old or messy PCs with chaotic file structures:
+* **Deep Engineering & Simulation Protections**: Automatically identifies and leaves intact:
+  * **SOLIDCast**: `.fsimodel9`, `.fsimodel*`, `.afs`, `.gdproj`, `.fsimaterials`, `FLOWCast.set`, `$mesh*.out`, `.abin`, `inuse.lok`.
+  * **MAGMASOFT**: `.magma`, `.magmainteract`, simulation output directories.
+  * **CAD Assemblies**: SolidWorks, Inventor, Fusion 360, STEP, IGES files.
+  * **Electronics**: KiCad (`.kicad_*`), Arduino (`.ino`, `.pde`).
+  * **Dev Repositories**: `.git`, `.venv`, `node_modules`, `build`, `dist`.
+  * **Active Folders**: Folders modified within 14 days.
+  * **Explicit Keep Marker**: Any folder containing `.download-sorter-keep`.
+* **3-Stage Deduplication**: File size grouping -> 64KB fast hash -> full SHA-256 + NTFS inode verification.
+* **30-Day Quarantine**: Moves duplicates to `<root>\_Remodel Quarantine\remodel_<id>\Duplicates\`.
+* **HTML Receipt & 1-Click Undo**: Generates a self-contained, searchable `Where did my files go.html` in the remodeled root, and supports instant reversal via `download-sorter-remodel --undo`.
+
+```powershell
+# Scan a folder and preview candidate cards
+download-sorter-remodel --scan "C:\Users\<user>\Downloads"
+
+# Dry run simulation
+download-sorter-remodel --dry-run "C:\Users\<user>\Downloads"
+
+# Apply remodel safely
+download-sorter-remodel --apply "C:\Users\<user>\Downloads"
+
+# Revert a remodel completely
+download-sorter-remodel --undo
+```
+
+### 5. Low-Resource Background Daemon & System Tray (`tray.py`)
+* **Background Watchdog**: Watches Downloads and Documents using low-CPU native event hooks.
 * **Single-Instance Mutex**: Prevents multiple daemon instances from colliding.
-* **Instant Tray Control**: Right-click the tray icon to pause/resume sorting, trigger a manual sort, undo recent moves, configure rules, or open folders.
-* **Live Daily Counter**: Hover over or view the tray menu to see how many files have been filed today.
+* **Instant Tray Control**: Right-click the tray icon to pause/resume sorting, trigger manual sorts, undo recent moves, remodel messy folders, or open rules.
+* **Live Daily Counter**: Displays files sorted today and active held 3MF models.
 
 ```powershell
 # Run the tray monitor (background watcher lives inside)
-.\.venv\Scripts\pythonw.exe tray.py
+download-sorter-tray
 ```
 
-### 3. Desktop Ribbon Toast Notifications (`ribbon_popup.py`)
-Whenever an incoming download lands and organizes:
-* **One-Click Reveal**: Click the notification pill to instantly highlight the sorted file in Windows File Explorer.
-* **Vertical Dynamic Stacking**: Simultaneous downloads automatically stack neatly down the right margin without overlapping.
-* **Per-Monitor High-DPI Awareness**: Crystal-clear typography on 100%, 125%, 150%, 175%, and 200% scaling.
-* **Dynamic Category Accents**: Distinct visual color accents for 3D/CAD (Mint), CNC/G-Code (Red), Documents (Blue), and Media.
+### 6. Desktop Ribbon Toast Notifications (`ribbon_popup.py`)
+* **One-Click Reveal**: Click the notification pill to highlight sorted files in Windows File Explorer.
+* **3MF Plate Previews**: Embedded thumbnails with quick **File now** and **Keep here** actions.
+* **Vertical Dynamic Stacking**: Stacks simultaneous downloads neatly down the right margin.
+* **Per-Monitor High-DPI Awareness**: Crystal-clear typography on all display scaling levels.
 
-### 4. 3D Print Inspector & CNC Machine Sniffer (`gcode_peek.py`)
-* **Smart Content Sniffing**: Inspects the first lines of ambiguous toolpaths (`.nc`, `.tap`, `.gcode`, `.bgcode`) to differentiate Haas CNC machine coordinates (`G90 G54`, Haas postamble, program delimiters) from 3D printer slicers (Bambu Studio, PrusaSlicer, Klipper layer comments).
-* **Embedded Thumbnail Extraction**: Pulls embedded preview thumbnails from `.3mf` and `.gcode` slices directly to disk.
+### 7. 3D Print Inspector & CNC Machine Sniffer (`gcode_peek.py`)
+* **Haas vs 3D Detection**: Inspects initial lines of ambiguous toolpaths (`.nc`, `.tap`, `.gcode`, `.bgcode`) to differentiate Haas CNC machine programs from 3D slicer outputs.
+* **Embedded Thumbnail Extraction**: Pulls embedded preview thumbnails from `.3mf` and `.gcode` slices.
 
 ```powershell
 # Inspect latest 3D file in Downloads
-.\.venv\Scripts\python.exe gcode_peek.py --latest
+gcode-peek --latest
 
 # View embedded thumbnail render
-.\.venv\Scripts\python.exe gcode_peek.py "path\to\model.3mf" --thumb
+gcode-peek "path\to\model.3mf" --thumb
 ```
 
-### 5. Smart Archive Unpackers (`unzip_3d.py` & `unzip_archive.py`)
-* **3D Zip Flattener**: Unpack MakerWorld, Printables, and Thingiverse archives without annoying nested subfolders.
-* **Root-Stripping**: Automatically strips single redundant top-level wrapper directories (e.g. `archive/archive/...`).
-* **Zip Slip Defense**: Strictly validates extraction paths to prevent path traversal (`../`) attacks.
+### 8. Smart Archive Unpackers (`unzip_3d.py` & `unzip_archive.py`)
+* **3D Zip Flattener**: Unpack MakerWorld, Printables, and Thingiverse archives without nested wrapper folders.
+* **Zip Slip Defense**: Strictly validates extraction paths to prevent directory traversal (`../`) attacks.
 
 ```powershell
 # Unpack all 3D model zips sitting in Downloads
-.\.venv\Scripts\python.exe unzip_3d.py --all
+unzip-3d --all
 
 # Extract general archive to Extracted\
-.\.venv\Scripts\python.exe unzip_archive.py "path\to\archive.zip"
+unzip-archive "path\to\archive.zip"
 ```
 
-### 6. Full Reversible Undo & Janitor Cleanup
-* **Undo Moves (`sort_undo.py`)**: Reverses recent batches back to their original download directories using the append-only move log (`%LOCALAPPDATA%\download-sorter\history.jsonl`).
-* **Safe Janitor (`clean_old.py`)**: Safely recycles old installers and archives to your **Windows Recycle Bin** (never permanent deletion).
-
-```powershell
-# Preview undo without moving
-.\.venv\Scripts\python.exe sort_undo.py --dry-run
-
-# Undo the most recent sort batch
-.\.venv\Scripts\python.exe sort_undo.py
-
-# Clean old downloads (older than 30 days -> Recycle Bin)
-.\.venv\Scripts\python.exe clean_old.py --dry-run
-```
-
-### 7. Recency-Gated Quick Switcher (`quick_switcher.py`)
-Need to upload or open a file you just downloaded without digging through folders?
-* **Common Item Dialog Sniffer**: Detects when an application (Discord, Slack, Chrome, Edge, CAD, or Slicers) opens a Windows File Open / Upload dialog within 5 minutes of a download.
-* **Floating Switcher Pill**: Docks an interactive, non-intrusive floating pill directly next to the active dialog.
-* **Instant 1-Click / Keyboard Injection**: Click **Select** or press `Ctrl+G` to automatically jump to and choose the recently downloaded file without manual navigation. Auto-dismisses if ignored.
-
-### 8. Isolated User Configuration & Live Reloader (`config_manager.py`)
-* **AppData Isolation**: Custom user rules, category folders, and precedence are stored safely in `%LOCALAPPDATA%\download-sorter\config.json`.
-* **Zero Git Conflicts**: Updating the codebase via `git pull` or `update.bat` will never touch or overwrite your personal rule presets.
-* **Zero-Restart Hot Reloading**: Rule changes made in the GUI instantly apply to the running background daemon in memory.
-
----
-
-## Decision Lifecycle
-
-For a full breakdown of the sorting, deduplication, and extraction logic, see [FLOWCHART.md](FLOWCHART.md).
-
-```mermaid
-flowchart TD
-    Start(["New File Lands in Downloads / Documents"]) --> Checks{"Is File Ready?<br>• Not incomplete (.crdownload)<br>• Settle timer elapsed (1.5s)<br>• File lock released"}
-
-    Checks -- "No" --> Wait["Wait / Ignore until download finishes"]
-    Checks -- "Yes" --> Route{"Classify File by Rules"}
-
-    subgraph Hierarchy ["5-Level Classification Hierarchy"]
-        Route -->|"1. Active Project?"| R_Active["Active Project Catch-All (CAD/3D/CNC)"]
-        Route -->|"2. Keyword Match?"| R_Keyword["Keyword Rules (School, Coursework)"]
-        Route -->|"3. G-Code Sniffer?"| R_Sniffer["Smart G-Code Sniffer (Haas vs 3D)"]
-        Route -->|"4. Extension Match?"| R_Ext["Extension Rules (3D, Docs, Media, Code)"]
-        Route -->|"5. No Match"| R_Default["Default Fallback (Other)"]
-    end
-
-    R_Active --> Dedup{"Exact duplicate in target?"}
-    R_Keyword --> Dedup
-    R_Sniffer --> Dedup
-    R_Ext --> Dedup
-    R_Default --> Dedup
-
-    Dedup -- "Yes (Same SHA-256)" --> PruneDupe["Prune redundant download"]
-    Dedup -- "No (Unique File)" --> ZipCheck{"Is it a .zip archive?"}
-
-    ZipCheck -- "3D Archive" --> Unzip3D["Extract to 3D Models/<br>Move original to Archives/"]
-    ZipCheck -- "General .zip" --> UnzipGen["Extract to Extracted/<br>Strip root wrapper<br>Move original to Archives/"]
-    ZipCheck -- "Normal File" --> Move["Move to target folder<br>(Collision auto-rename)"]
-
-    Unzip3D --> Record["Append to History Log<br>(%LOCALAPPDATA%/download-sorter/history.jsonl)"]
-    UnzipGen --> Record
-    Move --> Record
-
-    subgraph PostSort ["Desktop Feedback & Recency Workflows"]
-        Record --> Ribbon["Show Desktop Ribbon Toast Notification<br>• High-DPI category badge<br>• Vertical stacking for batch downloads<br>• Click-to-reveal in File Explorer"]
-        Record --> Recency["Record to Recent Downloads Buffer<br>(5-minute recency window)"]
-        Recency --> QuickSwitch["Floating Quick Switcher Pill<br>• Docks to active File Dialogs<br>• 1-Click Select or Ctrl+G injection"]
-    end
-```
+### 9. Write-Ahead Journal & Crash Recovery (`safe_ops.py`)
+* **Atomic 2-Phase Moves**: All file moves log write-ahead `planned` and `done` journal records with disk `fsync`.
+* **Automatic Recovery**: On startup, orphaned `planned` records reconcile against real disk state.
+* **Non-Overwriting Moves**: Existing targets automatically resolve to `name (2).ext` collisions.
 
 ---
 
 ## Installation & Setup
 
-### Option 1: Standalone Windows App (Recommended for General Users — No Python Needed)
-1. Download the latest **`DownloadSorter-v1.0.0-windows-x64.zip`** from [GitHub Releases](https://github.com/The-Osprey1/Download-Sorter/releases).
+### Option 1: Standalone Windows App (No Python Required)
+1. Download the latest **`DownloadSorter-v2.0.0-windows-x64.zip`** from [GitHub Releases](https://github.com/The-Osprey1/Download-Sorter/releases).
 2. Extract the ZIP anywhere on your system (e.g. `C:\Users\<user>\Download-Sorter` or Program Files).
 3. Double-click **`setup.bat`** (or run `.\setup.bat`). It will:
    - Configure optional automatic startup at login.
    - Configure right-click Explorer context menus.
+   - Offer an optional scan of your Downloads folder to preview remodeling.
    - Launch the background system tray monitor immediately.
 
 ---
 
 ### Option 2: Python Source Installation (For Developers)
 
-#### Prerequisites
-* Windows 10 or 11
-* Python 3.10+ (setup can also install it automatically via `winget`)
-
 #### Quick Start (One-Click)
 Double-click **`setup.bat`** (or run `.\setup.bat` in PowerShell/CMD). It will automatically:
 1. Detect Python 3.10+ (supporting `python`, official `py -3` launcher, `python3`, or offer `winget` installation)
 2. Create your `.venv` virtual environment
 3. Install dependencies from `requirements.txt`
-4. Optionally configure auto-start at login and Explorer context menus
+4. Configure optional auto-start at login and Explorer context menus
 5. Launch the system tray icon
 
 ---
@@ -220,17 +200,6 @@ Double-click **`update.bat`** (or run `.\update.bat` in PowerShell/CMD). It will
 
 ---
 
-### Clean Uninstallation
-To completely remove Download Sorter:
-1. Double-click **`uninstall.bat`** (or run `powershell -ExecutionPolicy Bypass -File .\uninstall.ps1`).
-2. It will automatically:
-   - Stop running background tray and watcher processes.
-   - Remove the Windows Scheduled Task.
-   - Unregister Explorer context menus from `HKCU`.
-   - Prompt whether you want to preserve or purge `%LOCALAPPDATA%\download-sorter`.
-
----
-
 ### Manual Setup (CLI / Pip)
 ```powershell
 git clone https://github.com/The-Osprey1/Download-Sorter.git
@@ -239,8 +208,8 @@ cd Download-Sorter
 # Create virtual environment
 python -m venv .venv
 
-# Install dependencies
-.\.venv\Scripts\pip.exe install -r requirements.txt
+# Install editable package with dependencies
+.\.venv\Scripts\pip.exe install -e .
 ```
 
 ### Windows Explorer Right-Click Shortcuts (Optional)
@@ -276,35 +245,46 @@ powershell -ExecutionPolicy Bypass -File .\uninstall_startup.ps1
 
 ## Command Line Usage
 
-Download Sorter provides a unified CLI dispatcher for terminal automation, scripts, CI/CD pipelines, and power users. Both `DownloadSorter-cli.exe` and `DownloadSorter.cmd` provide native console output with exit codes, while `DownloadSorter.exe` runs silently in windowed mode (ideal for background scheduled tasks).
+Download Sorter installs dedicated CLI console scripts on PATH:
 
 | Command | Action |
 |:---|:---|
-| `DownloadSorter.exe` / `python main.py` | Launch background system tray monitor (default) |
-| `DownloadSorter-cli --tray` | Launch tray monitor explicitly |
-| `DownloadSorter-cli --gui` | Launch visual Rules Manager & Sandbox Simulator GUI |
-| `DownloadSorter-cli --sort` | Run one-pass sorting batch on Downloads |
-| `DownloadSorter-cli --sort --dry-run` | Simulate sorting without moving files |
-| `DownloadSorter-cli --sort --target <dir>` | Sort a specific folder once |
-| `DownloadSorter-cli --undo` | Reversibly undo previous sort batch |
-| `DownloadSorter-cli --peek <file>` | Inspect 3D print file / CNC toolpath |
-| `DownloadSorter-cli --peek --latest` | Inspect most recent 3D file in Downloads |
-| `DownloadSorter-cli --unzip-3d <zip>` | Flatten and unpack 3D models from archive |
-| `DownloadSorter-cli --unzip <zip>` | Safely unpack archive into `Extracted/` |
-| `DownloadSorter-cli --status` | Print daemon health, memory, and recent moves |
-| `DownloadSorter-cli --clean` | Recycle old installers/archives (>30 days) |
-| `DownloadSorter-cli --version` | Print Download Sorter version |
-| `DownloadSorter-cli --help` | Display command usage and flag details |
+| `download-sorter` | Run one-pass sorting batch on Downloads |
+| `download-sorter --dry-run` | Simulate sorting without moving files |
+| `download-sorter --target <dir>` | Sort a specific directory once |
+| `download-sorter-watch` | Run foreground directory watcher daemon |
+| `download-sorter-tray` | Launch system tray monitor with background daemon |
+| `download-sorter-gui` | Launch visual Rules Manager & Live Simulator GUI |
+| `download-sorter-gui --tab remodel` | Open Rules Manager directly to Machine Remodel tab |
+| `download-sorter-remodel --scan` | Scan folder and preview candidate remodel cards |
+| `download-sorter-remodel --dry-run` | Simulate machine remodel actions and output summary |
+| `download-sorter-remodel --apply` | Execute safe machine remodel with HTML receipt |
+| `download-sorter-remodel --undo` | Reversibly undo previous machine remodel |
+| `download-sorter-undo` | Reversibly undo previous download sorting batch |
+| `gcode-peek <file>` | Inspect 3D print file / CNC toolpath |
+| `gcode-peek --latest` | Inspect most recent 3D file in Downloads |
+| `unzip-3d <zip>` | Flatten and unpack 3D models from archive |
+| `unzip-archive <zip>` | Safely unpack archive into `Extracted/` |
+| `python status.py` | Print daemon health, memory, held files, and recent moves |
+| `python clean_old.py` | Recycle old installers/archives (>30 days) to Recycle Bin |
+| `<any-command> --version` | Print Download Sorter version and attribution credit |
+| `<any-command> --help` | Display command usage and option details |
 
 ---
 
 ## Testing & Quality Assurance
 
-This repository includes a comprehensive 4-Tier test suite covering feature tests, adversarial stress tests, live reload, and simulation parity:
+This repository includes a comprehensive 4-Tier test suite covering feature tests, boundary cases, cross-feature interactions, visual design consistency, and real-world stress scenarios:
 
 ```powershell
-# Run the complete test suite (740+ tests)
+# Run the complete test suite (1,064 tests)
 .\.venv\Scripts\pytest.exe
+
+# Run visual design consistency tests only
+.\.venv\Scripts\pytest.exe tests/test_visual_consistency.py -v
+
+# Run v2 E2E acceptance tests only
+.\.venv\Scripts\pytest.exe tests/test_e2e_v2_features.py -v
 ```
 
 ---
@@ -313,7 +293,8 @@ This repository includes a comprehensive 4-Tier test suite covering feature test
 
 * **100% Offline**: Zero external network requests, analytics, or telemetry. All sorting occurs entirely on your local machine.
 * **Non-Destructive Cleanup**: Clean scripts send items strictly to the Windows Recycle Bin using native Windows Shell API (`SHFileOperationW` with `FOF_ALLOWUNDO`).
-* **Path Traversal Protection**: Archive extractors reject any archive member with directory traversal markers (`../` or leading root slashes).
+* **Path Traversal Protection**: Archive extractors and 3MF parsers reject any archive member with directory traversal markers (`../` or leading root slashes).
+* **Write-Ahead Journaling**: Safe 2-phase move operations with crash recovery prevent data loss during power outages or unexpected interruptions.
 * **Atomic Configuration**: Config persistence creates `.bak` backups before swapping files to guarantee zero configuration loss if interrupted.
 
 ---
@@ -335,7 +316,7 @@ This keeps your settings strictly isolated from the application directory. Updat
 If a batch was sorted into the wrong place, you can immediately revert it:
 * **Via System Tray**: Right-click the Download Sorter icon and click **"Undo last batch"**.
 * **Via File Explorer**: Right-click the background of any folder and click **"Undo Last DownloadSorter Batch"**.
-* **Via Command Line**: Run `DownloadSorter.exe --undo` (or `python sort_undo.py`).
+* **Via Command Line**: Run `download-sorter-undo` (or `python sort_undo.py`).
 
 ### Does Download Sorter support OneDrive or moved Downloads folders?
 Yes! Download Sorter automatically checks Windows Shell Known Folders (`FOLDERID_Downloads` registry key) to detect your active Downloads folder even if you redirected it to another drive (e.g. `D:\Downloads`). For OneDrive, cloud-only placeholder files (smart sync) are automatically detected via Windows file attributes and skipped until fully downloaded locally.
@@ -352,10 +333,10 @@ Yes! Download Sorter automatically checks Windows Shell Known Folders (`FOLDERID
 
 ## Credits
 
-**Download Sorter** was created by **Devyn Fidel** (2026).
-Source: https://github.com/The-Osprey1/Download-Sorter
+**Download Sorter** was created by **Devyn Fidel** (2026).  
+Repository: https://github.com/The-Osprey1/Download-Sorter
 
-Every surface that shows credit (tray tooltip and menu, `status`, the Rules Manager footer and *About* dialog, every CLI's `--version`, `setup.bat`, `update.bat`) reads it from the single `about.py` module, so the credit line is always identical.
+Every surface that shows credit (tray tooltip and menu, `status`, the Rules Manager footer and *About* dialog, every CLI's `--version`, `setup.bat`, `update.bat`, `install_context_menu.ps1`, `install_startup.ps1`) reads it from the single `about.py` module, so the credit line is always identical.
 
 ---
 
