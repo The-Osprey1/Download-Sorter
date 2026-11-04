@@ -60,7 +60,7 @@ M1_OWNED_SCRIPTS = [
 
 def test_oracle_attribution_constants():
     assert about.CREDIT == "Made by Devyn Fidel (2026)"
-    assert about.version_string() == "Download Sorter 2.0.0 - Made by Devyn Fidel (2026)"
+    assert about.version_string() == f"Download Sorter {about.__version__} - Made by Devyn Fidel (2026)"
     assert "Made by Devyn Fidel (2026)" in about.about_text()
 
 
@@ -90,7 +90,7 @@ def test_all_scripts_version_flag_exits_zero(script_name):
         capture_output=True, text=True, timeout=15, cwd=str(ROOT),
     )
     assert res.returncode == 0, f"{script_name} --version failed with code {res.returncode}: {res.stderr}"
-    assert res.stdout.strip() == "Download Sorter 2.0.0 - Made by Devyn Fidel (2026)"
+    assert res.stdout.strip() == about.version_string()
     assert "Made by Devyn Fidel (2026)" in res.stdout
 
 
@@ -106,7 +106,7 @@ def test_helper_scripts_v_flag_exits_zero(script_name):
         capture_output=True, text=True, timeout=15, cwd=str(ROOT),
     )
     assert res.returncode == 0, f"{script_name} -V failed: {res.stderr}"
-    assert res.stdout.strip() == "Download Sorter 2.0.0 - Made by Devyn Fidel (2026)"
+    assert res.stdout.strip() == about.version_string()
 
 
 def test_remodel_v_flag_adversarial_vulnerability():
@@ -142,7 +142,7 @@ def test_version_precedence_with_mixed_args(script_name, args):
         capture_output=True, text=True, timeout=15, cwd=str(ROOT),
     )
     assert res.returncode == 0, f"{script_name} {args} failed: {res.stderr}"
-    assert res.stdout.strip() == "Download Sorter 2.0.0 - Made by Devyn Fidel (2026)"
+    assert res.stdout.strip() == about.version_string()
 
 
 # =============================================================================
@@ -158,4 +158,4 @@ def test_piped_stdout_integrity(script_name):
     )
     out, err = p1.communicate(timeout=10)
     assert p1.returncode == 0
-    assert out.decode("utf-8").strip() == "Download Sorter 2.0.0 - Made by Devyn Fidel (2026)"
+    assert out.decode("utf-8").strip() == about.version_string()

@@ -19,11 +19,13 @@ from sorter import (
 
 def main() -> int:
     setup_logging()
-    try:
-        import safe_ops
-        safe_ops.recover_pending_journal(min_age_seconds=10.0)
-    except Exception:
-        pass
+    import watch
+    if not watch.is_instance_running():
+        try:
+            import safe_ops
+            safe_ops.recover_pending_journal(min_age_seconds=10.0)
+        except Exception:
+            pass
     parser = argparse.ArgumentParser(description="Sort Downloads and sweep Documents.")
     parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument(

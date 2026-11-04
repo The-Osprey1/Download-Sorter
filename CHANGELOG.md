@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.1] - 2026-11-04
+
+### Fixed
+* **Nested Repository & VCS Preservation (`remodel.py`)**:
+  * Remodel now walks subdirectories with directory pruning to detect any nested Git, SVN, Mercurial, virtualenv, or Node.js repositories at arbitrary depth (e.g. `Stuff\inner-repo`).
+  * Nested repositories are kept completely whole and recorded as protected, preventing code files (e.g. `src\app.py`) from ever being scattered into `Code\` or quarantined as duplicates.
+* **Single-Instance Mutex Precedes Crash Recovery**:
+  * In `tray.py`, `sort_once.py`, `watch.py`, and `main.py`, the single-instance mutex check now strictly precedes write-ahead journal recovery.
+  * Secondary launches or parallel CLI runs can no longer mistakenly flag a slow in-progress move from an active instance.
+* **Accurate Remodel Undo Reporting**:
+  * `remodel.py` and Rules Manager now explicitly report when some files could not be restored, displaying the exact count of files safely preserved in quarantine rather than reporting blanket success.
+* **Windows CMD Syntax Compatibility (`setup.bat`)**:
+  * Replaced `(.venv)` with `[.venv]` inside `if (...)` blocks to avoid premature block termination by `cmd.exe`.
+  * Added non-interactive ping delay fallback for automated installations.
+
+---
+
 ## [2.0.0] - 2026-11-03
 
 ### Added

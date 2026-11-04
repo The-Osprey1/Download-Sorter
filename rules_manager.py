@@ -1756,8 +1756,11 @@ class MachineRemodelWidget(QFrame):
         if res.get("ok"):
             QMessageBox.information(self, "Undo Complete", res.get("message", "Restored files successfully."))
             self._summary_lbl.setText(f"✓ {res.get('message')}")
+        elif res.get("partial"):
+            QMessageBox.warning(self, "Undo Partially Complete", res.get("message", "Some files could not be restored."))
+            self._summary_lbl.setText(f"⚠️ {res.get('message')}")
         else:
-            QMessageBox.warning(self, "Undo Failed", res.get("message", "Failed to undo remodel."))
+            QMessageBox.critical(self, "Undo Failed", res.get("message", "Failed to undo remodel."))
 
     def _open_receipt(self):
         if self._current_plan:

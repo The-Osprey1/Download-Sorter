@@ -319,12 +319,55 @@ class TestMachineRemodel(unittest.TestCase):
             undo_res = self.engine.undo(plan.remodel_id)
 
         self.assertGreater(undo_res.get("failed_count", 0), 0)
+        self.assertFalse(undo_res.get("ok"))
+        self.assertTrue(undo_res.get("partial"))
+        self.assertIn("remain safely preserved in quarantine", undo_res.get("message", ""))
         # Quarantine directory and unrestored files MUST be safely preserved!
         self.assertTrue(q_dir.exists())
         remaining = list(q_dir.rglob("*.txt"))
         self.assertGreater(len(remaining), 0)
         # HTML receipt retained for recovery
         self.assertTrue((self.sandbox / remodel.RECEIPT_FILENAME).exists())
+
+    def test_nested_git_repo_inside_arbitrary_folder_kept_whole(self) -> None:
+        """Repos nested inside another folder (e.g. Stuff\\inner-repo) must be kept whole."""
+        stuff_dir = self.sandbox / "Stuff"
+        inner_repo = stuff_dir / "inner-repo"
+        git_dir = inner_repo / ".git"
+        git_dir.mkdir(parents=True)
+        head_file = git_dir / "HEAD"
+        head_file.write_text("ref: refs/heads/main\n")
+
+        src_dir = inner_repo / "src"
+        src_dir.mkdir(parents=True)
+        app_file = src_dir / "app.py"
+        app_file.write_text("print('nested repo app')\n")
+
+        loose_in_stuff = stuff_dir / "notes.txt"
+        loose_in_stuff.write_text("random note\n")
+
+        # Set mtimes > 14 days ago (e.g. 60 days)
+        old_time = time.time() - (60 * 86400)
+        for f in (head_file, app_file, loose_in_stuff):
+            os.utime(f, (old_time, old_time))
+
+        plan = self.engine.scan(self.sandbox)
+
+        # Confirm that inner-repo is detected as protected
+        prot_paths = [p for p, _ in plan.protected_items]
+        self.assertTrue(any("inner-repo" in str(p) for p in prot_paths))
+
+        # Confirm app.py is NOT scheduled to be moved
+        all_move_srcs = [str(src) for src, _ in plan.loose_files_to_organize]
+        self.assertNotIn(str(app_file), all_move_srcs)
+
+        # Apply remodel
+        manifest = self.engine.apply(plan)
+
+        # app.py and .git/HEAD must remain completely intact in Stuff/inner-repo!
+        self.assertTrue(app_file.exists(), "src/app.py must remain intact inside inner-repo")
+        self.assertTrue(head_file.exists(), ".git/HEAD must remain intact inside inner-repo")
+        self.assertFalse((self.sandbox / "Code" / "app.py").exists(), "app.py must not be scattered to Code/")
 
 
 if __name__ == "__main__":

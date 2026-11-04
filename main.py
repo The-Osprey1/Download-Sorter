@@ -114,11 +114,6 @@ def init_stdio() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     init_stdio()
-    try:
-        import safe_ops
-        safe_ops.recover_pending_journal(min_age_seconds=10.0)
-    except Exception:
-        pass
 
     args = list(argv) if argv is not None else list(sys.argv[1:])
 
@@ -194,6 +189,13 @@ def main(argv: list[str] | None = None) -> int:
             return clean_old.main()
 
         if cmd in ("--remodel",):
+            import watch
+            if not watch.is_instance_running():
+                try:
+                    import safe_ops
+                    safe_ops.recover_pending_journal(min_age_seconds=10.0)
+                except Exception:
+                    pass
             import remodel
             return remodel.main()
 

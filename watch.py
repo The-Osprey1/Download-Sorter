@@ -112,6 +112,19 @@ def acquire_single_instance_lock(name: str = "DownloadSorter_SingleInstance") ->
     return True
 
 
+def is_instance_running(name: str = "DownloadSorter_SingleInstance") -> bool:
+    """Check if another instance of Download Sorter is currently holding the single-instance mutex."""
+    if sys.platform == "win32":
+        import ctypes
+        # SYNCHRONIZE = 0x00100000
+        h = ctypes.windll.kernel32.OpenMutexW(0x00100000, False, f"Local\\{name}")
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        return False
+    return False
+
+
 class DownloadsHandler(FileSystemEventHandler):
     """Monitors Downloads recursively for top-level downloads and misplaced category files."""
     def __init__(self, root: Path, config: dict, routing_context: RoutingContext | None = None) -> None:
@@ -561,12 +574,6 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
     on_sorted, if given, is called with the number of files moved each time a
     batch is drained, so a host like the tray app can report activity.
     """
-    try:
-        import safe_ops
-        safe_ops.recover_pending_journal(min_age_seconds=10.0)
-    except Exception:
-        logging.exception("Failed to run pending journal recovery")
-
     reloader = ConfigReloader(CONFIG_PATH)
     config = reloader.config
     routing_context = reloader.routing_context
@@ -678,6 +685,11 @@ def main() -> int:
     if not lock:
         logging.warning("Another instance of DownloadSorter is already running. Exiting.")
         return 0
+    try:
+        import safe_ops
+        safe_ops.recover_pending_journal(min_age_seconds=10.0)
+    except Exception:
+        logging.exception("Failed to run pending journal recovery")
     return run()
 
 

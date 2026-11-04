@@ -277,6 +277,42 @@ def check_folder_protection(
     return ProtectionCheck(False, "", "unprotected")
 
 
+def is_under_protected_repo(path: Path, stop_at: Path | None = None) -> bool:
+    """Check if a file or directory is inside a Git repository or other protected VCS/dev environment."""
+    resolved_stop = stop_at.resolve() if stop_at else None
+    curr = path if path.is_dir() else path.parent
+    try:
+        resolved_curr = curr.resolve()
+    except Exception:
+        resolved_curr = curr
+
+    while resolved_curr:
+        if resolved_stop and resolved_curr == resolved_stop:
+            break
+        # 1. Check VCS repository markers
+        if (resolved_curr / ".git").exists():
+            return True
+        if (resolved_curr / ".svn").exists() or (resolved_curr / ".hg").exists():
+            return True
+        # 2. Check virtualenv & project markers
+        if (resolved_curr / ".venv").exists() or (resolved_curr / "venv").exists() or (resolved_curr / "pyvenv.cfg").exists():
+            return True
+        if (resolved_curr / "node_modules").exists():
+            return True
+        if (resolved_curr / ".cargo").exists() or (resolved_curr / "Cargo.toml").exists():
+            return True
+        # 3. Check explicit keep marker
+        if (resolved_curr / KEEP_MARKER_NAME).exists():
+            return True
+        # 4. Check if current folder name is a protected dir marker (e.g. .git itself)
+        if resolved_curr.name in PROTECTED_DIR_MARKERS or any(part in PROTECTED_DIR_MARKERS for part in resolved_curr.parts):
+            return True
+        if resolved_curr == resolved_curr.parent:
+            break
+        resolved_curr = resolved_curr.parent
+    return False
+
+
 # ---------------------------------------------------------------------------
 # 3-Stage Deduplication Engine
 # ---------------------------------------------------------------------------
@@ -512,23 +548,55 @@ class RemodelEngine:
                 f_bytes = 0
                 cat_preview: dict[str, int] = {}
                 try:
-                    for sub in entry.rglob("*"):
-                        if not sub.is_file():
+                    for root_dir, dirnames, filenames in os.walk(entry):
+                        r_path = Path(root_dir)
+                        prune_dirs = []
+                        for d in list(dirnames):
+                            d_path = r_path / d
+                            if d in PROTECTED_DIR_MARKERS:
+                                prune_dirs.append(d)
+                            elif (d_path / ".git").exists():
+                                protected_items.append((d_path, f"Git repository detected ({d})"))
+                                prune_dirs.append(d)
+                            elif (d_path / ".svn").exists() or (d_path / ".hg").exists():
+                                protected_items.append((d_path, f"VCS repository detected ({d})"))
+                                prune_dirs.append(d)
+                            elif (d_path / KEEP_MARKER_NAME).exists():
+                                protected_items.append((d_path, f"Contains {KEEP_MARKER_NAME}"))
+                                prune_dirs.append(d)
+                            elif (d_path / ".venv").exists() or (d_path / "venv").exists() or (d_path / "pyvenv.cfg").exists():
+                                protected_items.append((d_path, f"Python virtual environment detected ({d})"))
+                                prune_dirs.append(d)
+                            elif (d_path / "node_modules").exists():
+                                protected_items.append((d_path, f"Node.js project detected ({d})"))
+                                prune_dirs.append(d)
+                            elif (d_path / ".cargo").exists() or (d_path / "Cargo.toml").exists():
+                                protected_items.append((d_path, f"Rust / Cargo project detected ({d})"))
+                                prune_dirs.append(d)
+                        for pd in prune_dirs:
+                            dirnames.remove(pd)
+
+                        if is_under_protected_repo(r_path, stop_at=root):
                             continue
-                        if any(part in PROTECTED_DIR_MARKERS for part in sub.parts):
-                            continue
-                        if sub.name.startswith("~$") or sub.name == KEEP_MARKER_NAME:
-                            continue
-                        f_count += 1
-                        try:
-                            f_bytes += sub.stat().st_size
-                        except OSError:
-                            pass
-                        all_scanned_files.append(sub)
-                        # Preview category
-                        routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub)
-                        dest_name = Path(routed.get("destination", "Other")).parts[0] if routed.get("destination") else "Other"
-                        cat_preview[dest_name] = cat_preview.get(dest_name, 0) + 1
+
+                        for fname in filenames:
+                            sub = r_path / fname
+                            if fname.startswith("~$") or fname == KEEP_MARKER_NAME:
+                                continue
+                            if is_under_protected_repo(sub, stop_at=root):
+                                continue
+                            if any(part in PROTECTED_DIR_MARKERS for part in sub.parts):
+                                continue
+                            f_count += 1
+                            try:
+                                f_bytes += sub.stat().st_size
+                            except OSError:
+                                pass
+                            all_scanned_files.append(sub)
+                            # Preview category
+                            routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub)
+                            dest_name = Path(routed.get("destination", "Other")).parts[0] if routed.get("destination") else "Other"
+                            cat_preview[dest_name] = cat_preview.get(dest_name, 0) + 1
                 except (PermissionError, OSError):
                     pass
 
@@ -699,20 +767,54 @@ class RemodelEngine:
 
             # action == "organize"
             try:
-                for sub in list(card.folder_path.rglob("*")):
-                    if not sub.is_file() or sub.name.startswith("~$") or sub.name == KEEP_MARKER_NAME:
-                        continue
-                    if any(part in PROTECTED_DIR_MARKERS for part in sub.parts):
-                        continue
-                    # Skip files already quarantined as duplicates
-                    if any(m["src"] == str(sub) for m in executed_moves):
+                for root_dir, dirnames, filenames in os.walk(card.folder_path):
+                    r_path = Path(root_dir)
+                    prune_dirs = []
+                    for d in list(dirnames):
+                        d_path = r_path / d
+                        if d in PROTECTED_DIR_MARKERS:
+                            prune_dirs.append(d)
+                        elif (d_path / ".git").exists():
+                            skipped_items.append({"path": str(d_path), "reason": f"Kept intact: Git repository detected ({d})"})
+                            prune_dirs.append(d)
+                        elif (d_path / ".svn").exists() or (d_path / ".hg").exists():
+                            skipped_items.append({"path": str(d_path), "reason": f"Kept intact: VCS repository detected ({d})"})
+                            prune_dirs.append(d)
+                        elif (d_path / KEEP_MARKER_NAME).exists():
+                            skipped_items.append({"path": str(d_path), "reason": f"Kept intact: Contains {KEEP_MARKER_NAME}"})
+                            prune_dirs.append(d)
+                        elif (d_path / ".venv").exists() or (d_path / "venv").exists() or (d_path / "pyvenv.cfg").exists():
+                            skipped_items.append({"path": str(d_path), "reason": f"Kept intact: Python virtual environment detected ({d})"})
+                            prune_dirs.append(d)
+                        elif (d_path / "node_modules").exists():
+                            skipped_items.append({"path": str(d_path), "reason": f"Kept intact: Node.js project detected ({d})"})
+                            prune_dirs.append(d)
+                        elif (d_path / ".cargo").exists() or (d_path / "Cargo.toml").exists():
+                            skipped_items.append({"path": str(d_path), "reason": f"Kept intact: Rust / Cargo project detected ({d})"})
+                            prune_dirs.append(d)
+                    for pd in prune_dirs:
+                        dirnames.remove(pd)
+
+                    if is_under_protected_repo(r_path, stop_at=plan.target_root):
                         continue
 
-                    routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub)
-                    if routed.get("match_type") == "ignored":
-                        continue
-                    dest_dir = sorter.folder_path(plan.target_root, routed.get("destination", "Other"))
-                    dest_target = dest_dir / sub.name
+                    for fname in filenames:
+                        sub = r_path / fname
+                        if fname.startswith("~$") or fname == KEEP_MARKER_NAME:
+                            continue
+                        if is_under_protected_repo(sub, stop_at=plan.target_root):
+                            continue
+                        if any(part in PROTECTED_DIR_MARKERS for part in sub.parts):
+                            continue
+                        # Skip files already quarantined as duplicates
+                        if any(m["src"] == str(sub) for m in executed_moves):
+                            continue
+
+                        routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub)
+                        if routed.get("match_type") == "ignored":
+                            continue
+                        dest_dir = sorter.folder_path(plan.target_root, routed.get("destination", "Other"))
+                        dest_target = dest_dir / sub.name
 
                     if dry_run:
                         executed_moves.append({
@@ -856,13 +958,24 @@ class RemodelEngine:
 
         manifest["undone_at"] = datetime.now(timezone.utc).isoformat()
         manifest["restored_count"] = restored_count
+        manifest["failed_count"] = failed_count
         m_file.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        if failed_count > 0:
+            return {
+                "ok": False,
+                "partial": True,
+                "remodel_id": manifest.get("remodel_id"),
+                "restored_count": restored_count,
+                "failed_count": failed_count,
+                "message": f"Restored {restored_count} file(s); {failed_count} file(s) could not be restored and remain safely preserved in quarantine.",
+            }
 
         return {
             "ok": True,
             "remodel_id": manifest.get("remodel_id"),
             "restored_count": restored_count,
-            "failed_count": failed_count,
+            "failed_count": 0,
             "message": f"Restored {restored_count} file(s) back to their original locations.",
         }
 
@@ -1109,6 +1222,10 @@ def main() -> int:
         if res.get("ok"):
             print(f"✓ Remodel Undo Successful: {res['message']}")
             return 0
+        elif res.get("partial"):
+            print(f"⚠️ Remodel Undo Partially Complete: {res['message']}", file=sys.stderr)
+            print(f"   Unrestored files and receipt preserved in quarantine.", file=sys.stderr)
+            return 1
         else:
             print(f"✕ Undo Failed: {res.get('message')}", file=sys.stderr)
             return 1
