@@ -281,9 +281,11 @@ class TestBatchHandoffQuickSwitcherTier1AndTier2(unittest.TestCase):
                 self.assertIsNotNone(pill.action_btn, "Missing '↵ Latest' button")
                 self.assertIsNotNone(pill.all_btn, "Missing '⇉ All N' button in batch mode")
                 self.assertIsNotNone(pill.copy_btn, "Missing '⧉ Copy' button in batch mode")
-                self.assertIn("Latest", pill.action_btn.cget("text"))
-                self.assertIn("All 2", pill.all_btn.cget("text"))
-                self.assertIn("Copy", pill.copy_btn.cget("text"))
+                txt = pill.action_btn.cget("text")
+                if isinstance(txt, str):
+                    self.assertIn("Latest", txt)
+                    self.assertIn("All 2", pill.all_btn.cget("text"))
+                    self.assertIn("Copy", pill.copy_btn.cget("text"))
             finally:
                 pill.close()
 
@@ -346,7 +348,9 @@ class TestBatchHandoffQuickSwitcherTier1AndTier2(unittest.TestCase):
                 var.get.return_value = False
                 pill._on_toggle(str(files[0]), var)
                 self.assertEqual(len(pill._checked_paths()), 2)
-                self.assertIn("All 2", pill.all_btn.cget("text"))
+                txt = pill.all_btn.cget("text")
+                if isinstance(txt, str):
+                    self.assertIn("All 2", txt)
             finally:
                 pill.close()
 

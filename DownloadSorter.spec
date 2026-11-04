@@ -41,6 +41,12 @@ hidden_imports = [
     'ribbon_popup',
     'suite_theme',
     'clean_old',
+    'about',
+    'batch_handoff',
+    'hold_manager',
+    'remodel',
+    'safe_ops',
+    'defusedxml',
 ]
 
 a = Analysis(

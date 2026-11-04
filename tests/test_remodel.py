@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 import about
 import remodel
@@ -262,6 +263,68 @@ class TestMachineRemodel(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0)
         self.assertIn(about.CREDIT, proc.stdout)
+
+
+    def test_untouched_git_repo_protection_and_no_git_head_duplication(self) -> None:
+        """Old/untouched Git repos must be protected and .git/HEAD must never be quarantined."""
+        repo_dir = self.sandbox / "Old_Untouched_Repo"
+        git_dir = repo_dir / ".git"
+        git_dir.mkdir(parents=True)
+        head_file = git_dir / "HEAD"
+        head_file.write_text("ref: refs/heads/main\n")
+        code_file = repo_dir / "app.py"
+        code_file.write_text("print('hello world')\n")
+
+        # Create another git repo with identical HEAD
+        repo2 = self.sandbox / "Another_Repo"
+        (repo2 / ".git").mkdir(parents=True)
+        head2 = repo2 / ".git" / "HEAD"
+        head2.write_text("ref: refs/heads/main\n")
+
+        # Set old mtimes (60 days ago) so 14-day activity rule does NOT protect them
+        old_time = time.time() - (60 * 86400)
+        for f in (head_file, code_file, head2):
+            os.utime(f, (old_time, old_time))
+
+        plan = self.engine.scan(self.sandbox)
+        card_map = {c.folder_path.name: c for c in plan.cards}
+
+        # Both repos must be recognized as protected Git repos!
+        self.assertTrue(card_map["Old_Untouched_Repo"].protection.is_protected)
+        self.assertIn("Git repository", card_map["Old_Untouched_Repo"].protection.reason)
+        self.assertEqual(card_map["Old_Untouched_Repo"].action, "keep_intact")
+
+        # .git/HEAD must NEVER be in duplicates_to_quarantine!
+        for dupe, q_dest, keeper in plan.duplicates_to_quarantine:
+            self.assertNotIn("HEAD", dupe.name)
+            self.assertNotIn(".git", str(dupe))
+
+        # Applying remodel must keep repo files intact
+        self.engine.apply(plan)
+        self.assertTrue(code_file.exists())
+        self.assertTrue(head_file.exists())
+        self.assertFalse((self.sandbox / "Code" / "app.py").exists())
+
+    def test_remodel_undo_preserves_unrestored_quarantine_files(self) -> None:
+        """Undo must NEVER wipe quarantine folder if any files fail to restore."""
+        paths = self._build_messy_sandbox()
+        plan = self.engine.scan(self.sandbox)
+        manifest = self.engine.apply(plan)
+
+        q_dir = self.sandbox / remodel.QUARANTINE_DIR_NAME / plan.remodel_id
+        self.assertTrue(q_dir.exists())
+
+        # Simulate a locked/failed restore by patching safe_ops.restore to return None for one item
+        with patch("safe_ops.restore", return_value=None):
+            undo_res = self.engine.undo(plan.remodel_id)
+
+        self.assertGreater(undo_res.get("failed_count", 0), 0)
+        # Quarantine directory and unrestored files MUST be safely preserved!
+        self.assertTrue(q_dir.exists())
+        remaining = list(q_dir.rglob("*.txt"))
+        self.assertGreater(len(remaining), 0)
+        # HTML receipt retained for recovery
+        self.assertTrue((self.sandbox / remodel.RECEIPT_FILENAME).exists())
 
 
 if __name__ == "__main__":

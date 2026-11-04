@@ -50,7 +50,7 @@ if exist "DownloadSorter.exe" (
     echo =======================================================
     echo  Setup complete! Look for the folder icon in your tray.
     echo =======================================================
-    timeout /t 4 >nul
+    ping 127.0.0.1 -n 4 >nul 2>&1
     exit /b 0
 )
 
@@ -111,7 +111,7 @@ exit /b 1
 echo [OK] Python interpreter detected: !PY_CMD!
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [*] Creating virtual environment (.venv)...
+    echo [*] Creating virtual environment [.venv]...
     !PY_CMD! -m venv .venv
     if %errorlevel% neq 0 (
         echo [ERROR] Failed to create virtual environment.
@@ -120,7 +120,7 @@ if not exist ".venv\Scripts\python.exe" (
     )
     echo [OK] Virtual environment created.
 ) else (
-    echo [OK] Virtual environment already exists (.venv).
+    echo [OK] Virtual environment already exists [.venv].
 )
 
 echo [*] Installing dependencies from requirements.txt...
@@ -157,14 +157,16 @@ echo [*] Starting Download Sorter system tray icon...
 start "" ".venv\Scripts\pythonw.exe" tray.py
 
 echo.
-set /p RUN_REMODEL="Do you have old/messy folders you'd like to remodel and organize? [y/N]: "
-if /i "%RUN_REMODEL%"=="y" (
-    echo [*] Opening Machine Remodel Wizard...
-    start "" ".venv\Scripts\pythonw.exe" rules_manager.py --tab remodel
+if "%SILENT%"=="0" (
+    set /p RUN_REMODEL="Do you have old/messy folders you'd like to remodel and organize? [y/N]: "
+    if /i "!RUN_REMODEL!"=="y" (
+        echo [*] Opening Machine Remodel Wizard...
+        start "" ".venv\Scripts\pythonw.exe" rules_manager.py --tab remodel
+    )
 )
 
 echo.
 echo =======================================================
 echo  Setup complete! Look for the folder icon in your tray.
 echo =======================================================
-timeout /t 4 >nul
+ping 127.0.0.1 -n 4 >nul 2>&1

@@ -19,7 +19,9 @@ ROOT = Path(__file__).resolve().parent
 DIST_DIR = ROOT / "dist"
 BUILD_DIR = ROOT / "build"
 RELEASE_DIR = DIST_DIR / "DownloadSorter"
-VERSION = "1.0.0"
+import about
+
+VERSION = about.__version__
 ZIP_NAME = f"DownloadSorter-v{VERSION}-windows-x64.zip"
 
 

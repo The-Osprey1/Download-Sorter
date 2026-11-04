@@ -162,7 +162,8 @@ def test_main_cli_version(capsys):
     ret = main_entry.main(["--version"])
     assert ret == 0
     captured = capsys.readouterr()
-    assert "Download Sorter v1.0.0" in captured.out
+    import about
+    assert about.__version__ in captured.out
 
 
 def test_main_cli_unknown_command(capsys):
@@ -228,7 +229,8 @@ def test_verify_release_checks():
 
     ok, ver, versions = verify_release.check_version_alignment()
     assert ok is True
-    assert ver == "1.0.0"
+    import about
+    assert ver == about.__version__
 
     cfg_errors = verify_release.check_config_and_presets()
     assert cfg_errors == []

@@ -9,7 +9,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-__version__ = "1.0.0"
+import about
+
+__version__ = about.__version__
 
 HELP_TEXT = """\
 Download Sorter - Local-first automated Downloads and Documents organizer.
@@ -29,6 +31,7 @@ Commands:
   --unzip <zip>         Safely unpack archive into Extracted/ with wrapper stripping
   --status              Print daemon health, memory usage, and recent moves
   --clean               Clean old installers/archives to Windows Recycle Bin
+  --remodel             Scan or safely remodel messy PC folder architectures
   --dialog <hwnd>       Spawn floating Quick Switcher pill for active File Dialog
   --version, -v         Display Download Sorter version
   --help, -h            Show this help message
@@ -111,6 +114,11 @@ def init_stdio() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     init_stdio()
+    try:
+        import safe_ops
+        safe_ops.recover_pending_journal(min_age_seconds=10.0)
+    except Exception:
+        pass
 
     args = list(argv) if argv is not None else list(sys.argv[1:])
 
@@ -130,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if cmd in ("--version", "-v"):
-        print(f"Download Sorter v{__version__}")
+        print(about.version_string())
         if sys.stdout and not sys.stdout.closed:
             try:
                 sys.stdout.flush()
@@ -184,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
         if cmd in ("--clean",):
             import clean_old
             return clean_old.main()
+
+        if cmd in ("--remodel",):
+            import remodel
+            return remodel.main()
 
         if cmd in ("--watch", "-w"):
             import watch

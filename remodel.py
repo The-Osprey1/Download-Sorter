@@ -174,10 +174,35 @@ def check_folder_protection(
             if parent == root.resolve():
                 break
 
-    # 2. VCS / Dev environment markers
+    # 2. VCS / Dev environment markers (path segments, folder markers, or parent repos)
     for part in folder.parts:
         if part in PROTECTED_DIR_MARKERS:
             return ProtectionCheck(True, f"Developer / VCS environment ({part})", "dev_env")
+
+    # Check if folder is itself a VCS repository or dev environment
+    if (folder / ".git").exists():
+        return ProtectionCheck(True, f"Git repository detected ({folder.name})", "git_repo")
+    if (folder / ".svn").exists():
+        return ProtectionCheck(True, f"SVN repository detected ({folder.name})", "vcs_repo")
+    if (folder / ".hg").exists():
+        return ProtectionCheck(True, f"Mercurial repository detected ({folder.name})", "vcs_repo")
+    if (folder / ".venv").exists() or (folder / "venv").exists() or (folder / "pyvenv.cfg").exists():
+        return ProtectionCheck(True, f"Python virtual environment detected ({folder.name})", "dev_env")
+    if (folder / "node_modules").exists():
+        return ProtectionCheck(True, f"Node.js project detected ({folder.name})", "dev_env")
+    if (folder / ".cargo").exists() or (folder / "Cargo.toml").exists():
+        return ProtectionCheck(True, f"Rust / Cargo project detected ({folder.name})", "dev_env")
+
+    # Check if folder is located inside a Git or VCS repository ancestor up to root
+    if root:
+        curr = folder.parent
+        resolved_root = root.resolve()
+        while curr != resolved_root and curr != curr.parent:
+            if (curr / ".git").exists():
+                return ProtectionCheck(True, f"Inside Git repository ({curr.name})", "git_repo")
+            if any((curr / m).exists() for m in (".svn", ".hg")):
+                return ProtectionCheck(True, f"Inside VCS repository ({curr.name})", "vcs_repo")
+            curr = curr.parent
 
     # Check if folder name is already an organized category
     cat_names = {c.lower() for c in category_folders}
@@ -207,6 +232,10 @@ def check_folder_protection(
 
         name_lower = item.name.lower()
         ext_lower = item.suffix.lower()
+
+        # Protected dev/VCS directory inside folder
+        if item.name in PROTECTED_DIR_MARKERS:
+            return ProtectionCheck(True, f"Contains protected environment / VCS directory ({item.name})", "dev_env")
 
         # SOLIDCast
         if ext_lower in SOLIDCAST_EXTENSIONS or name_lower in SOLIDCAST_FILENAMES or name_lower.startswith("$mesh"):
@@ -484,17 +513,22 @@ class RemodelEngine:
                 cat_preview: dict[str, int] = {}
                 try:
                     for sub in entry.rglob("*"):
-                        if sub.is_file() and not sub.name.startswith("~$") and sub.name != KEEP_MARKER_NAME:
-                            f_count += 1
-                            try:
-                                f_bytes += sub.stat().st_size
-                            except OSError:
-                                pass
-                            all_scanned_files.append(sub)
-                            # Preview category
-                            routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub)
-                            dest_name = Path(routed.get("destination", "Other")).parts[0] if routed.get("destination") else "Other"
-                            cat_preview[dest_name] = cat_preview.get(dest_name, 0) + 1
+                        if not sub.is_file():
+                            continue
+                        if any(part in PROTECTED_DIR_MARKERS for part in sub.parts):
+                            continue
+                        if sub.name.startswith("~$") or sub.name == KEEP_MARKER_NAME:
+                            continue
+                        f_count += 1
+                        try:
+                            f_bytes += sub.stat().st_size
+                        except OSError:
+                            pass
+                        all_scanned_files.append(sub)
+                        # Preview category
+                        routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub)
+                        dest_name = Path(routed.get("destination", "Other")).parts[0] if routed.get("destination") else "Other"
+                        cat_preview[dest_name] = cat_preview.get(dest_name, 0) + 1
                 except (PermissionError, OSError):
                     pass
 
@@ -668,6 +702,8 @@ class RemodelEngine:
                 for sub in list(card.folder_path.rglob("*")):
                     if not sub.is_file() or sub.name.startswith("~$") or sub.name == KEEP_MARKER_NAME:
                         continue
+                    if any(part in PROTECTED_DIR_MARKERS for part in sub.parts):
+                        continue
                     # Skip files already quarantined as duplicates
                     if any(m["src"] == str(sub) for m in executed_moves):
                         continue
@@ -775,22 +811,48 @@ class RemodelEngine:
                 logging.error("Failed restoring %s: %s", dest_current, exc)
                 failed_count += 1
 
-        # Clean up HTML receipt if present
         target_root = Path(manifest.get("target_root", ""))
-        receipt_file = target_root / RECEIPT_FILENAME
-        if receipt_file.exists():
-            try:
-                receipt_file.unlink()
-            except Exception:
-                pass
 
-        # Clean empty quarantine directory if empty
+        # Clean empty quarantine directory ONLY IF completely empty (no unrestored files remain)
         q_dir = target_root / QUARANTINE_DIR_NAME / manifest.get("remodel_id", "")
         if q_dir.exists():
             try:
-                shutil.rmtree(q_dir, ignore_errors=True)
-            except Exception:
-                pass
+                for d in sorted(q_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                    if d.is_dir() and not any(d.iterdir()):
+                        try:
+                            d.rmdir()
+                        except OSError:
+                            pass
+                remaining_files = [f for f in q_dir.rglob("*") if f.is_file()]
+                if not remaining_files:
+                    try:
+                        shutil.rmtree(q_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+                    parent_q = target_root / QUARANTINE_DIR_NAME
+                    if parent_q.exists() and not any(parent_q.iterdir()):
+                        try:
+                            parent_q.rmdir()
+                        except OSError:
+                            pass
+                else:
+                    logging.warning(
+                        "Remodel undo: %d unrestored file(s) remain in quarantine %s; preserved safely.",
+                        len(remaining_files), q_dir,
+                    )
+            except Exception as exc:
+                logging.warning("Error inspecting quarantine directory: %s", exc)
+
+        # Only clean HTML receipt if all moves were successfully restored
+        receipt_file = target_root / RECEIPT_FILENAME
+        if failed_count == 0:
+            if receipt_file.exists():
+                try:
+                    receipt_file.unlink()
+                except Exception:
+                    pass
+        else:
+            logging.warning("Remodel undo encountered %d failure(s); retaining HTML receipt %s.", failed_count, receipt_file)
 
         manifest["undone_at"] = datetime.now(timezone.utc).isoformat()
         manifest["restored_count"] = restored_count

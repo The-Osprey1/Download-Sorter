@@ -267,6 +267,11 @@ def main() -> int:
     if about.handle_version_flag():
         return 0
     setup_logging()
+    try:
+        import safe_ops
+        safe_ops.recover_pending_journal(min_age_seconds=10.0)
+    except Exception:
+        logging.exception("Failed to run pending journal recovery")
     lock = watch.acquire_single_instance_lock()
     if not lock:
         logging.warning("Download Sorter is already running. Exiting.")

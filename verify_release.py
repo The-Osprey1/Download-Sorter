@@ -83,23 +83,41 @@ def check_files() -> list[str]:
 def check_version_alignment() -> tuple[bool, str, dict[str, str]]:
     versions: dict[str, str] = {}
 
-    # 1. pyproject.toml
+    # 1. pyproject.toml (supports dynamic version via about.py)
     pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     m = re.search(r'version\s*=\s*"([^"]+)"', pyproject_text)
     if m:
         versions["pyproject.toml"] = m.group(1)
+    else:
+        try:
+            import about
+            versions["pyproject.toml"] = about.__version__
+        except Exception:
+            pass
 
-    # 2. main.py
+    # 2. main.py (supports about.__version__)
     main_text = (ROOT / "main.py").read_text(encoding="utf-8")
     m = re.search(r'__version__\s*=\s*"([^"]+)"', main_text)
     if m:
         versions["main.py"] = m.group(1)
+    else:
+        try:
+            import about
+            versions["main.py"] = about.__version__
+        except Exception:
+            pass
 
-    # 3. build_release.py
+    # 3. build_release.py (supports about.__version__)
     build_text = (ROOT / "build_release.py").read_text(encoding="utf-8")
     m = re.search(r'VERSION\s*=\s*"([^"]+)"', build_text)
     if m:
         versions["build_release.py"] = m.group(1)
+    else:
+        try:
+            import about
+            versions["build_release.py"] = about.__version__
+        except Exception:
+            pass
 
     # 4. CHANGELOG.md
     changelog_text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -145,9 +163,10 @@ def check_cli_dispatcher() -> list[str]:
         errors.append(f"main.py --help failed: {res.stderr or res.stdout}")
 
     # Test --version
+    import about
     cmd = [sys.executable, str(ROOT / "main.py"), "--version"]
     res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0 or "v1.0.0" not in res.stdout:
+    if res.returncode != 0 or about.__version__ not in res.stdout:
         errors.append(f"main.py --version failed: {res.stderr or res.stdout}")
 
     # Test --dialog routing (ensure --dialog option is properly forwarded)
@@ -161,7 +180,7 @@ def check_cli_dispatcher() -> list[str]:
         bin_path = ROOT / "dist" / "DownloadSorter" / exe_name
         if bin_path.exists():
             bin_res = subprocess.run([str(bin_path), "--version"], capture_output=True, text=True)
-            if bin_res.returncode != 0 or "Download Sorter v1.0.0" not in (bin_res.stdout + bin_res.stderr):
+            if bin_res.returncode != 0 or about.__version__ not in (bin_res.stdout + bin_res.stderr):
                 errors.append(f"{exe_name} --version execution failed (rc={bin_res.returncode}): {bin_res.stdout} {bin_res.stderr}")
 
     return errors
