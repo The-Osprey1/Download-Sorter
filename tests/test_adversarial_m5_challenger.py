@@ -245,10 +245,10 @@ class TestArea4StagedMachineRemodel:
     """Stress-test Machine Remodel protections, receipt exclusion, and HTML receipt."""
 
     def test_remodel_widget_is_third_tab(self):
-        """MachineRemodelWidget must be integrated as the 3rd tab in RulesManagerDialog."""
+        """MachineRemodelWidget must be integrated as its own page ("Clean up a folder")."""
         source = (ROOT / "rules_manager.py").read_text(encoding="utf-8")
         assert "self._remodel_widget = MachineRemodelWidget(" in source
-        assert "self._tabs.addTab(self._remodel_widget" in source
+        assert "self._view_stack.addWidget(self._padded(self._remodel_widget))" in source
 
     def test_remodel_scan_excludes_previous_receipt(self, tmp_path):
         """RemodelEngine.scan must exclude previous 'Where did my files go.html'."""

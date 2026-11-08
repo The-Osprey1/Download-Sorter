@@ -69,21 +69,19 @@ With the **3D Printing, CAD & CNC Maker** profile, stray CAD and 3D files (e.g. 
 
 ## Key Features in Version 2.0
 
-### 1. Visual Rules Manager & Remodel Wizard (`rules_manager.py`)
-A sleek dark-mode desktop GUI built with **PySide6** and styled to the **Devyn Personal Suite** (`suite_theme.py`) design tokens:
-* **3 Dedicated Tabs**:
-  1. **Keyword Rules**: Reorder, add, edit, or disable keyword-based routing with drag-and-drop precedence.
-  2. **Extension Rules**: Organize file extensions into category folders.
-  3. **Machine Remodel**: Interactive folder cards to scan and remodel messy machine architectures with **Organize**, **Keep intact**, and **Skip** actions.
-* **Live Sandbox & Real-time Simulator**: Type any hypothetical filename (e.g. `ME3210_Exam_Review.pdf`, `bracket_op1.nc`, `vase_multicolor.3mf`) to watch the rule engine evaluate the match chain in real time, showing the winning rule, matched trigger, destination path, and classification badge.
-* **Curated Rule Presets Library**: Browse and 1-click import preset packs for School, Office, CAD/CAM, and Dev setups.
-* **Temporary "Active Project" Catch-All**: Route all incoming CAD, 3D models, and CNC programs directly to your active project directory with optional auto-expiry.
-* **Safe Atomic Persistence**: Changes are verified with schema validation, written with `fsync`, backed up to `config.json.bak`, and replaced atomically.
+### 1. The Download Sorter window (`rules_manager.py`, `onboarding.py`)
+A dark-mode window built with **PySide6**. A sidebar switches between four pages:
+* **Home**: whether sorting is on, **Sort Downloads now**, **Undo last sort**, pause and resume, and the files sorted most recently.
+* **Rules**: **Name rules** (words in a file's name, checked top to bottom) and **File types** (by extension). Add ready-made rules from the **rule library**, import or export them, and use **Try a filename** to see where a file would go before you save. With the 3D printing profile, **Project mode** sends all CAD, 3D and CNC downloads to one project folder for a while.
+* **Clean up a folder**: preview how a messy folder would be organized, choose **Organize by file type**, **Keep intact** or **Skip for now** for each folder inside it, then apply. Everything can be undone.
+* **Settings**: your profile, starting with Windows, the right-click menu, zip handling, and version information.
+
+Changes to rules are saved with schema checks, a `config.json.bak` backup and an atomic file replace.
 
 ```powershell
-# Launch the Visual Rules Manager GUI
+# Open the window
 download-sorter-gui
-# Or open directly to the Remodel tab
+# Or open a page directly: home, rules, remodel (Clean up a folder) or settings
 download-sorter-gui --tab remodel
 ```
 
@@ -271,8 +269,8 @@ Download Sorter installs dedicated CLI console scripts on PATH:
 | `download-sorter --target <dir>` | Sort a specific directory once |
 | `download-sorter-watch` | Run foreground directory watcher daemon |
 | `download-sorter-tray` | Launch system tray monitor with background daemon |
-| `download-sorter-gui` | Launch visual Rules Manager & Live Simulator GUI |
-| `download-sorter-gui --tab remodel` | Open Rules Manager directly to Machine Remodel tab |
+| `download-sorter-gui` | Open the Download Sorter window |
+| `download-sorter-gui --tab remodel` | Open the window on the "Clean up a folder" page |
 | `download-sorter-remodel --scan` | Scan folder and preview candidate remodel cards |
 | `download-sorter-remodel --dry-run` | Simulate machine remodel actions and output summary |
 | `download-sorter-remodel --apply` | Execute safe machine remodel with HTML receipt |
@@ -356,7 +354,7 @@ Yes! Download Sorter automatically checks Windows Shell Known Folders (`FOLDERID
 **Download Sorter** was created by **Devyn Fidel** (2026).  
 Repository: https://github.com/The-Osprey1/Download-Sorter
 
-Every surface that shows credit (tray tooltip and menu, `status`, the Rules Manager footer and *About* dialog, every CLI's `--version`, `setup.bat`, `update.bat`, `install_context_menu.ps1`, `install_startup.ps1`) reads it from the single `about.py` module, so the credit line is always identical.
+Every surface that shows credit (tray tooltip and menu, `status`, the window's sidebar and Settings page, every CLI's `--version`, `setup.bat`, `update.bat`, `install_context_menu.ps1`, `install_startup.ps1`) reads it from the single `about.py` module, so the credit line is always identical.
 
 ---
 

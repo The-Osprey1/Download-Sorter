@@ -62,6 +62,8 @@ REQUIRED_RELEASE_FILES = [
     "ribbon_popup.py",
     "suite_theme.py",
     "onboarding.py",
+    "ui_icons.py",
+    "ui_style.py",
     "installer_builder.py",
     "installer.iss",
     "DownloadSorter.ico",

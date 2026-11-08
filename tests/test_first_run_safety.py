@@ -284,12 +284,13 @@ def test_auto_unzip_lookup_matches_the_sorter():
 
 
 def test_auto_unpack_switch_changes_what_the_sorter_reads(qapp, monkeypatch):
+    """The switch lives on the Settings page."""
     import onboarding
 
     saved: list[dict] = []
     monkeypatch.setattr(onboarding.suite_data, "save_sorter_config", lambda cfg, *a, **k: saved.append(json.loads(json.dumps(cfg))))
     cfg = sorter.get_default_config()
-    widget = onboarding.HomeDashboardWidget(config=cfg)
+    widget = onboarding.SettingsWidget(config=cfg)
     try:
         widget._on_unpack_toggled(False)
         assert saved, "the switch must save the settings"

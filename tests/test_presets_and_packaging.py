@@ -246,7 +246,7 @@ def test_verify_release_checks():
 
 def test_preset_library_dialog(qapp):
     dlg = PresetLibraryDialog()
-    assert dlg.windowTitle() == "📚 Rule Preset Library"
+    assert dlg.windowTitle() == "Rule library"
     assert len(dlg._checkboxes) >= 5
 
     # Test select all

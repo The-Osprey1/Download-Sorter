@@ -19,12 +19,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QPoint, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QMenu,
+    QToolButton,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -69,6 +71,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import about
+import ui_icons
+import ui_style
 
 try:
     import sorter
@@ -99,7 +103,7 @@ class PresetLibraryDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setWindowTitle("📚 Rule Preset Library")
+        self.setWindowTitle("Rule library")
         self.setMinimumSize(580, 500)
         self.resize(620, 540)
         self._selected_preset_ids: list[str] = []
@@ -107,100 +111,53 @@ class PresetLibraryDialog(QDialog):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {COLORS['surface']};
-                color: {COLORS['text']};
-            }}
-            QLabel {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-            }}
-            QScrollArea {{
-                border: 1px solid {COLORS['border']};
-                background: {COLORS['canvas']};
-                border-radius: {RADII['small']}px;
-            }}
-            QPushButton {{
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 6px 14px;
-                font-family: '{TYPE['ui']}';
-                font-weight: 600;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['surfaceHover']};
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-        """)
+        self.setStyleSheet(ui_style.stylesheet())
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
         # Header
-        title_lbl = QLabel("📚 Curated Rule Presets Library")
-        title_lbl.setFont(QFont(TYPE["ui"], 13, QFont.Weight.Bold))
-        layout.addWidget(title_lbl)
-
-        sub_lbl = QLabel("Select rule packs to add to your configuration. Rules with matching names will not be duplicated.")
-        sub_lbl.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 11px;")
-        sub_lbl.setWordWrap(True)
-        layout.addWidget(sub_lbl)
+        layout.addWidget(ui_style.label("Rule library", "title"))
+        layout.addWidget(ui_style.label(
+            "Pick sets of ready-made rules to add. Rules you already have aren't added twice.", "muted", wrap=True))
 
         # Scroll Area with Presets
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         container = QWidget()
         container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(12, 12, 12, 12)
+        container_layout.setContentsMargins(0, 4, 6, 4)
         container_layout.setSpacing(10)
 
         presets = suite_data.get_available_presets() if hasattr(suite_data, "get_available_presets") else []
         for p in presets:
-            card = QFrame()
-            card.setStyleSheet(f"""
-                QFrame {{
-                    background: {COLORS['surfaceRaised']};
-                    border: 1px solid {COLORS['border']};
-                    border-radius: {RADII['small']}px;
-                    padding: 8px;
-                }}
-            """)
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(10, 8, 10, 8)
-            card_layout.setSpacing(4)
+            card, card_layout = ui_style.card(margins=(14, 12, 14, 12), spacing=4)
 
             top_row = QHBoxLayout()
             cb = QCheckBox(f"{p.get('name', p.get('id'))}")
-            cb.setFont(QFont(TYPE["ui"], 11, QFont.Weight.Bold))
-            cb.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
+            cb.setStyleSheet("font-weight: 600;")
             self._checkboxes[p["id"]] = cb
             top_row.addWidget(cb)
 
-            badge = QLabel(f"  {p.get('category', '')}  ")
-            badge.setStyleSheet(f"""
-                background: {COLORS['canvas']};
-                color: {COLORS['textMuted']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-                font-size: 9px;
-            """)
+            badge = QLabel(p.get('category', ''))
+            badge.setStyleSheet(
+                f"color: {COLORS['textMuted']}; border: 1px solid {COLORS['border']};"
+                " border-radius: 4px; padding: 1px 6px; font-size: 11px;"
+            )
             top_row.addWidget(badge)
             top_row.addStretch()
             card_layout.addLayout(top_row)
 
             desc = QLabel(p.get("description", ""))
-            desc.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 10px;")
+            desc.setProperty("role", "muted")
             desc.setWordWrap(True)
             card_layout.addWidget(desc)
 
             rule_names = [r.get("name", "") for r in p.get("rules", [])]
             rules_lbl = QLabel(f"Includes: {', '.join(rule_names)}")
-            rules_lbl.setStyleSheet(f"color: {COLORS['textFaint']}; font-size: 9px; font-style: italic;")
+            rules_lbl.setProperty("role", "caption")
             rules_lbl.setWordWrap(True)
             card_layout.addWidget(rules_lbl)
 
@@ -212,33 +169,21 @@ class PresetLibraryDialog(QDialog):
 
         # Buttons
         btn_layout = QHBoxLayout()
-        select_all_btn = QPushButton("Select All")
+        select_all_btn = ui_style.button("Select all", "ghost")
         select_all_btn.clicked.connect(self._select_all)
         btn_layout.addWidget(select_all_btn)
 
-        clear_btn = QPushButton("Clear")
+        clear_btn = ui_style.button("Clear", "ghost")
         clear_btn.clicked.connect(self._clear_all)
         btn_layout.addWidget(clear_btn)
 
         btn_layout.addStretch()
 
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = ui_style.button("Cancel")
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
 
-        add_btn = QPushButton("✓ Add Selected Rules")
-        add_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENTS['downloadSorter']};
-                color: #0B0D12;
-                border: 1px solid {ACCENTS['downloadSorter']};
-                font-weight: bold;
-                padding: 6px 16px;
-            }}
-            QPushButton:hover {{
-                background: #82ecc0;
-            }}
-        """)
+        add_btn = ui_style.button("Add selected", "primary")
         add_btn.clicked.connect(self._on_accept)
         btn_layout.addWidget(add_btn)
 
@@ -255,7 +200,7 @@ class PresetLibraryDialog(QDialog):
     def _on_accept(self) -> None:
         self._selected_preset_ids = [pid for pid, cb in self._checkboxes.items() if cb.isChecked()]
         if not self._selected_preset_ids:
-            QMessageBox.information(self, "No Selection", "Please check at least one preset to add.")
+            QMessageBox.information(self, "Nothing selected", "Tick at least one set of rules to add.")
             return
         self.accept()
 
@@ -275,101 +220,62 @@ class RuleEditDialog(QDialog):
         self.rule_type = rule_type
         self.original_rule = rule or {}
 
-        title = "Edit Keyword Rule" if rule_type == "keyword" else "Edit Extension Rule"
+        title = "Edit name rule" if rule_type == "keyword" else "Edit file type rule"
         if not rule:
-            title = "Add Keyword Rule" if rule_type == "keyword" else "Add Extension Rule"
+            title = "Add name rule" if rule_type == "keyword" else "Add file type rule"
         self.setWindowTitle(title)
         self.setMinimumWidth(500)
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {COLORS['surface']};
-                color: {COLORS['text']};
-            }}
-            QLabel {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-            }}
-            QLineEdit {{
-                background: {COLORS['canvas']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 6px 10px;
-                font-family: '{TYPE['ui']}';
-                font-size: 12px;
-            }}
-            QLineEdit:focus {{
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-            QPushButton {{
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 6px 14px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['surfaceHover']};
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-            QCheckBox {{
-                color: {COLORS['text']};
-                font-size: 11px;
-            }}
-        """)
+        self.setStyleSheet(ui_style.stylesheet())
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
 
         # Header Title
-        header_lbl = QLabel(title.upper())
-        header_lbl.setFont(QFont(TYPE["ui"], 12, QFont.Weight.Bold))
-        header_lbl.setStyleSheet(f"color: {ACCENTS['downloadSorter']}; letter-spacing: 0.5px;")
-        layout.addWidget(header_lbl)
+        layout.addWidget(ui_style.label(title, "title"))
 
         # Rule Name
-        layout.addWidget(QLabel("RULE NAME"))
+        layout.addWidget(ui_style.label("Name", "muted"))
         self._name_input = QLineEdit()
-        self._name_input.setPlaceholderText("e.g. ME 3210 Coursework, 3D Models STL...")
+        self._name_input.setPlaceholderText("For example: Bank statements")
         self._name_input.setText(self.original_rule.get("name", ""))
         layout.addWidget(self._name_input)
 
         # Destination Folder
-        layout.addWidget(QLabel("DESTINATION FOLDER (Relative to Downloads root or Absolute)"))
+        layout.addWidget(ui_style.label("Move to this folder (inside Downloads, or a full path)", "muted"))
         dest_box = QHBoxLayout()
         dest_box.setSpacing(8)
         self._folder_input = QLineEdit()
-        self._folder_input.setPlaceholderText("e.g. Documents\\School\\ME3210 or 3D Models\\STL")
+        self._folder_input.setPlaceholderText("For example: Documents\\Bank statements")
         self._folder_input.setText(self.original_rule.get("folder", ""))
         dest_box.addWidget(self._folder_input)
 
-        browse_btn = QPushButton("Browse...")
+        browse_btn = ui_style.button("Browse...")
         browse_btn.clicked.connect(self._browse_folder)
         dest_box.addWidget(browse_btn)
         layout.addLayout(dest_box)
 
         # Keywords (for keyword rules)
         if self.rule_type == "keyword":
-            layout.addWidget(QLabel("KEYWORDS / MATCH TOKENS (Comma-separated)"))
+            layout.addWidget(ui_style.label("When the file name contains any of these words (separate with commas)", "muted"))
             self._keywords_input = QLineEdit()
-            self._keywords_input.setPlaceholderText("e.g. me3210, me 3210, solidcast, exam")
+            self._keywords_input.setPlaceholderText("For example: bank_statement, statement of account")
             matches = self.original_rule.get("match", [])
             self._keywords_input.setText(", ".join(matches) if isinstance(matches, list) else str(matches))
             layout.addWidget(self._keywords_input)
 
         # Allowed Extensions
-        layout.addWidget(QLabel("EXTENSIONS (Comma-separated, e.g. .pdf, .docx, .stl)"))
+        layout.addWidget(ui_style.label(
+            "Only these file types (separate with commas; leave empty for any type)"
+            if self.rule_type == "keyword" else "File types (separate with commas)", "muted"))
         self._exts_input = QLineEdit()
-        self._exts_input.setPlaceholderText("e.g. .pdf, .docx, .xlsx or .stl, .3mf")
+        self._exts_input.setPlaceholderText("For example: .pdf, .docx")
         exts = self.original_rule.get("extensions", [])
         self._exts_input.setText(", ".join(exts) if isinstance(exts, list) else str(exts))
         layout.addWidget(self._exts_input)
 
         # Active Toggle Checkbox
-        self._active_chk = QCheckBox("Rule is active and evaluated during sorting")
+        self._active_chk = QCheckBox("Rule is on")
         self._active_chk.setChecked(self.original_rule.get("enabled", True))
         layout.addWidget(self._active_chk)
 
@@ -380,30 +286,18 @@ class RuleEditDialog(QDialog):
         btn_box.setSpacing(10)
         btn_box.addStretch()
 
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = ui_style.button("Cancel")
         cancel_btn.clicked.connect(self.reject)
         btn_box.addWidget(cancel_btn)
 
-        save_btn = QPushButton("Save Rule")
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENTS['downloadSorter']};
-                color: #0B0D12;
-                border: 1px solid {ACCENTS['downloadSorter']};
-                font-weight: bold;
-                padding: 6px 16px;
-            }}
-            QPushButton:hover {{
-                background: #82ecc0;
-            }}
-        """)
+        save_btn = ui_style.button("Save rule", "primary")
         save_btn.clicked.connect(self._validate_and_accept)
         btn_box.addWidget(save_btn)
 
         layout.addLayout(btn_box)
 
     def _browse_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select Destination Directory")
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder")
         if folder:
             self._folder_input.setText(folder)
 
@@ -461,45 +355,34 @@ class RuleTableWidget(QWidget):
 
         # Toolbar
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(6)
+        toolbar.setSpacing(4)
 
-        self._add_btn = QPushButton("➕ Add Rule")
-        self._add_btn.setToolTip("Create a new sorting rule")
+        noun = "name rule" if self.rule_type == "keyword" else "file type rule"
+        self._add_btn = ui_style.button(f"Add {noun}", None, "plus")
         self._add_btn.clicked.connect(self.add_rule_dialog)
         toolbar.addWidget(self._add_btn)
+        toolbar.addSpacing(8)
 
-        if self.rule_type == "keyword":
-            self._preset_btn = QPushButton("📚 Add from Presets...")
-            self._preset_btn.setToolTip("Add pre-configured keyword rules from the Preset Library")
-            self._preset_btn.clicked.connect(self.add_from_presets_dialog)
-            toolbar.addWidget(self._preset_btn)
-
-        self._move_up_btn = QPushButton("▲ Move Up")
-        self._move_up_btn.setToolTip("Increase rule precedence (evaluated earlier)")
+        self._move_up_btn = ui_style.icon_button("up", "Move up (checked earlier)")
         self._move_up_btn.clicked.connect(self.move_rule_up)
         toolbar.addWidget(self._move_up_btn)
-
-        self._move_down_btn = QPushButton("▼ Move Down")
-        self._move_down_btn.setToolTip("Decrease rule precedence (evaluated later)")
+        self._move_down_btn = ui_style.icon_button("down", "Move down (checked later)")
         self._move_down_btn.clicked.connect(self.move_rule_down)
         toolbar.addWidget(self._move_down_btn)
-
-        self._edit_btn = QPushButton("✏️ Edit")
-        self._edit_btn.setToolTip("Edit selected rule properties")
+        self._edit_btn = ui_style.icon_button("edit", "Edit")
         self._edit_btn.clicked.connect(self.edit_selected_rule)
         toolbar.addWidget(self._edit_btn)
-
-        self._delete_btn = QPushButton("🗑️ Delete")
-        self._delete_btn.setToolTip("Delete selected rule")
+        self._delete_btn = ui_style.icon_button("trash", "Delete")
         self._delete_btn.clicked.connect(self.delete_selected_rule)
         toolbar.addWidget(self._delete_btn)
-
         toolbar.addStretch()
 
-        hint_lbl = QLabel("Rules are evaluated top-to-bottom in order of precedence")
-        hint_lbl.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 10px; font-style: italic;")
-        toolbar.addWidget(hint_lbl)
-
+        if self.rule_type == "keyword":
+            hint = "Matches whole words in a file's name, like “invoice” in Invoice_2026.pdf."
+        else:
+            hint = "Used when no name rule matches."
+        toolbar.addWidget(ui_style.label(hint, "caption"))
+        layout.addSpacing(6)
         layout.addLayout(toolbar)
 
         # Table
@@ -507,57 +390,47 @@ class RuleTableWidget(QWidget):
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(38)
         self._table.setShowGrid(False)
-        self._table.setAlternatingRowColors(True)
+        self._table.setWordWrap(False)
 
         if self.rule_type == "keyword":
-            headers = ["#", "Rule Name", "Destination Folder", "Keywords", "Extensions", "Active"]
+            headers = ["#", "Name", "Moves to", "When the name contains", "File types", "On"]
         else:
-            headers = ["#", "Rule Name", "Destination Folder", "Extensions", "Active"]
+            headers = ["#", "Name", "Moves to", "File types", "On"]
 
         self._table.setColumnCount(len(headers))
         self._table.setHorizontalHeaderLabels(headers)
 
         header = self._table.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self._table.setColumnWidth(0, 40)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         self._table.setColumnWidth(1, 170)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self._table.setColumnWidth(2, 180)
+        self._table.setColumnWidth(2, 190)
         if self.rule_type == "keyword":
             header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
             self._table.setColumnWidth(4, 130)
             header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-            self._table.setColumnWidth(5, 60)
+            self._table.setColumnWidth(5, 48)
         else:
             header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-            self._table.setColumnWidth(4, 60)
+            self._table.setColumnWidth(4, 48)
 
-        self._table.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: {COLORS['canvas']};
-                alternate-background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                gridline-color: transparent;
-                selection-background-color: {COLORS['surfaceHover']};
-                selection-color: {COLORS['text']};
-            }}
-            QHeaderView::section {{
-                background-color: {COLORS['surfaceRaised']};
-                color: {COLORS['textMuted']};
-                padding: 6px;
-                border: none;
-                border-bottom: 1px solid {COLORS['border']};
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-                font-weight: 600;
-            }}
-        """)
+        self._empty_lbl = ui_style.label(
+            "No name rules yet. Add one, or pick some with “Add from library”."
+            if self.rule_type == "keyword" else "No file type rules yet.",
+            "muted",
+        )
+        self._empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_lbl.setMinimumHeight(80)
+        self._empty_lbl.setVisible(False)
+        layout.addWidget(self._empty_lbl)
 
         self._table.itemChanged.connect(self._on_table_item_changed)
         self._table.cellDoubleClicked.connect(lambda row, col: self.edit_selected_rule())
@@ -575,13 +448,16 @@ class RuleTableWidget(QWidget):
     def _refresh_table(self) -> None:
         self._block_signals = True
         self._table.setRowCount(len(self._rules))
+        if hasattr(self, "_empty_lbl"):
+            self._empty_lbl.setVisible(not self._rules)
+            self._table.setVisible(bool(self._rules))
 
         for row_idx, rule in enumerate(self._rules):
             is_enabled = rule.get("enabled", True)
             fg = COLORS["text"] if is_enabled else COLORS["textFaint"]
 
             # Col 0: Precedence index
-            prec_item = QTableWidgetItem(f"#{row_idx + 1}")
+            prec_item = QTableWidgetItem(str(row_idx + 1))
             prec_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             prec_item.setForeground(QColor(COLORS["textMuted"]))
             prec_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
@@ -749,49 +625,7 @@ class ActiveProjectCard(QFrame):
         self._countdown_timer.timeout.connect(self._update_status_display)
 
     def _init_ui(self) -> None:
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"""
-            ActiveProjectCard {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['card']}px;
-            }}
-            QLabel {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-            }}
-            QLineEdit, QComboBox {{
-                background: {COLORS['canvas']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 5px 9px;
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-            }}
-            QLineEdit:focus, QComboBox:focus {{
-                border-color: {ACCENTS['broncoGold']};
-            }}
-            QPushButton {{
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 5px 12px;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['surfaceHover']};
-                border-color: {ACCENTS['broncoGold']};
-            }}
-            QCheckBox {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-                font-size: 12px;
-                font-weight: bold;
-            }}
-        """)
+        self.setObjectName("card")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -801,14 +635,14 @@ class ActiveProjectCard(QFrame):
         header = QHBoxLayout()
         header.setSpacing(8)
 
-        self._enable_chk = QCheckBox("ACTIVE PROJECT CATCH-ALL MODE")
-        self._enable_chk.setStyleSheet(f"color: {ACCENTS['broncoGold']}; font-weight: bold;")
+        self._enable_chk = QCheckBox("Project mode")
+        self._enable_chk.setStyleSheet("font-weight: 600;")
         self._enable_chk.toggled.connect(self._on_enable_toggled)
         header.addWidget(self._enable_chk)
 
         header.addStretch()
 
-        self._status_badge = QLabel("○ INACTIVE")
+        self._status_badge = QLabel("Off")
         self._status_badge.setFont(QFont(TYPE["ui"], 8, QFont.Weight.Bold))
         self._status_badge.setStyleSheet(f"""
             background: {COLORS['surfaceRaised']};
@@ -826,7 +660,7 @@ class ActiveProjectCard(QFrame):
 
         proj_box = QVBoxLayout()
         proj_box.setSpacing(3)
-        proj_box.addWidget(QLabel("SELECT MAKER PROJECT"))
+        proj_box.addWidget(ui_style.label("Project", "muted"))
         self._proj_combo = QComboBox()
         self._proj_combo.currentIndexChanged.connect(self._on_project_selected)
         proj_box.addWidget(self._proj_combo)
@@ -834,15 +668,15 @@ class ActiveProjectCard(QFrame):
 
         dir_box = QVBoxLayout()
         dir_box.setSpacing(3)
-        dir_box.addWidget(QLabel("TARGET DIRECTORY (Incoming CAD / 3D / CNC files)"))
+        dir_box.addWidget(ui_style.label("Folder for CAD, 3D and CNC files", "muted"))
         dir_inner = QHBoxLayout()
         dir_inner.setSpacing(6)
         self._dir_edit = QLineEdit()
-        self._dir_edit.setPlaceholderText("Select project or choose directory...")
+        self._dir_edit.setPlaceholderText("Choose a project or a folder")
         self._dir_edit.textChanged.connect(lambda: self.state_changed.emit())
         dir_inner.addWidget(self._dir_edit)
 
-        browse_btn = QPushButton("Browse...")
+        browse_btn = ui_style.button("Browse...")
         browse_btn.clicked.connect(self._browse_custom_dir)
         dir_inner.addWidget(browse_btn)
         dir_box.addLayout(dir_inner)
@@ -851,13 +685,13 @@ class ActiveProjectCard(QFrame):
         # Expiry Duration Selector
         exp_box = QVBoxLayout()
         exp_box.setSpacing(3)
-        exp_box.addWidget(QLabel("AUTO-EXPIRY DURATION"))
+        exp_box.addWidget(ui_style.label("Turn off after", "muted"))
         self._expiry_combo = QComboBox()
-        self._expiry_combo.addItem("Manual Toggle (No Expiry)", None)
-        self._expiry_combo.addItem("1 Hour", 1.0)
-        self._expiry_combo.addItem("4 Hours", 4.0)
-        self._expiry_combo.addItem("8 Hours", 8.0)
-        self._expiry_combo.addItem("24 Hours", 24.0)
+        self._expiry_combo.addItem("Never (turn off by hand)", None)
+        self._expiry_combo.addItem("1 hour", 1.0)
+        self._expiry_combo.addItem("4 hours", 4.0)
+        self._expiry_combo.addItem("8 hours", 8.0)
+        self._expiry_combo.addItem("24 hours", 24.0)
         self._expiry_combo.currentIndexChanged.connect(self._on_expiry_selected)
         exp_box.addWidget(self._expiry_combo)
         row1.addLayout(exp_box, 2)
@@ -865,8 +699,8 @@ class ActiveProjectCard(QFrame):
         layout.addLayout(row1)
 
         # Live Status Summary line
-        self._status_summary = QLabel("Catch-all disabled. Normal keyword & extension rules apply.")
-        self._status_summary.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 10px;")
+        self._status_summary = QLabel("Off. Your normal rules apply.")
+        self._status_summary.setProperty("role", "caption")
         layout.addWidget(self._status_summary)
 
         # Populate projects
@@ -877,10 +711,10 @@ class ActiveProjectCard(QFrame):
         self._maker_projects = suite_data.get_maker_projects()
         self._proj_combo.blockSignals(True)
         self._proj_combo.clear()
-        self._proj_combo.addItem("-- Select Active Project --", None)
+        self._proj_combo.addItem("Choose a project", None)
         for proj in self._maker_projects:
-            self._proj_combo.addItem(f"📁 {proj['name']}", proj)
-        self._proj_combo.addItem("📂 [Custom Directory...]", "custom")
+            self._proj_combo.addItem(ui_icons.icon("folder"), proj['name'], proj)
+        self._proj_combo.addItem("Another folder...", "custom")
         self._proj_combo.blockSignals(False)
 
     def _on_enable_toggled(self, enabled: bool) -> None:
@@ -925,6 +759,10 @@ class ActiveProjectCard(QFrame):
         self._update_status_display()
         self.state_changed.emit()
 
+    @staticmethod
+    def _badge_style(fg: str, bg: str) -> str:
+        return f"color: {fg}; background: {bg}; border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600;"
+
     def _update_status_display(self) -> None:
         enabled = self._enable_chk.isChecked()
         now = time.time()
@@ -932,15 +770,9 @@ class ActiveProjectCard(QFrame):
         if not enabled:
             if hasattr(self, "_countdown_timer") and self._countdown_timer.isActive():
                 self._countdown_timer.stop()
-            self._status_badge.setText("○ INACTIVE")
-            self._status_badge.setStyleSheet(f"""
-                background: {COLORS['surfaceRaised']};
-                color: {COLORS['textMuted']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 9px;
-                padding: 2px 8px;
-            """)
-            self._status_summary.setText("Catch-all disabled. Normal keyword & extension rules apply.")
+            self._status_badge.setText("Off")
+            self._status_badge.setStyleSheet(self._badge_style(COLORS["textMuted"], COLORS["surfaceRaised"]))
+            self._status_summary.setText("Off. Your normal rules apply.")
             return
 
         # Check expiry
@@ -954,36 +786,23 @@ class ActiveProjectCard(QFrame):
                 self._enable_chk.blockSignals(True)
                 self._enable_chk.setChecked(False)
                 self._enable_chk.blockSignals(False)
-                self._status_badge.setText("⏱ EXPIRED")
-                self._status_badge.setStyleSheet(f"""
-                    background: {COLORS['surfaceRaised']};
-                    color: {COLORS['warning']};
-                    border: 1px solid {COLORS['warning']};
-                    border-radius: 9px;
-                    padding: 2px 8px;
-                """)
-                self._status_summary.setText("Active project period has expired. Standard rules restored.")
+                self._status_badge.setText("Ended")
+                self._status_badge.setStyleSheet(self._badge_style(COLORS["warning"], COLORS["warningSubtle"]))
+                self._status_summary.setText("Project mode has ended. Your normal rules apply again.")
                 return
             else:
                 hrs = int(rem // 3600)
                 mins = int((rem % 3600) // 60)
-                time_str = f"expires in {hrs}h {mins}m" if hrs > 0 else f"expires in {mins}m"
+                time_str = f"turns off in {hrs}h {mins}m" if hrs > 0 else f"turns off in {mins}m"
         else:
             if hasattr(self, "_countdown_timer") and self._countdown_timer.isActive():
                 self._countdown_timer.stop()
-            time_str = "no expiry (manual toggle)"
+            time_str = "stays on until you turn it off"
 
-        self._status_badge.setText("● ACTIVE")
-        self._status_badge.setStyleSheet(f"""
-            background: {ACCENTS['broncoGold']};
-            color: #0B0D12;
-            border: 1px solid {ACCENTS['broncoGold']};
-            border-radius: 9px;
-            padding: 2px 8px;
-            font-weight: bold;
-        """)
-        target = self._dir_edit.text().strip() or "No target selected"
-        self._status_summary.setText(f"Routing 27 CAD/3D/CNC extensions to: {target} ({time_str})")
+        self._status_badge.setText("On")
+        self._status_badge.setStyleSheet(self._badge_style(COLORS["warning"], COLORS["warningSubtle"]))
+        target = self._dir_edit.text().strip() or "no folder chosen yet"
+        self._status_summary.setText(f"CAD, 3D and CNC files go to {target}; {time_str}.")
 
     def get_state(self) -> dict[str, Any]:
         """Return active project dictionary matching PROJECT.md § 2 contract."""
@@ -1048,8 +867,22 @@ class ActiveProjectCard(QFrame):
 # 4. LIVE SANDBOX SIMULATOR WIDGET
 # =====================================================================
 
+# Plain-language labels for how a file was routed (shown in "Try a filename").
+SANDBOX_BADGES: dict[str, tuple[str, str, str]] = {
+    # match type: (label, text color, background)
+    "waiting": ("Waiting", COLORS["textMuted"], COLORS["surfaceRaised"]),
+    "keyword": ("Name rule", COLORS["success"], COLORS["successSubtle"]),
+    "extension": ("File type", COLORS["text"], COLORS["surfaceRaised"]),
+    "fallback": ("No rule matched", COLORS["warning"], COLORS["warningSubtle"]),
+    "ignored": ("Skipped", COLORS["critical"], COLORS["criticalSubtle"]),
+    "active_project": ("Project mode", COLORS["warning"], COLORS["warningSubtle"]),
+    "makerworld": ("MakerWorld", COLORS["info"], COLORS["infoSubtle"]),
+    "gcode_sniffer": ("G-code check", COLORS["info"], COLORS["infoSubtle"]),
+}
+
+
 class LiveSandboxWidget(QFrame):
-    """Interactive real-time routing simulator evaluating filename inputs."""
+    """"Try a filename": shows where a file would go with the rules being edited."""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -1060,165 +893,71 @@ class LiveSandboxWidget(QFrame):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"""
-            LiveSandboxWidget {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['card']}px;
-            }}
-            QLabel {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-            }}
-            QLineEdit {{
-                background: {COLORS['canvas']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 7px 11px;
-                font-family: '{TYPE['mono']}';
-                font-size: 12px;
-            }}
-            QLineEdit:focus {{
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-            QPushButton.chip {{
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 12px;
-                color: {COLORS['textMuted']};
-                padding: 3px 10px;
-                font-family: '{TYPE['mono']}';
-                font-size: 10px;
-            }}
-            QPushButton.chip:hover {{
-                background: {COLORS['surfaceHover']};
-                color: {ACCENTS['downloadSorter']};
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-        """)
-
+        self.setObjectName("card")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(10)
 
-        # Title Row
-        title_box = QHBoxLayout()
-        title_box.setSpacing(6)
-        title_lbl = QLabel("🧪 LIVE SORTER SANDBOX SIMULATOR")
-        title_lbl.setFont(QFont(TYPE["ui"], 11, QFont.Weight.Bold))
-        title_lbl.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
-        title_box.addWidget(title_lbl)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
+        title_row.addWidget(ui_style.label("Try a filename", "section"))
+        title_row.addWidget(ui_style.label("Uses your rules as they are now, including unsaved changes.", "caption"))
+        title_row.addStretch()
+        layout.addLayout(title_row)
 
-        title_box.addStretch()
-        parity_badge = QLabel("EXACT ENGINE PARITY")
-        parity_badge.setFont(QFont(TYPE["ui"], 8, QFont.Weight.Medium))
-        parity_badge.setStyleSheet(f"color: {COLORS['textMuted']}; background: {COLORS['surfaceRaised']}; border-radius: 4px; padding: 2px 6px;")
-        title_box.addWidget(parity_badge)
-        layout.addLayout(title_box)
-
-        # Input Row
         self._input = QLineEdit()
+        self._input.setProperty("role", "mono")
         self._input.setClearButtonEnabled(True)
-        self._input.setPlaceholderText("Enter hypothetical filename (e.g. ME3210_Exam_Review.pdf, bracket_op1.nc, vase.3mf)...")
+        self._input.addAction(ui_icons.icon("search"), QLineEdit.ActionPosition.LeadingPosition)
         self._input.textChanged.connect(lambda: self.evaluate())
         layout.addWidget(self._input)
 
-        # Quick Preset Chips
-        self._current_persona = "maker_3d"
+        self._current_persona = "everyday_home"
         self._chips_box = QHBoxLayout()
-        self._chips_box.setSpacing(6)
+        self._chips_box.setSpacing(0)
         layout.addLayout(self._chips_box)
         self._rebuild_chips()
 
-        # Result Display Card
-        self._result_frame = QFrame()
-        self._result_frame.setStyleSheet(f"""
-            QFrame {{
-                background: {COLORS['canvas']};
-                border: 1px solid {COLORS['borderStrong']};
-                border-radius: {RADII['small']}px;
-                padding: 6px;
-            }}
-        """)
-        res_layout = QVBoxLayout(self._result_frame)
-        res_layout.setContentsMargins(10, 8, 10, 8)
-        res_layout.setSpacing(6)
+        # Result
+        result = QHBoxLayout()
+        result.setSpacing(10)
+        self._badge_lbl = QLabel()
+        result.addWidget(self._badge_lbl)
+        goes = ui_style.label("goes to", "muted")
+        result.addWidget(goes)
+        self._dest_lbl = ui_style.label("—", "mono")
+        self._dest_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        result.addWidget(self._dest_lbl, 1)
+        layout.addLayout(result)
 
-        # Row 1: Match Badge + Winning Rule
-        r1 = QHBoxLayout()
-        r1.setSpacing(8)
-
-        self._badge_lbl = QLabel("[WAITING FOR INPUT]")
-        self._badge_lbl.setFont(QFont(TYPE["ui"], 9, QFont.Weight.Bold))
-        self._badge_lbl.setStyleSheet(f"background: {COLORS['surfaceRaised']}; color: {COLORS['textMuted']}; padding: 3px 8px; border-radius: 4px;")
-        r1.addWidget(self._badge_lbl)
-
-        self._rule_lbl = QLabel("Type a filename or click a preset above to simulate routing.")
-        self._rule_lbl.setFont(QFont(TYPE["ui"], 11, QFont.Weight.DemiBold))
-        r1.addWidget(self._rule_lbl, 1)
-
-        res_layout.addLayout(r1)
-
-        # Row 2: Destination path
-        r2 = QHBoxLayout()
-        r2.setSpacing(6)
-        r2.addWidget(QLabel("DESTINATION:"))
-        self._dest_lbl = QLabel("—")
-        self._dest_lbl.setFont(QFont(TYPE["mono"], 11, QFont.Weight.Medium))
-        self._dest_lbl.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
-        r2.addWidget(self._dest_lbl, 1)
-        res_layout.addLayout(r2)
-
-        # Row 3: Matched Trigger token
-        self._trigger_lbl = QLabel("")
-        self._trigger_lbl.setFont(QFont(TYPE["ui"], 10))
-        self._trigger_lbl.setStyleSheet(f"color: {COLORS['textMuted']}; font-style: italic;")
-        res_layout.addWidget(self._trigger_lbl)
-
-        layout.addWidget(self._result_frame)
-
-        # Collapsible Rule Chain Trace
-        trace_header = QHBoxLayout()
-        self._trace_btn = QPushButton("▶ Rule Chain Trace")
-        self._trace_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                border: none;
-                color: {COLORS['textMuted']};
-                font-size: 11px;
-                text-align: left;
-                padding: 2px 0;
-            }}
-            QPushButton:hover {{
-                color: {COLORS['text']};
-            }}
-        """)
-        self._trace_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        detail = QHBoxLayout()
+        detail.setSpacing(6)
+        self._rule_lbl = ui_style.label("", "muted")
+        detail.addWidget(self._rule_lbl)
+        self._trigger_lbl = ui_style.label("", "caption")
+        detail.addWidget(self._trigger_lbl, 1)
+        self._trace_btn = ui_style.button("Show all rules checked", "ghost")
         self._trace_btn.clicked.connect(self._toggle_trace)
-        trace_header.addWidget(self._trace_btn)
-        trace_header.addStretch()
-        layout.addLayout(trace_header)
+        detail.addWidget(self._trace_btn)
+        layout.addLayout(detail)
 
         self._trace_list = QListWidget()
         self._trace_list.setVisible(False)
-        self._trace_list.setMaximumHeight(130)
-        self._trace_list.setStyleSheet(f"""
-            QListWidget {{
-                background: {COLORS['canvas']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['textMuted']};
-                font-family: '{TYPE['mono']}';
-                font-size: 10px;
-                padding: 4px;
-            }}
-        """)
+        self._trace_list.setMaximumHeight(140)
+        self._trace_list.setStyleSheet(f"font-family: '{TYPE['mono']}'; font-size: 12px; color: {COLORS['textMuted']};")
         layout.addWidget(self._trace_list)
 
+        self._show_badge("waiting")
+
+    def _show_badge(self, match_type: str) -> None:
+        text, fg, bg = SANDBOX_BADGES.get(match_type, (match_type.replace("_", " ").title(), COLORS["text"], COLORS["surfaceRaised"]))
+        self._badge_lbl.setText(text)
+        self._badge_lbl.setStyleSheet(
+            f"color: {fg}; background: {bg}; border-radius: 4px; padding: 2px 8px; font-size: 12px; font-weight: 600;"
+        )
+
     def set_persona(self, persona: str) -> None:
-        """Update preset chips to reflect the active user profile."""
+        """Update the example filenames to fit the active profile."""
         self._current_persona = persona
         self._rebuild_chips()
 
@@ -1231,44 +970,30 @@ class LiveSandboxWidget(QFrame):
             if w:
                 w.deleteLater()
 
-        lbl = QLabel("TEST PRESETS:")
-        lbl.setFont(QFont(TYPE["ui"], 9, QFont.Weight.Bold))
-        lbl.setStyleSheet(f"color: {COLORS['textMuted']};")
-        self._chips_box.addWidget(lbl)
+        self._chips_box.addWidget(ui_style.label("Examples:", "caption"))
 
-        persona = getattr(self, "_current_persona", "maker_3d")
+        persona = getattr(self, "_current_persona", "everyday_home")
         if persona == "maker_3d":
             presets = [
-                ("Haas CNC .nc", "bracket_op1.nc"),
-                ("Bambu Slicer .gcode", "vase_multicolor.gcode"),
-                ("3MF Model", "turbine_bracket.3mf"),
-                ("ME3210 Exam", "ME3210_Exam_Review.pdf"),
-                ("ZIP Archive", "hardware_pack.zip"),
+                ("Haas program", "bracket_op1.nc"),
+                ("Bambu G-code", "vase_multicolor.gcode"),
+                ("3MF project", "turbine_bracket.3mf"),
+                ("Invoice", "Invoice_2026.pdf"),
+                ("Zip file", "hardware_pack.zip"),
             ]
-            self._input.setPlaceholderText("Enter hypothetical filename (e.g. ME3210_Exam_Review.pdf, bracket_op1.nc, vase.3mf)...")
+            example = "bracket_op1.nc"
         else:
-            presets = [
-                ("Invoice_2026.pdf", "Invoice_2026.pdf"),
-                ("Family_Photo.jpg", "Family_Photo.jpg"),
-                ("Syllabus_Fall.pdf", "Syllabus_Fall.pdf"),
-                ("Zoom_Installer.exe", "Zoom_Installer.exe"),
-                ("Vacation_Photos.zip", "Vacation_Photos.zip"),
-            ]
-            self._input.setPlaceholderText("Enter hypothetical filename (e.g. Invoice_2026.pdf, Family_Photo.jpg, Syllabus_Fall.pdf)...")
+            presets = [(name, name) for name in (
+                "Invoice_2026.pdf", "Family_Photo.jpg", "Syllabus_Fall.pdf",
+                "Zoom_Installer.exe", "Vacation_Photos.zip",
+            )]
+            example = "Invoice_2026.pdf"
+        self._input.setPlaceholderText(f"Type a file name, for example {example}")
 
         for label, fname in presets:
-            btn = QPushButton(label)
-            btn.setProperty("class", "chip")
-            btn.setStyleSheet(f"""
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 11px;
-                color: {COLORS['textMuted']};
-                padding: 3px 9px;
-                font-family: '{TYPE['mono']}';
-                font-size: 10px;
-            """)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn = ui_style.button(label, "ghost")
+            btn.setToolTip(fname)
+            btn.setStyleSheet("padding: 2px 6px; font-weight: 500; font-size: 12px;")
             btn.clicked.connect(lambda _c=False, f=fname: self._set_input(f))
             self._chips_box.addWidget(btn)
 
@@ -1280,7 +1005,7 @@ class LiveSandboxWidget(QFrame):
     def _toggle_trace(self) -> None:
         self._trace_expanded = not self._trace_expanded
         self._trace_list.setVisible(self._trace_expanded)
-        self._trace_btn.setText("▼ Rule Chain Trace" if self._trace_expanded else "▶ Rule Chain Trace")
+        self._trace_btn.setText("Hide rules checked" if self._trace_expanded else "Show all rules checked")
 
     def set_config_and_project(self, config: dict[str, Any], active_project: dict[str, Any] | None) -> None:
         """Update draft rules and active project model and re-evaluate immediately."""
@@ -1292,9 +1017,8 @@ class LiveSandboxWidget(QFrame):
         """Simulate routing chain for hypothetical filename."""
         name = filename if filename is not None else self._input.text().strip()
         if not name:
-            self._badge_lbl.setText("[WAITING]")
-            self._badge_lbl.setStyleSheet(f"background: {COLORS['surfaceRaised']}; color: {COLORS['textMuted']}; padding: 3px 8px; border-radius: 4px;")
-            self._rule_lbl.setText("Type a filename or click a preset above to simulate routing.")
+            self._show_badge("waiting")
+            self._rule_lbl.setText("Type a file name above, or pick an example.")
             self._dest_lbl.setText("—")
             self._trigger_lbl.setText("")
             self._trace_list.clear()
@@ -1349,44 +1073,35 @@ class LiveSandboxWidget(QFrame):
         dest = res.get("destination", "")
         trigger = res.get("matched_trigger", "")
 
-        badges = {
-            "active_project": ("[ACTIVE PROJECT]", f"background: {ACCENTS['broncoGold']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
-            "makerworld": ("[MAKERWORLD]", f"background: {ACCENTS['printLibrary']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
-            "keyword": ("[KEYWORD RULE]", f"background: {COLORS['success']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
-            "gcode_sniffer": ("[GCODE SNIFFER]", f"background: {ACCENTS['suiteCentral']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
-            "extension": ("[EXTENSION RULE]", f"background: {COLORS['borderStrong']}; color: {COLORS['text']}; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
-            "fallback": ("[DEFAULT FALLBACK]", f"background: {COLORS['warning']}; color: #0B0D12; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
-            "ignored": ("[IGNORED]", f"background: {COLORS['critical']}; color: #FFFFFF; font-weight: bold; padding: 3px 8px; border-radius: 4px;"),
-        }
-
-        b_text, b_style = badges.get(match_type, ("[MATCH]", f"background: {COLORS['surfaceRaised']}; color: {COLORS['text']};"))
-        self._badge_lbl.setText(b_text)
-        self._badge_lbl.setStyleSheet(b_style)
-
-        self._rule_lbl.setText(winning_rule or match_type.upper())
+        self._show_badge(match_type)
+        self._rule_lbl.setText(winning_rule or SANDBOX_BADGES.get(match_type, (match_type,))[0])
         self._dest_lbl.setText(dest or "None")
 
-        if trigger:
-            self._trigger_lbl.setText(f"Matched trigger token: '{trigger}'")
+        if match_type == "ignored":
+            why = "Temporary and partial files are left alone."
+        elif trigger:
+            why = f"Matched {trigger}"
         elif match_type == "active_project":
-            self._trigger_lbl.setText("Matched active project CAD/3D/CNC extension whitelist")
+            why = "Project mode catches CAD, 3D and CNC files."
         elif match_type == "makerworld":
-            self._trigger_lbl.setText(f"MakerWorld 3MF metadata parsed: {winning_rule}")
+            why = "Read from the file's MakerWorld details."
         elif match_type == "gcode_sniffer":
-            self._trigger_lbl.setText(f"G-code machine sniffer evaluated header: {res.get('sniffer_details')}")
+            why = f"Read from the start of the file: {res.get('sniffer_details')}"
+        elif match_type == "fallback":
+            why = "No rule matched, so it goes to the catch-all folder."
         else:
-            self._trigger_lbl.setText("")
+            why = ""
+        self._trigger_lbl.setText(why)
 
-        # Update trace items
         self._trace_list.clear()
         for t in res.get("rule_trace", []):
             tier = t.get("tier", "")
             status = t.get("status", "")
-            rule_name = t.get("rule", "")
+            rule_name = t.get("rule", "") or tier
             if status == "matched":
-                txt = f"★ [{tier.upper()}] MATCHED '{rule_name or tier}' -> {t.get('destination', '')}"
+                txt = f"✓ {rule_name}  →  {t.get('destination', '')}"
             else:
-                txt = f"  · [{tier}] Skipped '{rule_name or tier}' ({status})"
+                txt = f"   {rule_name}: {status.replace('_', ' ')}"
             self._trace_list.addItem(txt)
 
 
@@ -1436,7 +1151,7 @@ class MachineRemodelWidget(QFrame):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("machineRemodelWidget")
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self._current_plan: Any = None
         self._card_buttons: dict[str, QButtonGroup] = {}
         import remodel
@@ -1446,123 +1161,116 @@ class MachineRemodelWidget(QFrame):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
 
-        header_lbl = QLabel("Automated Machine Remodel & Folder Reorganization")
-        header_lbl.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {COLORS.get('text', '#EDF1F8')};")
-        layout.addWidget(header_lbl)
-
-        sub_lbl = QLabel(
-            "Scan and restructure messy machine directories. Automatically protects CAD assemblies, SOLIDCast, "
-            "MAGMASOFT, KiCad, active projects (<14d), and deduplicates identical files into quarantine."
+        header, _ = ui_style.page_header(
+            "Clean up a folder",
+            "Preview how a messy folder would be organized by file type. Nothing moves until you click "
+            "Apply, and you can undo it afterwards.",
         )
-        sub_lbl.setWordWrap(True)
-        sub_lbl.setStyleSheet(f"font-size: 11px; color: {COLORS.get('textMuted', '#8B94A7')};")
-        layout.addWidget(sub_lbl)
+        layout.addWidget(header)
 
+        scope_card, scope = ui_style.card(spacing=10)
         scope_layout = QHBoxLayout()
-        scope_layout.addWidget(QLabel("Scope:"))
+        scope_layout.setSpacing(8)
         self._scope_combo = QComboBox()
         self._scope_combo.addItems([
-            "Downloads (Full deep scan)",
-            "Desktop (Files >30 days, preserves shortcuts)",
-            "Documents (Top-level only)",
-            "Custom Directory...",
+            "Downloads",
+            "Desktop (files older than 30 days)",
+            "Documents (top level only)",
+            "Another folder...",
         ])
         self._scope_combo.currentIndexChanged.connect(self._on_scope_changed)
         scope_layout.addWidget(self._scope_combo, 1)
 
         self._custom_path_edit = QLineEdit()
-        self._custom_path_edit.setPlaceholderText("Select custom folder to remodel...")
+        self._custom_path_edit.setPlaceholderText("Choose a folder")
         self._custom_path_edit.setEnabled(False)
+        self._custom_path_edit.setVisible(False)
         scope_layout.addWidget(self._custom_path_edit, 2)
 
-        self._browse_btn = QPushButton("Browse...")
+        self._browse_btn = ui_style.button("Browse...")
         self._browse_btn.setEnabled(False)
+        self._browse_btn.setVisible(False)
         self._browse_btn.clicked.connect(self._on_browse)
         scope_layout.addWidget(self._browse_btn)
 
-        self._scan_btn = QPushButton("🔍 Scan & Preview")
-        self._scan_btn.setStyleSheet(f"background-color: {COLORS.get('info', '#61A5FF')}; color: #FFFFFF; font-weight: bold;")
+        self._scan_btn = ui_style.button("Preview changes", "primary", "search")
         self._scan_btn.clicked.connect(self._start_scan)
         scope_layout.addWidget(self._scan_btn)
-
-        layout.addLayout(scope_layout)
+        scope.addLayout(scope_layout)
+        scope.addWidget(ui_style.label(
+            "Always left alone: program and game folders, code and CAD projects, folders changed in the "
+            "last 14 days, and any folder containing a file named .download-sorter-keep.",
+            "caption", wrap=True))
+        layout.addWidget(scope_card)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 0)
+        self._progress.setTextVisible(False)
+        self._progress.setFixedHeight(4)
+        self._progress.setStyleSheet(
+            f"QProgressBar {{ background: {COLORS['surfaceRaised']}; border: none; border-radius: 2px; }}"
+            f" QProgressBar::chunk {{ background: {ACCENTS['downloadSorter']}; border-radius: 2px; }}"
+        )
         self._progress.setVisible(False)
         layout.addWidget(self._progress)
 
-        self._summary_lbl = QLabel("Select a scope and click 'Scan & Preview' to inspect proposed actions.")
-        self._summary_lbl.setStyleSheet(f"color: {COLORS.get('textMuted', '#8B94A7')}; font-style: italic;")
+        self._summary_lbl = ui_style.label(
+            "Pick a folder and click Preview changes to see what would happen to each folder inside it.",
+            "muted", wrap=True)
         layout.addWidget(self._summary_lbl)
 
         self._sub_tabs = QTabWidget()
+        self._sub_tabs.setDocumentMode(True)
+        self._sub_tabs.tabBar().setDrawBase(False)
 
         self._cards_scroll = QScrollArea()
         self._cards_scroll.setWidgetResizable(True)
+        self._cards_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._cards_container = QWidget()
         self._cards_layout = QVBoxLayout(self._cards_container)
-        self._cards_layout.setContentsMargins(4, 4, 4, 4)
+        self._cards_layout.setContentsMargins(0, 8, 6, 0)
         self._cards_layout.setSpacing(8)
         self._cards_layout.addStretch()
         self._cards_scroll.setWidget(self._cards_container)
-        self._sub_tabs.addTab(self._cards_scroll, "Folder Review Cards")
-
-        table_qss = f"""
-            QTableWidget {{
-                background-color: {COLORS['canvas']};
-                alternate-background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                gridline-color: transparent;
-                selection-background-color: {COLORS['surfaceHover']};
-                selection-color: {COLORS['text']};
-            }}
-            QHeaderView::section {{
-                background-color: {COLORS['surfaceRaised']};
-                color: {COLORS['textMuted']};
-                padding: 6px;
-                border: none;
-                border-bottom: 1px solid {COLORS['border']};
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-                font-weight: 600;
-            }}
-        """
+        self._sub_tabs.addTab(self._cards_scroll, "Folders")
 
         self._prot_table = QTableWidget(0, 2)
-        self._prot_table.setStyleSheet(table_qss)
-        self._prot_table.setHorizontalHeaderLabels(["Protected Folder / Item", "Protection Reason"])
+        self._prot_table.setHorizontalHeaderLabels(["Folder or file", "Why it's left alone"])
         self._prot_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self._prot_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._sub_tabs.addTab(self._prot_table, "Protected & Skipped (0)")
+        self._prot_table.verticalHeader().setVisible(False)
+        self._prot_table.setShowGrid(False)
+        self._sub_tabs.addTab(self._prot_table, "Left alone (0)")
 
         self._dupe_table = QTableWidget(0, 3)
-        self._dupe_table.setStyleSheet(table_qss)
-        self._dupe_table.setHorizontalHeaderLabels(["Duplicate File", "Size", "Kept Original"])
+        self._dupe_table.setHorizontalHeaderLabels(["Duplicate file", "Size", "Copy that's kept"])
         self._dupe_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self._dupe_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self._sub_tabs.addTab(self._dupe_table, "Duplicates to Quarantine (0)")
+        self._dupe_table.verticalHeader().setVisible(False)
+        self._dupe_table.setShowGrid(False)
+        self._sub_tabs.addTab(self._dupe_table, "Duplicates (0)")
 
         layout.addWidget(self._sub_tabs, 1)
 
         action_layout = QHBoxLayout()
-        self._apply_btn = QPushButton("🚀 Apply Remodel")
+        action_layout.setSpacing(8)
+        self._apply_btn = ui_style.button("Apply", None, "check",
+                                          "Move the files as previewed. You can undo this afterwards.")
         self._apply_btn.setEnabled(False)
-        self._apply_btn.setStyleSheet(f"background-color: {COLORS.get('success', '#69E6AD')}; color: #000000; font-weight: bold; padding: 6px 16px;")
         self._apply_btn.clicked.connect(self._start_apply)
         action_layout.addWidget(self._apply_btn)
 
-        self._undo_btn = QPushButton("↺ Undo Remodel")
+        self._undo_btn = ui_style.button("Undo last clean-up", "ghost", "undo")
         self._undo_btn.clicked.connect(self._on_undo)
         action_layout.addWidget(self._undo_btn)
 
         action_layout.addStretch()
-        self._receipt_btn = QPushButton("📄 Open HTML Receipt")
+        self._receipt_btn = ui_style.button("Where did my files go?", "ghost", "file",
+                                            "Open the list of every file that was moved")
         self._receipt_btn.setEnabled(False)
         self._receipt_btn.clicked.connect(self._open_receipt)
         action_layout.addWidget(self._receipt_btn)
@@ -1573,6 +1281,8 @@ class MachineRemodelWidget(QFrame):
         is_custom = (idx == 3)
         self._custom_path_edit.setEnabled(is_custom)
         self._browse_btn.setEnabled(is_custom)
+        self._custom_path_edit.setVisible(is_custom)
+        self._browse_btn.setVisible(is_custom)
 
     def _on_browse(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Folder to Remodel")
@@ -1596,13 +1306,13 @@ class MachineRemodelWidget(QFrame):
     def _start_scan(self):
         scope, target = self._get_target_path_and_scope()
         if not target.exists():
-            QMessageBox.warning(self, "Invalid Directory", f"The directory {target} does not exist.")
+            QMessageBox.warning(self, "Folder not found", f"{target} doesn't exist. Pick another folder.")
             return
 
         self._scan_btn.setEnabled(False)
         self._apply_btn.setEnabled(False)
         self._progress.setVisible(True)
-        self._summary_lbl.setText(f"Scanning {target} ...")
+        self._summary_lbl.setText(f"Looking through {target}...")
 
         self._worker = RemodelWorker("scan", self._engine, (scope, target))
         self._worker.scan_finished.connect(self._on_scan_finished)
@@ -1615,10 +1325,17 @@ class MachineRemodelWidget(QFrame):
         self._current_plan = plan
 
         dupe_mb = round(plan.reclaimable_duplicate_bytes / (1024 * 1024), 2)
+        dupes = len(plan.duplicates_to_quarantine)
         self._summary_lbl.setText(
-            f"Scan Complete: {plan.total_files_scanned} files inspected across {len(plan.cards)} subfolders. "
-            f"{len(plan.duplicates_to_quarantine)} duplicates found ({dupe_mb} MB reclaimable)."
+            f"Looked at {plan.total_files_scanned} files in {len(plan.cards)} folders. "
+            + (f"Found {dupes} duplicate files ({dupe_mb} MB); they'd be set aside for 30 days, not deleted. "
+               if dupes else "No duplicates found. ")
+            + "Check each folder below, then click Apply."
         )
+        ui_style.set_role(self._apply_btn, "primary")
+        self._apply_btn.setIcon(ui_icons.icon("check", COLORS["canvas"]))
+        ui_style.set_role(self._scan_btn, None)
+        self._scan_btn.setIcon(ui_icons.icon("search"))
         self._apply_btn.setEnabled(len(plan.cards) > 0 or len(plan.loose_files_to_organize) > 0 or len(plan.duplicates_to_quarantine) > 0)
 
         while self._cards_layout.count() > 1:
@@ -1628,64 +1345,36 @@ class MachineRemodelWidget(QFrame):
         self._card_buttons.clear()
 
         for card in plan.cards:
-            card_frame = QFrame()
-            card_frame.setFrameShape(QFrame.Shape.StyledPanel)
-            card_frame.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {COLORS['surfaceRaised']};
-                    border: 1px solid {COLORS['border']};
-                    border-radius: {RADII['card']}px; /* 11px */
-                    padding: 8px;
-                }}
-                QRadioButton {{
-                    color: {COLORS['text']};
-                    font-family: '{TYPE['ui']}';
-                    font-size: 11px;
-                    spacing: 6px;
-                }}
-                QRadioButton::indicator {{
-                    width: 14px;
-                    height: 14px;
-                    border: 1px solid {COLORS['borderStrong']};
-                    border-radius: 7px;
-                    background: {COLORS['canvas']};
-                }}
-                QRadioButton::indicator:hover {{
-                    border-color: {ACCENTS['downloadSorter']};
-                }}
-                QRadioButton::indicator:checked {{
-                    background: {ACCENTS['downloadSorter']};
-                    border-color: {ACCENTS['downloadSorter']};
-                }}
-            """)
-            c_layout = QVBoxLayout(card_frame)
+            card_frame, c_layout = ui_style.card(margins=(16, 12, 16, 12), spacing=6)
 
             top_h = QHBoxLayout()
-            name_lbl = QLabel(f"📁 {card.folder_path.name}")
-            name_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
-            top_h.addWidget(name_lbl)
-
+            top_h.setSpacing(8)
+            ic = QLabel()
+            ic.setPixmap(ui_icons.pixmap("folder", COLORS["textMuted"], 16))
+            top_h.addWidget(ic)
+            top_h.addWidget(ui_style.label(card.folder_path.name, "section"))
             if card.protection.is_protected:
-                badge = QLabel(f"PROTECTED: {card.protection.reason}")
-                badge.setStyleSheet(f"background: {COLORS['successSubtle']}; color: {COLORS['success']}; border: 1px solid {COLORS['successBorder']}; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: {RADII['small']}px;")
-                top_h.addWidget(badge)
+                badge_text, fg, bg = f"Left alone: {card.protection.reason}", COLORS["success"], COLORS["successSubtle"]
             else:
-                badge = QLabel("ORGANIZE CANDIDATE")
-                badge.setStyleSheet(f"background: {COLORS['infoSubtle']}; color: {COLORS['info']}; border: 1px solid {COLORS['infoBorder']}; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: {RADII['small']}px;")
-                top_h.addWidget(badge)
+                badge_text, fg, bg = "Can be organized", COLORS["info"], COLORS["infoSubtle"]
+            badge = QLabel(badge_text)
+            badge.setStyleSheet(f"color: {fg}; background: {bg}; border-radius: 4px; padding: 2px 8px; font-size: 12px;")
+            top_h.addWidget(badge)
             top_h.addStretch()
-
             c_layout.addLayout(top_h)
 
-            info_lbl = QLabel(f"Files: {card.file_count} · Size: {card.total_size_mb} MB · Path: {card.folder_path}")
-            info_lbl.setStyleSheet(f"font-size: 11px; color: {COLORS.get('textMuted', '#8B94A7')};")
+            noun = "file" if card.file_count == 1 else "files"
+            size = f"{card.total_size_mb} MB" if card.total_size_mb >= 0.1 else "under 0.1 MB"
+            info_lbl = ui_style.label(f"{card.file_count} {noun} · {size}", "caption")
+            info_lbl.setToolTip(str(card.folder_path))
             c_layout.addWidget(info_lbl)
 
             btn_group = QButtonGroup(card_frame)
             rad_h = QHBoxLayout()
-            rb_org = QRadioButton("Organize into Categories")
-            rb_keep = QRadioButton("Keep Intact (Untouched)")
-            rb_skip = QRadioButton("Skip")
+            rad_h.setSpacing(18)
+            rb_org = QRadioButton("Organize by file type")
+            rb_keep = QRadioButton("Keep intact")
+            rb_skip = QRadioButton("Skip for now")
 
             btn_group.addButton(rb_org, 1)
             btn_group.addButton(rb_keep, 2)
@@ -1712,7 +1401,7 @@ class MachineRemodelWidget(QFrame):
         for row, (p, reason) in enumerate(plan.protected_items):
             self._prot_table.setItem(row, 0, QTableWidgetItem(str(p)))
             self._prot_table.setItem(row, 1, QTableWidgetItem(reason))
-        self._sub_tabs.setTabText(1, f"Protected & Skipped ({len(plan.protected_items)})")
+        self._sub_tabs.setTabText(1, f"Left alone ({len(plan.protected_items)})")
 
         self._dupe_table.setRowCount(len(plan.duplicates_to_quarantine))
         for row, (src, _q, keeper) in enumerate(plan.duplicates_to_quarantine):
@@ -1723,7 +1412,7 @@ class MachineRemodelWidget(QFrame):
             self._dupe_table.setItem(row, 0, QTableWidgetItem(src.name))
             self._dupe_table.setItem(row, 1, QTableWidgetItem(sz_str))
             self._dupe_table.setItem(row, 2, QTableWidgetItem(keeper))
-        self._sub_tabs.setTabText(2, f"Duplicates to Quarantine ({len(plan.duplicates_to_quarantine)})")
+        self._sub_tabs.setTabText(2, f"Duplicates ({len(plan.duplicates_to_quarantine)})")
 
     def _start_apply(self):
         if not self._current_plan:
@@ -1731,10 +1420,10 @@ class MachineRemodelWidget(QFrame):
 
         confirm = QMessageBox.question(
             self,
-            "Confirm Machine Remodel",
-            f"Are you ready to remodel {self._current_plan.target_root}?\n\n"
-            f"All moves are journaled and 100% reversible via the Undo button.\n"
-            f"A 'Where did my files go.html' receipt will be placed in the folder root.",
+            "Apply clean-up",
+            f"Move the files in {self._current_plan.target_root} as previewed?\n\n"
+            "You can put everything back with \u201cUndo last clean-up\u201d. A list of every move is saved "
+            "in that folder as \u201cWhere did my files go.html\u201d.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
@@ -1752,7 +1441,7 @@ class MachineRemodelWidget(QFrame):
 
         self._apply_btn.setEnabled(False)
         self._progress.setVisible(True)
-        self._summary_lbl.setText("Applying remodel...")
+        self._summary_lbl.setText("Moving files...")
 
         self._worker = RemodelWorker("apply", self._engine, self._current_plan, overrides)
         self._worker.apply_finished.connect(self._on_apply_finished)
@@ -1764,24 +1453,22 @@ class MachineRemodelWidget(QFrame):
         executed = len(receipt.get("executed_moves", []))
         skipped = len(receipt.get("skipped_items", []))
         self._summary_lbl.setText(
-            f"✓ Remodel Completed: {executed} files organized, {skipped} items protected. "
-            f"Receipt created at {self._current_plan.target_root / 'Where did my files go.html'}"
+            f"Done. Moved {executed} files and left {skipped} items alone. "
+            "Click \u201cWhere did my files go?\u201d to see the full list."
         )
         self._receipt_btn.setEnabled(True)
         QMessageBox.information(
             self,
-            "Remodel Complete",
-            f"Remodel successfully completed!\n\n"
-            f"• Organized: {executed} files\n"
-            f"• Protected: {skipped} items\n\n"
-            f"A searchable 'Where did my files go.html' receipt has been created in your folder.",
+            "Clean-up finished",
+            f"Moved {executed} files and left {skipped} items alone.\n\n"
+            "A list of every move was saved in the folder as \u201cWhere did my files go.html\u201d.",
         )
 
     def _on_undo(self):
         confirm = QMessageBox.question(
             self,
-            "Undo Remodel",
-            "Do you want to restore the most recent machine remodel and return all files to their original locations?",
+            "Undo last clean-up",
+            "Put every file from the most recent clean-up back where it was?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
@@ -1789,13 +1476,13 @@ class MachineRemodelWidget(QFrame):
 
         res = self._engine.undo()
         if res.get("ok"):
-            QMessageBox.information(self, "Undo Complete", res.get("message", "Restored files successfully."))
-            self._summary_lbl.setText(f"✓ {res.get('message')}")
+            QMessageBox.information(self, "Undo finished", res.get("message", "Your files were put back."))
+            self._summary_lbl.setText(res.get("message", ""))
         elif res.get("partial"):
-            QMessageBox.warning(self, "Undo Partially Complete", res.get("message", "Some files could not be restored."))
-            self._summary_lbl.setText(f"⚠️ {res.get('message')}")
+            QMessageBox.warning(self, "Some files weren't put back", res.get("message", "Some files couldn't be put back."))
+            self._summary_lbl.setText(res.get("message", ""))
         else:
-            QMessageBox.critical(self, "Undo Failed", res.get("message", "Failed to undo remodel."))
+            QMessageBox.critical(self, "Couldn't undo", res.get("message", "The clean-up couldn't be undone."))
 
     def _open_receipt(self):
         if self._current_plan:
@@ -1807,20 +1494,23 @@ class MachineRemodelWidget(QFrame):
         self._progress.setVisible(False)
         self._scan_btn.setEnabled(True)
         self._apply_btn.setEnabled(True)
-        QMessageBox.critical(self, "Remodel Error", f"An error occurred during remodel operation:\n\n{err_msg}")
+        QMessageBox.critical(self, "Something went wrong", f"The clean-up stopped because of an error:\n\n{err_msg}")
 
 
 class RulesManagerDialog(QDialog):
-    """Visual Rules Manager & Live Sorter Sandbox Dialog for Suite Central."""
+    """Main window: Home, Rules, Clean up a folder, and Settings, chosen from a sidebar."""
+
+    # Page order in self._view_stack
+    PAGES = ("home", "rules", "cleanup", "settings")
 
     def __init__(self, parent: QWidget | None = None, initial_view: str = "customize"):
         if isinstance(parent, str):
             initial_view = parent
             parent = None
         super().__init__(parent)
-        self.setWindowTitle("Visual Rules Manager & Live Sorter Sandbox")
-        self.setMinimumSize(880, 800)
-        self.resize(920, 850)
+        self.setWindowTitle(about.APP_NAME)
+        self.setMinimumSize(900, 640)
+        self.resize(1040, 760)
 
         # Clean up any lingering top-level headless dialogs to prevent Qt window registry leaks
         app = QApplication.instance()
@@ -1838,272 +1528,227 @@ class RulesManagerDialog(QDialog):
         self.load_data()
         self.switch_view(initial_view)
 
+    # ------------------------------------------------------------------
+    # layout
+    # ------------------------------------------------------------------
+
     def _init_ui(self) -> None:
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {COLORS['canvas']};
-                color: {COLORS['text']};
-            }}
-            QTabWidget::pane {{
-                border: 1px solid {COLORS['border']};
-                background: {COLORS['surface']};
-                border-radius: {RADII['small']}px;
-            }}
-            QTabBar::tab {{
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-bottom: none;
-                border-top-left-radius: {RADII['small']}px;
-                border-top-right-radius: {RADII['small']}px;
-                padding: 8px 18px;
-                color: {COLORS['textMuted']};
-                font-family: '{TYPE['ui']}';
-                font-weight: 600;
-                font-size: 11px;
-            }}
-            QTabBar::tab:selected {{
-                background: {COLORS['surface']};
-                color: {ACCENTS['downloadSorter']};
-                border-bottom: 2px solid {ACCENTS['downloadSorter']};
-            }}
-            QPushButton {{
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 6px 14px;
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['surfaceHover']};
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-        """)
+        self.setStyleSheet(ui_style.stylesheet())
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(18, 16, 18, 16)
-        main_layout.setSpacing(12)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # -------------------------------------------------------------
-        # Header Bar
-        # -------------------------------------------------------------
-        header = QHBoxLayout()
-        header.setSpacing(10)
+        # ---- sidebar -------------------------------------------------
+        self._sidebar = QFrame()
+        self._sidebar.setObjectName("sidebar")
+        self._sidebar.setFixedWidth(216)
+        side = QVBoxLayout(self._sidebar)
+        side.setContentsMargins(14, 18, 14, 14)
+        side.setSpacing(4)
 
-        title_lbl = QLabel("⚡ Visual Rules Manager & Live Sorter Sandbox")
-        title_lbl.setFont(QFont(TYPE["ui"], 13, QFont.Weight.Bold))
-        title_lbl.setStyleSheet(f"color: {COLORS['text']}; letter-spacing: 0.5px;")
-        header.addWidget(title_lbl)
-
-        # Sorter Status Pill
-        self._sorter_status_pill = QLabel("● ACTIVE" if suite_data.is_sorter_running() else "○ IDLE")
-        self._sorter_status_pill.setFont(QFont(TYPE["ui"], 8, QFont.Weight.DemiBold))
-        is_running = suite_data.is_sorter_running()
-        self._sorter_status_pill.setStyleSheet(f"""
-            background: {COLORS['surfaceRaised']};
-            color: {COLORS['success'] if is_running else COLORS['textMuted']};
-            border: 1px solid {COLORS['border']};
-            border-radius: 9px;
-            padding: 3px 8px;
-        """)
-        header.addWidget(self._sorter_status_pill)
-
-        header.addStretch()
-
-        # Preset Library Button
-        self._preset_lib_btn = QPushButton("📚 Preset Library...")
-        self._preset_lib_btn.setToolTip("Browse and add curated rule packs for Office, School, 3D, and Code")
-        self._preset_lib_btn.clicked.connect(self.open_preset_library)
-        header.addWidget(self._preset_lib_btn)
-
-        # Import & Export Buttons
-        self._export_btn = QPushButton("📤 Export...")
-        self._export_btn.setToolTip("Export rules configuration to a JSON file")
-        self._export_btn.clicked.connect(self.export_rules)
-        header.addWidget(self._export_btn)
-
-        self._import_btn = QPushButton("📥 Import...")
-        self._import_btn.setToolTip("Import rules from an external JSON file")
-        self._import_btn.clicked.connect(self.import_rules)
-        header.addWidget(self._import_btn)
-
-        self._reset_btn = QPushButton("↺ Defaults")
-        self._reset_btn.setToolTip("Reset rules to factory defaults")
-        self._reset_btn.clicked.connect(self.reset_to_defaults)
-        header.addWidget(self._reset_btn)
-
-        # Help -> About
-        self._about_btn = QPushButton("ⓘ About")
-        self._about_btn.setToolTip(f"About {about.APP_NAME} {about.__version__}")
-        self._about_btn.clicked.connect(lambda: show_about_dialog(self))
-        header.addWidget(self._about_btn)
-
-        # Save Button
-        self._save_btn = QPushButton("💾 Save Changes")
-        self._save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENTS['downloadSorter']};
-                color: #0B0D12;
-                border: 1px solid {ACCENTS['downloadSorter']};
-                font-weight: bold;
-                padding: 6px 16px;
-            }}
-            QPushButton:hover {{
-                background: #82ecc0;
-            }}
-        """)
-        self._save_btn.clicked.connect(self.save_changes)
-        header.addWidget(self._save_btn)
-
-        # Close Button
-        close_btn = QPushButton("✕")
-        close_btn.setFixedSize(28, 28)
-        close_btn.setStyleSheet("padding: 0px;")
-        close_btn.clicked.connect(self.close)
-        header.addWidget(close_btn)
-
-        main_layout.addLayout(header)
-
-        # -------------------------------------------------------------
-        # Segmented View Switcher Bar (Home vs Customize)
-        # -------------------------------------------------------------
-        self._view_switcher = QWidget()
-        switcher_row = QHBoxLayout(self._view_switcher)
-        switcher_row.setContentsMargins(0, 0, 0, 0)
-        switcher_row.setSpacing(6)
-
-        self._seg_btn_home = QPushButton("🏠 Home & Activity")
-        self._seg_btn_home.setCheckable(True)
-
-        self._seg_btn_rules = QPushButton("⚙️ Customize Rules & Remodel")
-        self._seg_btn_rules.setCheckable(True)
-
-        self._view_btn_home = self._seg_btn_home
-        self._view_btn_rules = self._seg_btn_rules
+        brand = QHBoxLayout()
+        brand.setSpacing(10)
+        try:
+            from onboarding import SorterMascotWidget
+            mascot = SorterMascotWidget()
+            mascot.set_state("happy")
+            logo = QLabel()
+            logo.setPixmap(mascot.to_pixmap(84, 80).scaled(
+                34, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            brand.addWidget(logo)
+        except Exception:
+            pass
+        brand.addWidget(ui_style.label(about.APP_NAME, "section"))
+        brand.addStretch()
+        side.addLayout(brand)
+        side.addSpacing(18)
 
         self._view_btn_group = QButtonGroup(self)
-        self._view_btn_group.addButton(self._seg_btn_home, 0)
-        self._view_btn_group.addButton(self._seg_btn_rules, 1)
-        self._view_btn_group.idClicked.connect(lambda vid: self._on_view_switcher_clicked(vid))
+        self._view_btn_group.setExclusive(True)
+        self._nav_buttons: dict[str, QPushButton] = {}
+        for page_id, text, icon_name in (
+            ("home", "Home", "home"),
+            ("rules", "Rules", "rules"),
+            ("cleanup", "Clean up a folder", "cleanup"),
+            ("settings", "Settings", "settings"),
+        ):
+            btn = ui_style.button(text, "nav", icon_name)
+            btn.setCheckable(True)
+            self._view_btn_group.addButton(btn, self.PAGES.index(page_id))
+            self._nav_buttons[page_id] = btn
+            side.addWidget(btn)
+        self._view_btn_group.idClicked.connect(self._on_view_switcher_clicked)
 
-        switcher_style = f"""
-            QPushButton {{
-                background: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['textMuted']};
-                padding: 6px 18px;
-                font-weight: 600;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['surfaceHover']};
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-            QPushButton:checked {{
-                background: {COLORS['surfaceRaised']};
-                color: {ACCENTS['downloadSorter']};
-                border: 1px solid {ACCENTS['downloadSorter']};
-            }}
-        """
-        self._seg_btn_home.setStyleSheet(switcher_style)
-        self._seg_btn_rules.setStyleSheet(switcher_style)
+        # Older names, kept for callers and tests
+        self._seg_btn_home = self._view_btn_home = self._nav_buttons["home"]
+        self._seg_btn_rules = self._view_btn_rules = self._nav_buttons["rules"]
+        self._nav_btn_cleanup = self._nav_buttons["cleanup"]
+        self._nav_btn_settings = self._nav_buttons["settings"]
 
-        switcher_row.addWidget(self._seg_btn_home)
-        switcher_row.addWidget(self._seg_btn_rules)
-        switcher_row.addStretch()
-        main_layout.addWidget(self._view_switcher)
+        side.addStretch()
 
-        # -------------------------------------------------------------
-        # Central View Stack: Page 0 (Home), Page 1 (Customize)
-        # -------------------------------------------------------------
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        self._sorter_status_dot = ui_style.status_dot(COLORS["textFaint"])
+        status_row.addWidget(self._sorter_status_dot)
+        self._sorter_status_pill = ui_style.label("", "muted")
+        status_row.addWidget(self._sorter_status_pill, 1)
+        side.addLayout(status_row)
+        side.addSpacing(6)
+        self._credit_lbl = ui_style.label(f"Version {about.__version__} · {about.CREDIT}", "caption", wrap=True)
+        self._credit_lbl.setObjectName("creditFooter")
+        side.addWidget(self._credit_lbl)
+        root.addWidget(self._sidebar)
+
+        # ---- pages ---------------------------------------------------
         self._view_stack = QStackedWidget(self)
+        root.addWidget(self._view_stack, 1)
 
-        # Page 0: Home Dashboard
-        from onboarding import HomeDashboardWidget
+        from onboarding import HomeDashboardWidget, SettingsWidget
+
         self._home_widget = HomeDashboardWidget(config=self._config, parent=self)
         self._home_widget.persona_changed.connect(self.set_active_persona)
-        self._view_stack.addWidget(self._home_widget)
+        self._view_stack.addWidget(self._padded(self._home_widget))
 
-        # Page 1: Customize Rules Container
-        self._customize_container = QWidget(parent=self)
-        custom_layout = QVBoxLayout(self._customize_container)
-        custom_layout.setContentsMargins(0, 0, 0, 0)
-        custom_layout.setSpacing(10)
-
-        # Section 1: Active Project Catch-All Mode
-        self._active_project_card = ActiveProjectCard()
-        self._active_project_card.state_changed.connect(self._on_rules_or_project_changed)
-        custom_layout.addWidget(self._active_project_card)
-
-        # Section 2: Rules Precedence Tabs (STRICT CONTRACT: EXACTLY 3 TABS!)
-        self._tabs = QTabWidget()
-
-        self._keyword_table = RuleTableWidget(rule_type="keyword")
-        self._keyword_table.rules_changed.connect(self._on_rules_or_project_changed)
-        self._tabs.addTab(self._keyword_table, "Keyword Rules (Priority Order)")
-
-        self._extension_table = RuleTableWidget(rule_type="extension")
-        self._extension_table.rules_changed.connect(self._on_rules_or_project_changed)
-        self._tabs.addTab(self._extension_table, "Extension Rules (Fallback Categories)")
+        self._customize_container = self._build_rules_page()
+        self._view_stack.addWidget(self._padded(self._customize_container))
 
         self._remodel_widget = MachineRemodelWidget()
-        self._tabs.addTab(self._remodel_widget, "Machine Remodel")
+        self._view_stack.addWidget(self._padded(self._remodel_widget))
 
-        custom_layout.addWidget(self._tabs, 1)
+        self._settings_widget = SettingsWidget(config=self._config, parent=self)
+        self._settings_widget.persona_changed.connect(self._on_profile_changed)
+        self._view_stack.addWidget(self._padded(self._settings_widget))
 
-        # Section 3: Live Sorter Sandbox Simulator
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(5000)
+        self._status_timer.timeout.connect(self._refresh_sorter_status)
+        self._status_timer.start()
+        self._refresh_sorter_status()
+
+    @staticmethod
+    def _padded(widget: QWidget) -> QWidget:
+        wrapper = QWidget()
+        lay = QVBoxLayout(wrapper)
+        lay.setContentsMargins(32, 28, 32, 24)
+        lay.setSpacing(0)
+        lay.addWidget(widget)
+        return wrapper
+
+    def _build_rules_page(self) -> QWidget:
+        page = QWidget(parent=self)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(16)
+
+        header, actions = ui_style.page_header(
+            "Rules",
+            "Rules are checked from top to bottom. The first one that matches decides where a file goes.",
+        )
+        self._preset_lib_btn = ui_style.button("Add from library", None, "library",
+                                               "Add ready-made rules for school, office, 3D printing and more")
+        self._preset_lib_btn.clicked.connect(self.open_preset_library)
+        actions.addWidget(self._preset_lib_btn, 0, Qt.AlignmentFlag.AlignTop)
+
+        self._more_btn = QToolButton()
+        self._more_btn.setProperty("role", "ghost")
+        self._more_btn.setIcon(ui_icons.icon("more"))
+        self._more_btn.setToolTip("More")
+        self._more_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._more_btn.setFixedSize(36, 36)
+        self._more_btn.setIconSize(QSize(18, 18))
+        self._more_btn.setStyleSheet("padding: 0;")
+        more_menu = QMenu(self._more_btn)
+        self._import_action = more_menu.addAction(ui_icons.icon("import"), "Import rules...", self.import_rules)
+        self._export_action = more_menu.addAction(ui_icons.icon("export"), "Export rules...", self.export_rules)
+        more_menu.addSeparator()
+        self._reset_action = more_menu.addAction(ui_icons.icon("reset"), "Reset to defaults...", self.reset_to_defaults)
+        self._more_btn.setMenu(more_menu)
+        actions.addWidget(self._more_btn, 0, Qt.AlignmentFlag.AlignTop)
+
+        self._save_btn = ui_style.button("Save changes", "primary")
+        self._save_btn.setEnabled(False)
+        self._save_btn.clicked.connect(self.save_changes)
+        actions.addWidget(self._save_btn, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(header)
+
+        # Project mode (maker profile only)
+        self._active_project_card = ActiveProjectCard()
+        self._active_project_card.state_changed.connect(self._on_rules_or_project_changed)
+        layout.addWidget(self._active_project_card)
+
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        self._tabs.tabBar().setDrawBase(False)
+        self._keyword_table = RuleTableWidget(rule_type="keyword")
+        self._keyword_table.rules_changed.connect(self._on_rules_or_project_changed)
+        self._tabs.addTab(self._keyword_table, "Name rules")
+        self._extension_table = RuleTableWidget(rule_type="extension")
+        self._extension_table.rules_changed.connect(self._on_rules_or_project_changed)
+        self._tabs.addTab(self._extension_table, "File types")
+        layout.addWidget(self._tabs, 1)
+
         self._sandbox = LiveSandboxWidget()
-        custom_layout.addWidget(self._sandbox)
+        layout.addWidget(self._sandbox)
+        return page
 
-        self._view_stack.addWidget(self._customize_container)
-        main_layout.addWidget(self._view_stack, 1)
-
-        # Footer credit (single-sourced from about.py)
-        self._credit_lbl = QLabel(f"{about.APP_NAME} {about.__version__} · {about.CREDIT}")
-        self._credit_lbl.setObjectName("creditFooter")
-        self._credit_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._credit_lbl.setStyleSheet(f"color: {COLORS['textFaint']}; font-size: 10px;")
-        main_layout.addWidget(self._credit_lbl)
+    # ------------------------------------------------------------------
+    # navigation
+    # ------------------------------------------------------------------
 
     def switch_view(self, view_name: str) -> None:
-        """Switch between 'home' (Page 0) and 'customize' (Page 1) views."""
+        """Show a page: 'home', 'rules' (or 'customize'), 'cleanup' (or 'remodel'), 'settings'."""
         name = (view_name or "").lower().strip()
-        if name in ("home", "dashboard", "0"):
-            self._seg_btn_home.setChecked(True)
-            self._view_stack.setCurrentIndex(0)
-            self._on_view_changed(0)
-        else:
-            self._seg_btn_rules.setChecked(True)
-            self._view_stack.setCurrentIndex(1)
-            self._on_view_changed(1)
+        aliases = {
+            "home": "home", "dashboard": "home", "0": "home",
+            "rules": "rules", "customize": "rules", "1": "rules", "keyword": "rules", "keywords": "rules",
+            "extension": "rules", "extensions": "rules",
+            "cleanup": "cleanup", "remodel": "cleanup", "2": "cleanup",
+            "settings": "settings", "3": "settings",
+        }
+        page = aliases.get(name, "rules")
+        idx = self.PAGES.index(page)
+        self._nav_buttons[page].setChecked(True)
+        self._view_stack.setCurrentIndex(idx)
+        if name in ("extension", "extensions"):
+            self._tabs.setCurrentWidget(self._extension_table)
+        elif name in ("keyword", "keywords"):
+            self._tabs.setCurrentWidget(self._keyword_table)
+        self._on_view_changed(idx)
 
     def switch_to_view(self, view_name: str) -> None:
         """Alias for switch_view."""
         self.switch_view(view_name)
 
     def _on_view_switcher_clicked(self, view_id: int) -> None:
-        self.switch_view("home" if view_id == 0 else "customize")
+        self.switch_view(self.PAGES[view_id])
 
     def _on_view_changed(self, view_id: int) -> None:
-        is_rules = (view_id == 1)
-        if hasattr(self, "_preset_lib_btn"):
-            self._preset_lib_btn.setVisible(is_rules)
-        if hasattr(self, "_export_btn"):
-            self._export_btn.setVisible(is_rules)
-        if hasattr(self, "_import_btn"):
-            self._import_btn.setVisible(is_rules)
-        if hasattr(self, "_reset_btn"):
-            self._reset_btn.setVisible(is_rules)
-        if hasattr(self, "_save_btn"):
-            self._save_btn.setVisible(is_rules)
         if view_id == 0 and hasattr(self, "_home_widget"):
             self._home_widget.refresh_data()
+        if view_id == 3 and hasattr(self, "_settings_widget"):
+            self._settings_widget.refresh_data()
+
+    def _refresh_sorter_status(self) -> None:
+        paused = bool(sorter and hasattr(sorter, "is_paused") and sorter.is_paused())
+        running = suite_data.is_sorter_running() if hasattr(suite_data, "is_sorter_running") else False
+        if paused:
+            text, color = "Sorting is paused", COLORS["warning"]
+        elif running:
+            text, color = "Sorting is on", COLORS["success"]
+        else:
+            text, color = "Sorting is off", COLORS["textFaint"]
+        self._sorter_status_pill.setText(text)
+        ui_style.set_status_dot(self._sorter_status_dot, color)
+
+    def _on_profile_changed(self, persona_id: str) -> None:
+        """Settings changed the profile (which may add rules): reload and re-apply."""
+        self.load_data()
+        self.set_active_persona(persona_id)
 
     def set_active_persona(self, persona_id: str) -> None:
-        """Configure conditional maker elements and notify sandbox and home widget."""
+        """Show maker-only controls for the maker profile and update the try-it examples."""
         self._current_persona = persona_id
         is_maker = (persona_id == "maker_3d")
         if hasattr(self, "_active_project_card"):
@@ -2112,6 +1757,8 @@ class RulesManagerDialog(QDialog):
             self._sandbox.set_persona(persona_id)
         if hasattr(self, "_home_widget") and hasattr(self._home_widget, "set_persona"):
             self._home_widget.set_persona(persona_id)
+        if hasattr(self, "_settings_widget"):
+            self._settings_widget.set_persona(persona_id)
 
     def set_persona(self, persona_id: str) -> None:
         """Alias for set_active_persona."""
@@ -2126,11 +1773,17 @@ class RulesManagerDialog(QDialog):
         active_proj = suite_data.get_active_project()
         self._active_project_card.set_state(active_proj)
 
-        # Apply active persona visibility rules
-        active_persona = self._config.get("user_persona", "maker_3d")
-        self.set_active_persona(active_persona)
+        self.set_active_persona(self._config.get("user_persona", "everyday_home"))
 
         self._on_rules_or_project_changed()
+        self._set_dirty(False)
+
+    def _set_dirty(self, dirty: bool) -> None:
+        self._dirty = dirty
+        if hasattr(self, "_save_btn"):
+            self._save_btn.setEnabled(dirty)
+            if dirty:
+                self._save_btn.setText("Save changes")
 
     def get_current_draft_config(self) -> dict[str, Any]:
         """Return draft configuration dictionary reflecting current in-memory edits."""
@@ -2144,6 +1797,7 @@ class RulesManagerDialog(QDialog):
         draft_config = self.get_current_draft_config()
         active_proj = self._active_project_card.get_state()
         self._sandbox.set_config_and_project(draft_config, active_proj)
+        self._set_dirty(True)
 
     def save_changes(self) -> bool:
         """Atomically persist draft configuration and active project state."""
@@ -2151,23 +1805,17 @@ class RulesManagerDialog(QDialog):
             draft_config = self.get_current_draft_config()
             ok = suite_data.save_sorter_config(draft_config)
             if not ok:
-                QMessageBox.critical(self, "Save Failed", "Could not save configuration.")
+                QMessageBox.critical(self, "Couldn't save", "Your rules couldn't be saved. Check that the settings file isn't open in another program.")
                 return False
 
             proj_state = self._active_project_card.get_state()
             suite_data.save_active_project(proj_state)
 
-            self._save_btn.setText("✓ Saved!")
-            if self.isVisible():
-                if hasattr(self, "_save_timer") and self._save_timer is not None:
-                    self._save_timer.stop()
-                self._save_timer = QTimer(self)
-                self._save_timer.setSingleShot(True)
-                self._save_timer.timeout.connect(lambda: self._save_btn.setText("💾 Save Changes") if hasattr(self, "_save_btn") else None)
-                self._save_timer.start(2000)
+            self._set_dirty(False)
+            self._save_btn.setText("Saved")
             return True
         except Exception as exc:
-            QMessageBox.critical(self, "Save Error", f"Failed to save rules: {exc}")
+            QMessageBox.critical(self, "Couldn't save", f"Your rules couldn't be saved: {exc}")
             return False
 
     def open_preset_library(self) -> None:
@@ -2184,39 +1832,42 @@ class RulesManagerDialog(QDialog):
                 self._config = draft_config
                 self._keyword_table.load_rules(draft_config.get("keyword_rules", []))
                 self._on_rules_or_project_changed()
-                QMessageBox.information(self, "Presets Added", f"Successfully added {added_total} rule(s) to your configuration. Click 'Save Changes' to commit.")
+                QMessageBox.information(self, "Rules added", f"Added {added_total} rule(s). Click Save changes to keep them.")
 
     def export_rules(self) -> None:
         """Export current draft rules to a user-selected JSON file."""
-        path, _ = QFileDialog.getSaveFileName(self, "Export Sorter Rules", "download_sorter_rules.json", "JSON Files (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, "Export rules", "download_sorter_rules.json", "Rule files (*.json)")
         if path:
             draft_config = self.get_current_draft_config()
             ok = suite_data.export_rules_to_file(path, draft_config)
             if ok:
-                QMessageBox.information(self, "Export Successful", f"Rules successfully exported to:\n{path}")
+                QMessageBox.information(self, "Rules exported", f"Your rules were saved to:\n{path}")
 
     def import_rules(self) -> None:
         """Import rules from a user-selected JSON file with merge or replace options."""
-        path, _ = QFileDialog.getOpenFileName(self, "Import Sorter Rules", "", "JSON Files (*.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "Import rules", "", "Rule files (*.json)")
         if not path:
             return
         try:
             imported = suite_data.import_rules_from_file(path)
         except Exception as exc:
-            QMessageBox.critical(self, "Import Error", f"Failed to import rules: {exc}")
+            QMessageBox.critical(self, "Couldn't import", f"That file couldn't be read as a rules file: {exc}")
             return
 
-        reply = QMessageBox.question(
-            self,
-            "Import Mode",
-            "Do you want to MERGE imported rules with your current rules?\n\nClick 'Yes' to Merge (keeps current rules).\nClick 'No' to REPLACE all current rules.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-        )
-        if reply == QMessageBox.StandardButton.Cancel:
+        box = QMessageBox(self)
+        box.setWindowTitle("Import rules")
+        box.setText("Add the imported rules to yours, or replace yours with them?")
+        add_btn = box.addButton("Add to my rules", QMessageBox.ButtonRole.AcceptRole)
+        replace_btn = box.addButton("Replace my rules", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(add_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked not in (add_btn, replace_btn):
             return
 
         draft_config = self.get_current_draft_config()
-        if reply == QMessageBox.StandardButton.Yes:
+        if clicked is add_btn:
             existing_kw = {r.get("name", "").lower() for r in draft_config.get("keyword_rules", [])}
             for r in imported.get("keyword_rules", []):
                 if r.get("name", "").lower() not in existing_kw:
@@ -2237,14 +1888,14 @@ class RulesManagerDialog(QDialog):
         self._keyword_table.load_rules(draft_config.get("keyword_rules", []))
         self._extension_table.load_rules(draft_config.get("extension_rules", []))
         self._on_rules_or_project_changed()
-        QMessageBox.information(self, "Import Complete", "Rules imported successfully into current editor session. Click 'Save Changes' to commit.")
+        QMessageBox.information(self, "Rules imported", "The rules were imported. Click Save changes to keep them.")
 
     def reset_to_defaults(self) -> None:
         """Prompt to reset configuration to factory defaults."""
         reply = QMessageBox.question(
             self,
-            "Reset to Defaults",
-            "Are you sure you want to reset all rules to factory defaults?\nAny unsaved changes will be lost.",
+            "Reset to defaults",
+            "Replace all your rules with the built-in ones? Unsaved changes will be lost.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
@@ -2252,7 +1903,7 @@ class RulesManagerDialog(QDialog):
             self._keyword_table.load_rules(self._config.get("keyword_rules", []))
             self._extension_table.load_rules(self._config.get("extension_rules", []))
             self._on_rules_or_project_changed()
-            QMessageBox.information(self, "Reset Complete", "Rules have been reset to factory defaults.")
+            QMessageBox.information(self, "Rules reset", "Your rules were reset. Click Save changes to keep this.")
 
     def closeEvent(self, event) -> None:
         if hasattr(self, "_save_timer") and self._save_timer is not None:
@@ -2261,6 +1912,8 @@ class RulesManagerDialog(QDialog):
             self._active_project_card._countdown_timer.stop()
         if hasattr(self, "_home_widget") and hasattr(self._home_widget, "_refresh_timer"):
             self._home_widget._refresh_timer.stop()
+        if hasattr(self, "_status_timer"):
+            self._status_timer.stop()
         super().closeEvent(event)
 
     def hideEvent(self, event) -> None:
@@ -2333,16 +1986,8 @@ def main(argv: list[str] | None = None) -> int:
                 return app.exec()
         return 0
 
-    init_view = "home" if (args.home or not args.tab) else "customize"
+    init_view = "home" if (args.home or not args.tab) else args.tab
     dialog = RulesManagerDialog(initial_view=init_view)
-    if args.tab:
-        dialog.switch_view("customize")
-        if args.tab.lower() == "remodel":
-            dialog._tabs.setCurrentWidget(dialog._remodel_widget)
-        elif args.tab.lower() in ("keyword", "keywords"):
-            dialog._tabs.setCurrentWidget(dialog._keyword_table)
-        elif args.tab.lower() in ("extension", "extensions"):
-            dialog._tabs.setCurrentWidget(dialog._extension_table)
     dialog.show()
     if owns_app:
         return app.exec()
