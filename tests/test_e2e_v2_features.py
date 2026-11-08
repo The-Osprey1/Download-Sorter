@@ -933,6 +933,15 @@ class TestRealWorldApplicationScenariosTier4(unittest.TestCase):
 
     def test_t4_scenario_makerworld_lifecycle(self) -> None:
         """Scenario A: User downloads 3MF model from MakerWorld -> held for 7 days -> 'File now'."""
+        # This scenario is about the hold, not about waiting for a download to
+        # finish. On Windows a file written a moment ago can briefly look
+        # unfinished (antivirus still has it open, or its modified time is a
+        # clock tick ahead), so the hold was skipped now and then on the
+        # Windows test machines. Treat the sample file as finished.
+        readiness = patch("sorter.is_file_ready_to_move", side_effect=lambda path, settle: Path(path).is_file())
+        readiness.start()
+        self.addCleanup(readiness.stop)
+
         downloads = self.root / "Downloads"
         downloads.mkdir()
         config = sorter.get_default_config()
