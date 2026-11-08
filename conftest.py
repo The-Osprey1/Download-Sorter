@@ -32,9 +32,13 @@ def isolate_sorter_state(tmp_path, monkeypatch):
         "ACTIVE_PROJECT_FILE": state_dir / "active_project.json",
         "RUNTIME_STATE_FILE": state_dir / "runtime_state.json",
         "SERVICE_DISABLED_FILE": state_dir / "service_disabled",
+        "USER_CONFIG_PATH": state_dir / "config.json",
+        "CONFIG_PATH": state_dir / "config.json",
+        "SORTER_CONFIG_FILE": state_dir / "config.json",
     }
     for name, path in paths.items():
-        monkeypatch.setattr(sorter, name, path)
+        if hasattr(sorter, name):
+            monkeypatch.setattr(sorter, name, path)
 
     sorter._failure_cache = None
     with watch.QUEUE_LOCK:

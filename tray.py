@@ -116,6 +116,33 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess | None:
         return None
 
 
+def spawn_window(*args: str) -> None:
+    """Spawn a GUI window asynchronously without blocking the tray process."""
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    cli_args = list(args)
+    if cli_args and cli_args[0] == "rules_manager.py":
+        cli_args = cli_args[1:]
+        if not cli_args:
+            cli_args = ["--gui"]
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, *cli_args]
+    else:
+        python_bin = Path(sys.executable).resolve()
+        if python_bin.name.lower() == "pythonw.exe":
+            pass
+        elif python_bin.name.lower() == "python.exe":
+            pythonw = python_bin.with_name("pythonw.exe")
+            if pythonw.exists():
+                python_bin = pythonw
+        else:
+            python_bin = PYTHON
+        cmd = [str(python_bin), str(ROOT / "main.py"), *cli_args]
+    try:
+        subprocess.Popen(cmd, creationflags=flags)
+    except Exception as exc:
+        logging.warning("Could not spawn window %s: %s", args, exc)
+
+
 class SorterTray:
     def __init__(self) -> None:
         self.config = load_config()
@@ -151,17 +178,19 @@ class SorterTray:
 
     def build_menu(self) -> pystray.Menu:
         return pystray.Menu(
+            pystray.MenuItem("Open Download Sorter", self.on_open_home, default=True),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem(lambda _i: f"{moves_today()} file(s) filed today", None, enabled=False),
             pystray.MenuItem(lambda _i: f"{self._held_count()} 3MF(s) held in Downloads", None, enabled=False),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Sort Downloads now", self.on_sort_now),
+            pystray.MenuItem("Undo last batch", self.on_undo),
             pystray.MenuItem(
                 lambda _i: "Resume sorting" if is_paused() else "Pause sorting",
                 self.on_toggle_pause,
-                default=True,
             ),
-            pystray.MenuItem("Sort Downloads now", self.on_sort_now),
-            pystray.MenuItem("Undo last batch", self.on_undo),
-            pystray.MenuItem("Configure Rules & Simulator...", self.on_open_rules_manager),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Configure Rules & Customize...", self.on_open_rules_manager),
             pystray.MenuItem("Remodel Messy Folders...", self.on_remodel),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open Downloads", self.on_open_downloads),
@@ -180,6 +209,9 @@ class SorterTray:
             logging.debug("Tray notification unavailable")
 
     # ---- menu actions ----
+
+    def on_open_home(self, _icon=None, _item=None) -> None:
+        threading.Thread(target=lambda: spawn_window("--home"), daemon=True).start()
 
     def on_toggle_pause(self, _icon=None, _item=None) -> None:
         paused = not is_paused()
@@ -269,8 +301,13 @@ def main() -> int:
     setup_logging()
     lock = watch.acquire_single_instance_lock()
     if not lock:
-        logging.warning("Download Sorter is already running. Exiting.")
+        logging.info("Download Sorter is already running. Opening Home Dashboard.")
+        spawn_window("--home")
         return 0
+    config = load_config()
+    if not config.get("onboarding_completed", False):
+        logging.info("First run detected: spawning Welcome Wizard.")
+        spawn_window("--welcome")
     try:
         import safe_ops
         safe_ops.recover_pending_journal(min_age_seconds=10.0)

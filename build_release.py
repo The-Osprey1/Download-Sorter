@@ -20,9 +20,11 @@ DIST_DIR = ROOT / "dist"
 BUILD_DIR = ROOT / "build"
 RELEASE_DIR = DIST_DIR / "DownloadSorter"
 import about
+import installer_builder
 
 VERSION = about.__version__
 ZIP_NAME = f"DownloadSorter-v{VERSION}-windows-x64.zip"
+SETUP_NAME = f"DownloadSorter-Setup-v{VERSION}-windows-x64.exe"
 
 
 def calculate_sha256(file_path: Path) -> str:
@@ -49,7 +51,12 @@ def build_standalone() -> int:
         print(f"[ERROR] Spec file not found at {spec_file}")
         return 1
 
-    # 2. Invoke PyInstaller
+    # 2. Ensure application icon is generated
+    ico_path = ROOT / "DownloadSorter.ico"
+    print(f"[*] Generating application icon: {ico_path.name}...")
+    installer_builder.generate_app_icon(ico_path)
+
+    # 3. Invoke PyInstaller
     print("[*] Running PyInstaller...")
     cmd = [sys.executable, "-m", "PyInstaller", str(spec_file), "--noconfirm"]
     res = subprocess.run(cmd, cwd=str(ROOT))
@@ -89,6 +96,7 @@ def build_standalone() -> int:
         "CHANGELOG.md",
         "CONTRIBUTING.md",
         "SECURITY.md",
+        "DownloadSorter.ico",
     ]
     for filename in extra_files:
         src = ROOT / filename
@@ -113,16 +121,32 @@ def build_standalone() -> int:
     zip_size_mb = round(zip_path.stat().st_size / (1024 * 1024), 2)
     print(f"[OK] ZIP archive created ({zip_size_mb} MB)")
 
-    # 5. Compute SHA-256 Checksums
-    checksum = calculate_sha256(zip_path)
+    # 5. Build Setup Executable
+    setup_path = DIST_DIR / SETUP_NAME
+    if setup_path.exists():
+        setup_path.unlink()
+
+    print(f"[*] Building single-file setup executable: {setup_path.name}...")
+    installer_builder.build_setup_exe(dist_dir=RELEASE_DIR, version=VERSION, output_exe=setup_path)
+    setup_size_mb = round(setup_path.stat().st_size / (1024 * 1024), 2)
+    print(f"[OK] Setup executable created ({setup_size_mb} MB)")
+
+    # 6. Compute SHA-256 Checksums
     checksum_file = DIST_DIR / "checksums.txt"
+    setup_checksum = calculate_sha256(setup_path) if setup_path.exists() else None
+    zip_checksum = calculate_sha256(zip_path)
     with open(checksum_file, "w", encoding="utf-8") as f:
-        f.write(f"{checksum}  {zip_path.name}\n")
+        if setup_checksum:
+            f.write(f"{setup_checksum}  {setup_path.name}\n")
+        f.write(f"{zip_checksum}  {zip_path.name}\n")
 
     print("=" * 60)
     print("  Build Succeeded!")
+    if setup_path.exists():
+        print(f"  Setup Exe:    {setup_path}")
+        print(f"  Setup SHA256: {setup_checksum}")
     print(f"  Distribution: {zip_path}")
-    print(f"  SHA-256:      {checksum}")
+    print(f"  ZIP SHA256:   {zip_checksum}")
     print(f"  Checksum Log: {checksum_file}")
     print("=" * 60)
     return 0

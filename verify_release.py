@@ -61,6 +61,10 @@ REQUIRED_RELEASE_FILES = [
     "quick_switcher.py",
     "ribbon_popup.py",
     "suite_theme.py",
+    "onboarding.py",
+    "installer_builder.py",
+    "installer.iss",
+    "DownloadSorter.ico",
     "DownloadSorter.spec",
     "build_release.py",
     ".github/workflows/ci.yml",
@@ -125,8 +129,16 @@ def check_version_alignment() -> tuple[bool, str, dict[str, str]]:
     if m:
         versions["CHANGELOG.md"] = m.group(1)
 
+    # 5. installer.iss
+    iss_file = ROOT / "installer.iss"
+    if iss_file.exists():
+        iss_text = iss_file.read_text(encoding="utf-8")
+        m = re.search(r'#define MyAppVersion\s*"([^"]+)"', iss_text)
+        if m:
+            versions["installer.iss"] = m.group(1)
+
     distinct = set(versions.values())
-    if len(distinct) == 1 and len(versions) == 4:
+    if len(distinct) == 1 and len(versions) >= 4:
         return True, list(distinct)[0], versions
     return False, "mismatch", versions
 

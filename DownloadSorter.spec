@@ -10,6 +10,7 @@ added_files = [
     ('README.md', '.'),
     ('LICENSE', '.'),
     ('FLOWCHART.md', '.'),
+    ('DownloadSorter.ico', '.'),
 ]
 
 hidden_imports = [
@@ -47,6 +48,8 @@ hidden_imports = [
     'remodel',
     'safe_ops',
     'defusedxml',
+    'onboarding',
+    'installer_builder',
 ]
 
 a = Analysis(
@@ -84,6 +87,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='DownloadSorter.ico',
 )
 
 # 2. Console Executable (Native console streams, ideal for CLI, context menus, CI/CD, piping)
@@ -103,6 +107,7 @@ exe_cli = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='DownloadSorter.ico',
 )
 
 coll = COLLECT(

@@ -23,9 +23,11 @@ Usage:
 Commands:
   (default / no args)   Launch system tray monitor with embedded background watcher
   --tray, -t            Launch system tray monitor explicitly
+  --home                Open Home & Recent Activity dashboard
+  --welcome             Launch first-run Welcome & Setup Wizard
   --gui, -g, --rules    Launch PySide6 Visual Rules Manager & Live Sandbox GUI
-  --sort, -s, --once    Sort Downloads once (--dry-run for simulation, --target <dir>)
-  --undo, -u            Reversibly undo the most recent sort batch
+  --sort, -s, --once    Sort Downloads once (--dry-run, --target <dir>, --notify)
+  --undo, -u            Reversibly undo the most recent sort batch (--notify)
   --peek, -p <file>     Inspect 3D print file / CNC toolpath and extract embedded thumbnail
   --unzip-3d <zip>      Unpack 3D models from archive into Downloads
   --unzip <zip>         Safely unpack archive into Extracted/ with wrapper stripping
@@ -156,17 +158,45 @@ def main(argv: list[str] | None = None) -> int:
             import tray
             return tray.main()
 
+        if cmd in ("--home",):
+            import rules_manager
+            try:
+                return rules_manager.main(args)
+            except TypeError:
+                return rules_manager.main()
+
+        if cmd in ("--welcome",):
+            import rules_manager
+            try:
+                return rules_manager.main(args)
+            except TypeError:
+                return rules_manager.main()
+
         if cmd in ("--gui", "-g", "--rules"):
             import rules_manager
             return rules_manager.main()
 
         if cmd in ("--sort", "-s", "--once"):
             import sort_once
-            return sort_once.main()
+            try:
+                return sort_once.main(args[1:])
+            except TypeError:
+                return sort_once.main()
 
         if cmd in ("--undo", "-u"):
             import sort_undo
-            return sort_undo.main()
+            try:
+                return sort_undo.main(args[1:])
+            except TypeError:
+                return sort_undo.main()
+
+        if cmd in ("--ribbon-summary", "--ribbon"):
+            import ribbon_popup
+            try:
+                forward_args = ["--summary"] + [a for a in args[1:] if a != "--summary"] if cmd == "--ribbon-summary" else args[1:]
+                return ribbon_popup.main(forward_args)
+            except TypeError:
+                return ribbon_popup.main()
 
         if cmd in ("--peek", "-p"):
             import gcode_peek

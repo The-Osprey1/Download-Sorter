@@ -1187,7 +1187,435 @@ def notify_file_moved(dest_path: str | Path, downloads_root: str | Path | None =
         print(f"Failed to spawn ribbon notification: {exc}", file=sys.stderr)
 
 
-def main() -> int:
+class SummaryRibbonPopup:
+    def __init__(
+        self,
+        title: str,
+        message: str,
+        accent: str = DEFAULT_ACCENT,
+        timeout_ms: int = 5000,
+        enable_animation: bool = True,
+    ) -> None:
+        self.title = title
+        self.message = message
+        self.accent_color = accent
+        self.timeout_ms = max(500, timeout_ms)
+        self.enable_animation = enable_animation
+        self.pid = os.getpid()
+        self.slot = claim_slot(self.pid)
+
+        self.normal_border = blend_colors(self.accent_color, BORDER_COLOR, 0.32)
+        self.hover_border = blend_colors(self.accent_color, COLORS.get("borderStrong", "#3A4352"), 0.50)
+        self.accent_glow = blend_colors(self.accent_color, "#FFFFFF", 0.25)
+
+        self.root = tk.Tk()
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.config(bg=self.normal_border)
+
+        # Enable DWM rounded corners + native drop shadow on Windows 11
+        if sys.platform == "win32":
+            try:
+                self.root.update_idletasks()
+                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+                pref = ctypes.c_int(2)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)
+                )
+                class MARGINS(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_int), ("right", ctypes.c_int),
+                                ("top", ctypes.c_int), ("bottom", ctypes.c_int)]
+                m = MARGINS(1, 1, 1, 1)
+                ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(m))
+            except Exception:
+                pass
+
+        try:
+            dpi = float(self.root.winfo_fpixels("1i"))
+            self.scale = max(1.0, dpi / 96.0)
+        except Exception:
+            self.scale = 1.0
+
+        width, height, self.target_x, self.target_y = scaled_ribbon_geometry(
+            self.scale, self.slot, self._work_area()
+        )
+        self.target_w = width
+        self.target_h = height
+
+        self.slide_distance = round(140 * self.scale)
+        self.slide_job: str | None = None
+        self.dismiss_job: str | None = None
+        self.progress_job: str | None = None
+        self.remaining_ms = float(self.timeout_ms)
+        self.dismiss_started = 0.0
+        self.is_hovered = False
+        self.is_closing = False
+        self.icon_photo: ImageTk.PhotoImage | None = None
+
+        self._build_ui(self.scale)
+
+        if self.enable_animation:
+            start_x = self.target_x + self.slide_distance
+            self.root.geometry(f"{width}x{height}+{start_x}+{self.target_y}")
+            self._animate_slide_in(start_x, self.target_x, self.target_y, duration_ms=220)
+        else:
+            self.root.geometry(f"{width}x{height}+{self.target_x}+{self.target_y}")
+            self._schedule_dismiss()
+
+    def _work_area(self) -> tuple[int, int, int, int]:
+        if sys.platform == "win32":
+            try:
+                class RECT(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+                class MONITORINFO(ctypes.Structure):
+                    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT),
+                                ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
+
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)
+                info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+                if monitor and ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                    work = info.rcWork
+                    return work.left, work.top, work.right, work.bottom
+            except Exception:
+                pass
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
+    def _build_ui(self, scale: float) -> None:
+        pad_y = int(9 * scale)
+        stripe_w = max(4, int(4 * scale))
+        icon_size = max(32, int(38 * scale))
+        progress_h = max(2, int(2.5 * scale))
+
+        self.container = tk.Frame(self.root, bg=BG_COLOR, cursor="hand2")
+        self.container.pack(fill="both", expand=True, padx=1, pady=1)
+
+        self.stripe = tk.Frame(self.container, bg=self.accent_color, width=stripe_w)
+        self.stripe.pack(side="left", fill="y")
+
+        icon_img = render_category_icon("other", self.accent_color, size=icon_size) if HAS_PIL else None
+        if icon_img and HAS_PIL:
+            self.icon_photo = ImageTk.PhotoImage(icon_img)
+            self.status = tk.Label(
+                self.container,
+                image=self.icon_photo,
+                bg=BG_COLOR,
+                bd=0,
+                cursor="hand2",
+            )
+            self.status.pack(side="left", padx=(int(10 * scale), int(2 * scale)), pady=int(6 * scale))
+        else:
+            fallback_glyph = "↺" if "undo" in self.title.lower() else "✓"
+            self.status = tk.Label(
+                self.container,
+                text=fallback_glyph,
+                font=(FONT_FAMILY, 14, "bold"),
+                fg=self.accent_color,
+                bg=BG_COLOR,
+                width=2,
+                anchor="center",
+            )
+            self.status.pack(side="left", padx=(int(8 * scale), int(2 * scale)), fill="y")
+
+        self.content = tk.Frame(self.container, bg=BG_COLOR, padx=int(8 * scale), pady=pad_y)
+        self.content.pack(side="left", fill="both", expand=True)
+
+        self.top_row = tk.Frame(self.content, bg=BG_COLOR)
+        self.top_row.pack(fill="x")
+
+        self.tag_lbl = tk.Label(
+            self.top_row,
+            text=f"●  {about.APP_NAME.upper()}",
+            font=(FONT_FAMILY, 8, "bold"),
+            fg=self.accent_color,
+            bg=BG_COLOR,
+            anchor="w",
+        )
+        self.tag_lbl.pack(side="left")
+
+        hit_target = max(24, int(24 * scale))
+        self.close_frame = tk.Frame(
+            self.top_row,
+            bg=BG_COLOR,
+            width=hit_target,
+            height=hit_target,
+            cursor="hand2",
+        )
+        self.close_frame.pack_propagate(False)
+        self.close_frame.pack(side="right")
+
+        self.close_btn = tk.Label(
+            self.close_frame,
+            text="✕",
+            font=(FONT_FAMILY, 9, "bold"),
+            fg=CLOSE_COLOR,
+            bg=BG_COLOR,
+            cursor="hand2",
+            anchor="center",
+        )
+        self.close_btn.pack(fill="both", expand=True)
+        self.close_btn.bind("<Button-1>", lambda e: (self.close(), "break")[1])
+        self.close_frame.bind("<Button-1>", lambda e: (self.close(), "break")[1])
+
+        def on_close_enter(_e):
+            self.close_btn.config(fg=CLOSE_HOVER, bg=SURFACE_HOVER)
+            self.close_frame.config(bg=SURFACE_HOVER)
+
+        def on_close_leave(_e):
+            curr_bg = HOVER_BG if self.is_hovered else BG_COLOR
+            self.close_btn.config(fg=CLOSE_COLOR, bg=curr_bg)
+            self.close_frame.config(bg=curr_bg)
+
+        self.close_btn.bind("<Enter>", on_close_enter)
+        self.close_btn.bind("<Leave>", on_close_leave)
+        self.close_frame.bind("<Enter>", on_close_enter)
+        self.close_frame.bind("<Leave>", on_close_leave)
+
+        title_text = self.title
+        if len(title_text) > 36:
+            title_text = title_text[:33] + "..."
+        self.title_lbl = tk.Label(
+            self.content,
+            text=title_text,
+            font=(FONT_FAMILY, 10, "bold"),
+            fg=TEXT_MAIN,
+            bg=BG_COLOR,
+            anchor="w",
+        )
+        self.title_lbl.pack(fill="x", pady=(2, 1))
+
+        msg_text = self.message
+        if len(msg_text) > 48:
+            msg_text = msg_text[:45] + "…"
+        self.msg_lbl = tk.Label(
+            self.content,
+            text=msg_text,
+            font=(FONT_FAMILY, 9),
+            fg=TEXT_MUTED,
+            bg=BG_COLOR,
+            anchor="w",
+        )
+        self.msg_lbl.pack(fill="x", pady=(1, 0))
+
+        interactive_widgets = [
+            self.container, self.content, self.top_row,
+            self.tag_lbl, self.title_lbl, self.msg_lbl,
+            self.stripe, self.status,
+        ]
+        for widget in interactive_widgets:
+            widget.bind("<Button-1>", lambda _e: self.close())
+            widget.bind("<Enter>", self.on_enter)
+            widget.bind("<Leave>", self.on_leave)
+
+        self.progress_track = tk.Frame(self.container, bg=SURFACE_RAISED, height=progress_h)
+        self.progress_track.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
+
+        self.progress = tk.Frame(self.container, bg=self.accent_color, height=progress_h)
+        self.progress.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
+
+    def _animate_slide_in(self, start_x: int, target_x: int, target_y: int, duration_ms: float = 220.0) -> None:
+        t0 = time.monotonic()
+
+        def step() -> None:
+            if self.is_closing:
+                return
+            now = time.monotonic()
+            elapsed = (now - t0) * 1000.0
+            p = min(1.0, max(0.0, elapsed / duration_ms))
+            ease_out = 1.0 - (1.0 - p) ** 3
+            curr_x = round(start_x + (target_x - start_x) * ease_out)
+            try:
+                self.root.geometry(f"{self.target_w}x{self.target_h}+{curr_x}+{target_y}")
+                if p < 1.0:
+                    self.slide_job = self.root.after(16, step)
+                else:
+                    self.root.geometry(f"{self.target_w}x{self.target_h}+{target_x}+{target_y}")
+                    self.slide_job = None
+                    self._schedule_dismiss()
+            except tk.TclError:
+                pass
+
+        self.slide_job = self.root.after(10, step)
+
+    def _schedule_dismiss(self) -> None:
+        if self.dismiss_job:
+            self.root.after_cancel(self.dismiss_job)
+        self.dismiss_started = time.monotonic()
+        self.dismiss_job = self.root.after(max(1, int(self.remaining_ms)), self.close)
+        self._tick_progress()
+
+    def _tick_progress(self) -> None:
+        if self.progress_job:
+            self.root.after_cancel(self.progress_job)
+            self.progress_job = None
+        if self.is_hovered or self.is_closing:
+            return
+        elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
+        fraction = max(0.0, min(1.0, (self.remaining_ms - elapsed_ms) / self.timeout_ms))
+        try:
+            self.progress.place_configure(relwidth=fraction)
+            if fraction > 0:
+                self.progress_job = self.root.after(20, self._tick_progress)
+        except tk.TclError:
+            pass
+
+    def on_enter(self, _event=None) -> None:
+        if self.is_hovered or self.is_closing:
+            return
+        self.is_hovered = True
+        if self.dismiss_job:
+            elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
+            self.remaining_ms = max(1.0, self.remaining_ms - elapsed_ms)
+            self.root.after_cancel(self.dismiss_job)
+            self.dismiss_job = None
+        if self.progress_job:
+            self.root.after_cancel(self.progress_job)
+            self.progress_job = None
+        self._set_hover_state(True)
+
+    def on_leave(self, _event=None) -> None:
+        if self.is_closing:
+            return
+        self.root.after(20, self._resume_if_pointer_left)
+
+    def _resume_if_pointer_left(self) -> None:
+        if self.is_closing:
+            return
+        try:
+            pointer_widget = self.root.winfo_containing(
+                self.root.winfo_pointerx(), self.root.winfo_pointery()
+            )
+            if pointer_widget is not None and pointer_widget.winfo_toplevel() == self.root:
+                return
+        except Exception:
+            pass
+        self.is_hovered = False
+        self._set_hover_state(False)
+        self._schedule_dismiss()
+
+    def _set_hover_state(self, hovered: bool) -> None:
+        bg = HOVER_BG if hovered else BG_COLOR
+        border = self.hover_border if hovered else self.normal_border
+        bar_col = self.accent_glow if hovered else self.accent_color
+
+        self.root.config(bg=border)
+        self.container.config(bg=bg)
+        self.content.config(bg=bg)
+        self.top_row.config(bg=bg)
+        self.tag_lbl.config(bg=bg)
+        self.title_lbl.config(bg=bg)
+        self.msg_lbl.config(bg=bg)
+        self.status.config(bg=bg)
+        self.close_frame.config(bg=bg)
+        self.close_btn.config(bg=bg)
+        self.progress.config(bg=bar_col)
+
+    def close(self) -> None:
+        if self.is_closing:
+            return
+        self.is_closing = True
+        if self.slide_job:
+            try:
+                self.root.after_cancel(self.slide_job)
+            except Exception:
+                pass
+        if self.dismiss_job:
+            try:
+                self.root.after_cancel(self.dismiss_job)
+            except Exception:
+                pass
+        if self.progress_job:
+            try:
+                self.root.after_cancel(self.progress_job)
+            except Exception:
+                pass
+
+        if not self.enable_animation:
+            try:
+                self.root.destroy()
+            except tk.TclError:
+                pass
+            return
+
+        try:
+            curr_x = self.root.winfo_x()
+            curr_y = self.root.winfo_y()
+        except Exception:
+            curr_x = self.target_x
+            curr_y = self.target_y
+
+        end_x = curr_x + self.slide_distance
+        t0 = time.monotonic()
+        duration_ms = 160.0
+
+        def out_step() -> None:
+            now = time.monotonic()
+            elapsed = (now - t0) * 1000.0
+            p = min(1.0, max(0.0, elapsed / duration_ms))
+            ease_in = p * p
+            x = round(curr_x + (end_x - curr_x) * ease_in)
+            try:
+                self.root.geometry(f"{self.target_w}x{self.target_h}+{x}+{curr_y}")
+                if p < 1.0:
+                    self.slide_job = self.root.after(16, out_step)
+                else:
+                    self.root.destroy()
+            except tk.TclError:
+                pass
+
+        out_step()
+
+    def run(self) -> None:
+        try:
+            self.root.mainloop()
+        finally:
+            release_slot(self.slot, self.pid)
+
+
+def notify_summary(
+    title: str,
+    message: str,
+    accent: str = "#69E6AD",
+    timeout_ms: int = 5000,
+) -> None:
+    """Spawn or display a sleek desktop ribbon summary toast using suite_theme.py design tokens."""
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    if getattr(sys, "frozen", False):
+        cmd = [
+            sys.executable,
+            "--ribbon-summary",
+            "--summary",
+            "--title", title,
+            "--message", message,
+            "--accent", accent,
+            "--timeout", str(timeout_ms),
+        ]
+    else:
+        python_bin = Path(sys.executable).resolve()
+        if python_bin.name.lower() == "python.exe":
+            pythonw = python_bin.with_name("pythonw.exe")
+            if pythonw.exists():
+                python_bin = pythonw
+        else:
+            python_bin = PYTHON
+        cmd = [
+            str(python_bin),
+            str(Path(__file__).resolve()),
+            "--summary",
+            "--title", title,
+            "--message", message,
+            "--accent", accent,
+            "--timeout", str(timeout_ms),
+        ]
+    try:
+        subprocess.Popen(cmd, creationflags=flags)
+    except Exception as exc:
+        logging.debug("Failed to spawn ribbon summary notification: %s", exc)
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Show a top-right download ribbon notification.")
     parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument("dest_path", nargs="?", default="", help="Path to the destination file.")
@@ -1196,22 +1624,40 @@ def main() -> int:
     parser.add_argument("--no-anim", action="store_true", help="Disable slide animations.")
     parser.add_argument("--held", action="store_true", help="Show held preview ribbon with File now / Keep here.")
     parser.add_argument("--planned", type=str, default="", help="Planned destination path when held.")
-    args = parser.parse_args()
+    parser.add_argument("--ribbon-summary", "--summary", dest="summary", action="store_true", help="Display summary toast.")
+    parser.add_argument("--title", type=str, default="Download Sorter", help="Summary notification title.")
+    parser.add_argument("--message", type=str, default="", help="Summary notification message.")
+    parser.add_argument("--accent", type=str, default="#69E6AD", help="Accent hex color.")
+    parser.add_argument("--timeout", type=int, default=5000, help="Timeout in milliseconds.")
+    args = parser.parse_args(argv)
 
     enable_anim = not args.no_anim
 
-    if args.test or not args.dest_path:
-        sample = Path.home() / "Downloads" / "3D Models" / "STEP" / "Flanged Mace Iteration 1 STEP.step"
-        popup = RibbonPopup(sample, enable_animation=enable_anim)
-    else:
-        dest = Path(args.dest_path)
-        dl_root = Path(args.downloads_root) if args.downloads_root else None
-        planned = Path(args.planned) if args.planned else None
-        popup = RibbonPopup(dest, dl_root, enable_animation=enable_anim, is_held=args.held, planned_dest=planned)
+    try:
+        if args.summary:
+            popup = SummaryRibbonPopup(
+                title=args.title,
+                message=args.message,
+                accent=args.accent,
+                timeout_ms=args.timeout,
+                enable_animation=enable_anim,
+            )
+        elif args.test or not args.dest_path:
+            sample = Path.home() / "Downloads" / "3D Models" / "STEP" / "Flanged Mace Iteration 1 STEP.step"
+            popup = RibbonPopup(sample, enable_animation=enable_anim)
+        else:
+            dest = Path(args.dest_path)
+            dl_root = Path(args.downloads_root) if args.downloads_root else None
+            planned = Path(args.planned) if args.planned else None
+            popup = RibbonPopup(dest, dl_root, enable_animation=enable_anim, is_held=args.held, planned_dest=planned)
 
-    popup.run()
-    return 0
+        popup.run()
+        return 0
+    except Exception as exc:
+        logging.warning("Ribbon notification failed to initialize: %s", exc)
+        return 1
 
 
 if __name__ == "__main__":
     sys.exit(main())
+

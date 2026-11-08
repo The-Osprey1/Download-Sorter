@@ -5,6 +5,7 @@ import copy
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -619,3 +620,649 @@ def reset_sorter_config_to_defaults(config_path: Path | str | None = None) -> di
     default_cfg = copy.deepcopy(DEFAULT_SORTER_CONFIG)
     save_sorter_config(default_cfg, config_path=config_path)
     return default_cfg
+
+
+# =====================================================================
+# USER PERSONAS & ONBOARDING PROFILES
+# =====================================================================
+
+PERSONA_PROFILES: list[dict[str, Any]] = [
+    {
+        "id": "everyday_home",
+        "name": "Everyday & Home PC",
+        "icon": "🏠",
+        "description": "Keep Downloads tidy by automatically filing PDFs, photos, videos, music, installers, and zip files into clear folders.",
+        "presets": ["office_admin"],
+        "show_maker_features": False,
+        "default_rules": [
+            {
+                "name": "Invoices & Receipts",
+                "folder": "Documents\\Invoices & Receipts",
+                "match": ["invoice", "receipt", "billing", "statement", "payment"],
+                "extensions": [".pdf", ".png", ".jpg", ".docx"],
+                "enabled": True,
+            },
+            {
+                "name": "Manuals & Guides",
+                "folder": "Documents\\Manuals & Guides",
+                "match": ["manual", "userguide", "datasheet", "quickstart", "handbook"],
+                "extensions": [".pdf", ".txt"],
+                "enabled": True,
+            },
+            {
+                "name": "Travel & Bookings",
+                "folder": "Documents\\Travel",
+                "match": ["boarding_pass", "flight", "itinerary", "hotel_reservation"],
+                "extensions": [".pdf", ".png", ".jpg"],
+                "enabled": True,
+            },
+        ],
+    },
+    {
+        "id": "academic_student",
+        "name": "Student & Schoolwork",
+        "icon": "🎓",
+        "description": "Organize syllabi, homework assignments, lecture notes, study guides, and research papers alongside everyday downloads.",
+        "presets": ["academic_student", "office_admin"],
+        "show_maker_features": False,
+        "default_rules": [
+            {
+                "name": "Syllabi & Notes",
+                "folder": "Documents\\School\\Notes",
+                "match": [
+                    "syllabus", "lecture", "lecture_notes", "course_outline",
+                    "class_notes", "handout", "reading",
+                ],
+                "extensions": [".pdf", ".docx", ".pptx", ".txt"],
+                "enabled": True,
+            },
+            {
+                "name": "Homework & Assignments",
+                "folder": "Documents\\School\\Assignments",
+                "match": [
+                    "homework", "assignment", "lab_report", "problem_set",
+                    "submission", "rubric", "worksheet",
+                ],
+                "extensions": [".pdf", ".docx", ".doc", ".xlsx", ".py", ".zip"],
+                "enabled": True,
+            },
+            {
+                "name": "Exams & Study Guides",
+                "folder": "Documents\\School\\Exams",
+                "match": [
+                    "midterm", "final_exam", "quiz", "study_guide",
+                    "exam_review", "cheat_sheet", "practice_exam",
+                ],
+                "extensions": [".pdf", ".docx", ".doc"],
+                "enabled": True,
+            },
+            {
+                "name": "Research Papers & Theses",
+                "folder": "Documents\\School\\Research",
+                "match": [
+                    "thesis", "dissertation", "arxiv", "journal_article",
+                    "manuscript", "abstract", "whitepaper",
+                ],
+                "extensions": [".pdf", ".bib", ".tex"],
+                "enabled": True,
+            },
+        ],
+    },
+    {
+        "id": "office_admin",
+        "name": "Office, Invoices & Work",
+        "icon": "💼",
+        "description": "Automatically sort invoices, receipts, tax forms, spreadsheets, resumes, and travel documents.",
+        "presets": ["office_admin"],
+        "show_maker_features": False,
+        "default_rules": [
+            {
+                "name": "Invoices & Receipts",
+                "folder": "Documents\\Invoices & Receipts",
+                "match": [
+                    "invoice", "receipt", "billing", "statement", "payment",
+                    "order_confirmation", "tax_invoice", "purchase_order", "remittance",
+                ],
+                "extensions": [".pdf", ".png", ".jpg", ".docx", ".xlsx", ".csv"],
+                "enabled": True,
+            },
+            {
+                "name": "Financial & Taxes",
+                "folder": "Documents\\Financial & Tax",
+                "match": [
+                    "tax", "w2", "w-2", "1099", "1040", "tax_return",
+                    "bank_statement", "paystub", "w9", "w-9", "dividend",
+                ],
+                "extensions": [".pdf", ".xlsx", ".xls", ".csv", ".doc", ".docx"],
+                "enabled": True,
+            },
+            {
+                "name": "Resumes & Career",
+                "folder": "Documents\\Career",
+                "match": [
+                    "resume", "curriculum_vitae", "cv", "cover_letter",
+                    "portfolio", "offer_letter", "recommendation",
+                ],
+                "extensions": [".pdf", ".docx", ".doc", ".odt"],
+                "enabled": True,
+            },
+            {
+                "name": "Manuals & Guides",
+                "folder": "Documents\\Manuals & Guides",
+                "match": [
+                    "manual", "userguide", "datasheet", "quickstart",
+                    "handbook", "documentation", "spec_sheet",
+                ],
+                "extensions": [".pdf", ".doc", ".docx", ".txt"],
+                "enabled": True,
+            },
+            {
+                "name": "Travel & Bookings",
+                "folder": "Documents\\Travel",
+                "match": [
+                    "boarding_pass", "flight", "itinerary", "e-ticket",
+                    "hotel_reservation", "booking_confirmation", "airline",
+                ],
+                "extensions": [".pdf", ".pkpass", ".png", ".jpg"],
+                "enabled": True,
+            },
+        ],
+    },
+    {
+        "id": "maker_3d",
+        "name": "3D Printing, CAD & CNC Maker",
+        "icon": "🛠️",
+        "description": "Full engineering suite: MakerWorld 3MF grace-period holds, Bambu/Orca slicer awareness, CAD assemblies, and Haas CNC toolpaths.",
+        "presets": ["maker_3d", "office_admin"],
+        "show_maker_features": True,
+        "default_rules": [
+            {
+                "name": "3MF Slicer Projects",
+                "folder": "3D Models\\3MF",
+                "match": [
+                    "bambu", "orca", "prusa", "plate", "multicolor", "ams",
+                ],
+                "extensions": [".3mf"],
+                "enabled": True,
+            },
+            {
+                "name": "CNC & Slicer G-Code",
+                "folder": "Code\\Gcode",
+                "match": [
+                    "slice", "layer", "toolpath", "contour", "gcode", "haas",
+                ],
+                "extensions": [".gcode", ".bgcode", ".nc", ".tap", ".ngc"],
+                "enabled": True,
+            },
+            {
+                "name": "CAD & Mechanical Parts",
+                "folder": "3D Models\\CAD",
+                "match": [
+                    "bracket", "mount", "enclosure", "adapter", "gear",
+                    "spacer", "chassis", "flange", "bushing",
+                ],
+                "extensions": [".step", ".stp", ".iges", ".f3d", ".sldprt", ".ipt", ".stl"],
+                "enabled": True,
+            },
+        ],
+    },
+]
+
+
+def get_persona_profiles() -> list[dict[str, Any]]:
+    """Return a deep copy of all available user persona profiles."""
+    return copy.deepcopy(PERSONA_PROFILES)
+
+
+def apply_persona_profile(config: dict[str, Any], persona_id: str) -> dict[str, Any]:
+    """Apply a persona profile to the configuration without mutating DEFAULT_CONFIG.
+
+    Validates persona_id, sets user_persona and onboarding_completed = True,
+    and merges keyword rules tailored to the persona without duplicates.
+    """
+    profile = next((p for p in PERSONA_PROFILES if p["id"] == persona_id), None)
+    if not profile:
+        raise ValueError(f"Unknown persona ID: {persona_id}")
+
+    updated = copy.deepcopy(config)
+    updated["user_persona"] = persona_id
+    updated["onboarding_completed"] = True
+    if "show_maker_features" in profile:
+        updated["show_maker_features"] = profile["show_maker_features"]
+
+    # Populate default rules for the persona
+    new_rules: list[dict[str, Any]] = copy.deepcopy(profile.get("default_rules", []))
+
+    # Merge rules from referenced presets without duplicates
+    for preset_id in profile.get("presets", []):
+        preset = next((p for p in BUILTIN_PRESETS if p["id"] == preset_id), None)
+        if preset:
+            for rule in preset.get("rules", []):
+                r_name = (rule.get("name") or "").lower()
+                if r_name and not any((r.get("name") or "").lower() == r_name for r in new_rules):
+                    new_rules.append(copy.deepcopy(rule))
+
+    # Retain existing rules that don't collide with the persona's rules
+    existing = updated.get("keyword_rules", [])
+    for r in existing:
+        if isinstance(r, dict) and r.get("name"):
+            r_name = r["name"].lower()
+            if not any((nr.get("name") or "").lower() == r_name for nr in new_rules):
+                new_rules.append(copy.deepcopy(r))
+
+    updated["keyword_rules"] = new_rules
+    return updated
+
+
+# =====================================================================
+# SMART PERSONA PROFILE RECOMMENDATION
+# =====================================================================
+
+_MAKER_RECOMMEND_EXTENSIONS: frozenset[str] = frozenset({
+    ".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs",
+    ".f3d", ".f3z", ".sldprt", ".sldasm", ".ipt", ".iam",
+    ".dwg", ".dxf", ".blend", ".fbx", ".glb", ".gltf", ".3ds",
+    ".nc", ".tap", ".ngc", ".gcode", ".bgcode", ".gco", ".g",
+})
+
+_MAKER_RECOMMEND_KEYWORDS: tuple[str, ...] = (
+    "bambu", "orca", "prusa", "plate", "multicolor", "ams",
+    "slic", "gcode", "haas", "toolpath", "contour", "bracket",
+    "mount", "enclosure", "adapter", "gear", "spacer", "chassis",
+    "flange", "bushing", "3dprint", "voron", "ender", "cad",
+    "creality", "makerworld", "thingiverse", "printables",
+)
+
+_ACADEMIC_RECOMMEND_KEYWORDS: tuple[str, ...] = (
+    "syllabus", "homework", "assignment", "lecture", "exam",
+    "midterm", "quiz", "lab_report", "thesis", "dissertation",
+    "arxiv", "problem_set", "study_guide", "course_outline",
+    "class_notes", "handout", "reading", "textbook", "semester",
+    "curriculum", "rubric", "worksheet",
+)
+
+_ACADEMIC_COURSE_CODE_RE = re.compile(r"\b[a-zA-Z]{2,4}\s*[-_]?\s*\d{3,4}[a-zA-Z]?\b")
+
+_OFFICE_RECOMMEND_KEYWORDS: tuple[str, ...] = (
+    "invoice", "receipt", "billing", "statement", "tax", "w2",
+    "w-2", "1099", "1040", "paystub", "pay_stub", "resume",
+    "curriculum_vitae", "cv", "itinerary", "boarding_pass",
+    "purchase_order", "po_", "remittance", "dividend", "financial",
+    "expense", "budget", "balance_sheet", "flight", "hotel_reservation",
+    "offer_letter", "cover_letter",
+)
+
+_OFFICE_SPREADSHEET_EXTS: frozenset[str] = frozenset({
+    ".xlsx", ".xls", ".csv", ".xlsm",
+})
+
+
+def recommend_persona_profile(
+    scan_dirs: list[Path] | Path | str | None = None,
+) -> dict[str, Any]:
+    """Perform a fast, 100% local scan (<50ms, <=500 files) to recommend a persona profile.
+
+    Scores signals for maker_3d, academic_student, and office_admin, falling back to
+    everyday_home when no specialized signals dominate or when 0 files are scanned.
+    Never mutates sorter.DEFAULT_CONFIG.
+    """
+    target_dirs: list[Path] = []
+    if scan_dirs is None:
+        try:
+            import sorter
+            if hasattr(sorter, "get_downloads_dir"):
+                d = sorter.get_downloads_dir()
+                if isinstance(d, (Path, str)):
+                    target_dirs.append(Path(d))
+            elif hasattr(sorter, "watch_root"):
+                target_dirs.append(sorter.watch_root({}))
+        except Exception:
+            pass
+        if not target_dirs:
+            target_dirs.append(Path.home() / "Downloads")
+    elif isinstance(scan_dirs, (Path, str)):
+        target_dirs.append(Path(scan_dirs))
+    elif isinstance(scan_dirs, (list, tuple, set)):
+        for item in scan_dirs:
+            if isinstance(item, (Path, str)):
+                target_dirs.append(Path(item))
+
+    scores: dict[str, int] = {
+        "maker_3d": 0,
+        "academic_student": 0,
+        "office_admin": 0,
+        "everyday_home": 0,
+    }
+    match_counts: dict[str, int] = {
+        "maker_3d": 0,
+        "academic_student": 0,
+        "office_admin": 0,
+    }
+
+    files_scanned = 0
+    max_scan_files = 500
+
+    for d in target_dirs:
+        try:
+            if not d.exists() or not d.is_dir():
+                continue
+            for entry in d.iterdir():
+                if files_scanned >= max_scan_files:
+                    break
+                try:
+                    if not entry.is_file():
+                        continue
+                except OSError:
+                    continue
+
+                files_scanned += 1
+                name_lower = entry.name.lower()
+                ext_lower = entry.suffix.lower()
+
+                # Ignore temporary downloads
+                if ext_lower in {".tmp", ".crdownload", ".part", ".partial", ".download"}:
+                    continue
+
+                maker_hit = False
+                if ext_lower in _MAKER_RECOMMEND_EXTENSIONS:
+                    scores["maker_3d"] += 3
+                    maker_hit = True
+                elif any(kw in name_lower for kw in _MAKER_RECOMMEND_KEYWORDS):
+                    scores["maker_3d"] += 2
+                    maker_hit = True
+                if maker_hit:
+                    match_counts["maker_3d"] += 1
+
+                academic_hit = False
+                if any(kw in name_lower for kw in _ACADEMIC_RECOMMEND_KEYWORDS):
+                    scores["academic_student"] += 3
+                    academic_hit = True
+                elif _ACADEMIC_COURSE_CODE_RE.search(name_lower):
+                    scores["academic_student"] += 3
+                    academic_hit = True
+                if academic_hit:
+                    match_counts["academic_student"] += 1
+
+                office_hit = False
+                if any(kw in name_lower for kw in _OFFICE_RECOMMEND_KEYWORDS):
+                    scores["office_admin"] += 3
+                    office_hit = True
+                elif ext_lower in _OFFICE_SPREADSHEET_EXTS:
+                    scores["office_admin"] += 1
+                    office_hit = True
+                if office_hit:
+                    match_counts["office_admin"] += 1
+
+        except (PermissionError, OSError):
+            continue
+
+    specialized = ["maker_3d", "academic_student", "office_admin"]
+    max_score = max(scores[k] for k in specialized)
+
+    if max_score <= 0 or files_scanned == 0:
+        recommended_id = "everyday_home"
+        reason = "Everyday & Home PC is recommended to keep your photos, music, documents, and downloads tidy!"
+    else:
+        # Highest score wins; ties broken by specialized order
+        recommended_id = max(specialized, key=lambda k: scores[k])
+        if recommended_id == "maker_3d":
+            count = match_counts["maker_3d"]
+            file_word = "file" if count == 1 else "files"
+            reason = f"We spotted {count} 3D/CAD or Maker {file_word} in your Downloads — 3D Printing, CAD & CNC Maker is recommended for your PC!"
+        elif recommended_id == "academic_student":
+            count = match_counts["academic_student"]
+            file_word = "file" if count == 1 else "files"
+            reason = f"We spotted {count} coursework or study {file_word} in your Downloads — Student & Schoolwork is recommended for your PC!"
+        elif recommended_id == "office_admin":
+            count = match_counts["office_admin"]
+            file_word = "file" if count == 1 else "files"
+            reason = f"We spotted {count} invoices, receipts, or work documents in your Downloads — Office, Invoices & Work is recommended for your PC!"
+        else:
+            reason = "Everyday & Home PC is recommended to keep your photos, music, documents, and downloads tidy!"
+
+    return {
+        "recommended_id": recommended_id,
+        "reason": reason,
+        "scores": scores,
+        "files_scanned": files_scanned,
+    }
+
+
+# =====================================================================
+# RECENT MOVE ACTIVITY EXTRACTION
+# =====================================================================
+
+def get_recent_activity(
+    limit: int = 25,
+    history_path: Path | str | None = None,
+    include_undone: bool = False,
+) -> list[dict[str, Any]]:
+    """Read recent user-visible file moves from history.jsonl.
+
+    Returns up to `limit` records, newest first, excluding bookkeeping and undone moves.
+    """
+    if limit <= 0:
+        return []
+
+    from sorter import HISTORY_FILE, NON_MOVE_ACTIONS
+
+    target = Path(history_path) if history_path else HISTORY_FILE
+    if not target.exists():
+        return []
+
+    records: list[dict[str, Any]] = []
+    undone_ids: set[str] = set()
+
+    try:
+        with target.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    if isinstance(rec, dict):
+                        if rec.get("action") == "undo" and "ref_id" in rec:
+                            undone_ids.add(str(rec["ref_id"]))
+                        records.append(rec)
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+
+    activity: list[dict[str, Any]] = []
+    for rec in reversed(records):
+        action = rec.get("action")
+        if action in NON_MOVE_ACTIONS:
+            continue
+        dest_str = rec.get("dest")
+        if not dest_str or not isinstance(dest_str, str):
+            continue
+        rec_id = str(rec.get("id", ""))
+        is_undone = rec_id in undone_ids
+        if is_undone and not include_undone:
+            continue
+
+        dest_path = Path(dest_str)
+        try:
+            exists = dest_path.exists()
+        except Exception:
+            exists = False
+
+        folder_name = dest_path.parent.name if dest_path.parent.name else "Downloads"
+
+        activity.append({
+            "id": rec_id,
+            "batch_id": str(rec.get("batch_id", "")),
+            "filename": dest_path.name,
+            "src": str(rec.get("src", "")),
+            "dest": dest_str,
+            "folder": folder_name,
+            "timestamp": str(rec.get("timestamp", "")),
+            "exists": exists,
+            "undone": is_undone,
+        })
+        if len(activity) >= limit:
+            break
+
+    return activity
+
+
+# =====================================================================
+# WINDOWS STARTUP & FILE EXPLORER CONTEXT MENU INTEGRATION
+# =====================================================================
+
+def _get_launch_command(args: list[str]) -> str:
+    """Construct an appropriate windowless launch command for frozen or dev execution."""
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).resolve()
+        arg_str = " ".join(args)
+        return f'"{exe}" {arg_str}'.strip()
+
+    # Development mode: prefer pythonw.exe if available to prevent console popup
+    python = Path(sys.executable).resolve()
+    if python.name.lower() == "python.exe":
+        pythonw = python.with_name("pythonw.exe")
+        if pythonw.exists():
+            python = pythonw
+    main_py = Path(__file__).resolve().parent / "main.py"
+    arg_str = " ".join(args)
+    return f'"{python}" "{main_py}" {arg_str}'.strip()
+
+
+def _delete_reg_key_tree(root: Any, subkey: str) -> None:
+    """Recursively delete a Windows registry key and all child subkeys safely."""
+    if sys.platform != "win32":
+        return
+    import winreg
+    try:
+        # Enumerate all child subkey names first with KEY_READ
+        children: list[str] = []
+        try:
+            with winreg.OpenKey(root, subkey, 0, winreg.KEY_READ) as key:
+                index = 0
+                while True:
+                    try:
+                        child = winreg.EnumKey(key, index)
+                        children.append(child)
+                        index += 1
+                    except OSError:
+                        break
+        except (FileNotFoundError, OSError):
+            return
+
+        # Recursively delete each child
+        for child in children:
+            _delete_reg_key_tree(root, f"{subkey}\\{child}")
+
+        # Delete the key itself
+        try:
+            winreg.DeleteKey(root, subkey)
+        except OSError:
+            pass
+    except Exception:
+        pass
+
+
+def is_startup_enabled() -> bool:
+    """Return True if Download Sorter is registered in HKCU Run key."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_READ,
+        ) as key:
+            val, _ = winreg.QueryValueEx(key, "DownloadSorter")
+            return bool(val)
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def set_startup_enabled(enabled: bool) -> bool:
+    """Enable or disable startup at Windows login via HKCU Run key."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+    try:
+        if enabled:
+            with winreg.CreateKeyEx(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0,
+                winreg.KEY_SET_VALUE,
+            ) as key:
+                cmd = _get_launch_command(["--tray"])
+                winreg.SetValueEx(key, "DownloadSorter", 0, winreg.REG_SZ, cmd)
+        else:
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Run",
+                    0,
+                    winreg.KEY_SET_VALUE,
+                ) as key:
+                    winreg.DeleteValue(key, "DownloadSorter")
+            except (FileNotFoundError, OSError):
+                pass
+        return True
+    except OSError:
+        return False
+
+
+def is_context_menu_enabled() -> bool:
+    """Return True if Explorer context menu integration is active in HKCU Classes."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Classes\Directory\shell\DownloadSorter",
+            0,
+            winreg.KEY_READ,
+        ) as key:
+            return True
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def set_context_menu_enabled(enabled: bool) -> bool:
+    """Enable or disable File Explorer context menus without console flashing."""
+    if sys.platform != "win32":
+        return False
+    import winreg
+
+    folder_sort_key = r"Software\Classes\Directory\shell\DownloadSorter"
+    bg_undo_key = r"Software\Classes\Directory\Background\shell\DownloadSorterUndo"
+
+    if not enabled:
+        _delete_reg_key_tree(winreg.HKEY_CURRENT_USER, folder_sort_key)
+        _delete_reg_key_tree(winreg.HKEY_CURRENT_USER, bg_undo_key)
+        return True
+
+    try:
+        sort_cmd = _get_launch_command(["--sort", '--target "%1"', "--notify"])
+        undo_cmd = _get_launch_command(["--undo", "--notify"])
+
+        # 1. Directory sort menu
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, folder_sort_key) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Sort with DownloadSorter")
+            winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, "imageres.dll,3")
+            with winreg.CreateKey(key, "command") as cmd_key:
+                winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, sort_cmd)
+
+        # 2. Directory Background undo menu
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, bg_undo_key) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "Undo Last DownloadSorter Batch")
+            winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, "imageres.dll,102")
+            with winreg.CreateKey(key, "command") as cmd_key:
+                winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, undo_cmd)
+
+        return True
+    except OSError:
+        return False
+

@@ -16,6 +16,24 @@ Includes a **PySide6 Visual Rules Manager & Machine Remodel Wizard**, **Curated 
 
 ---
 
+## 1-Click Download & Setup (Recommended)
+
+For everyday users on Windows 10 & 11 (zero Python installation or terminal commands required):
+
+1. **Download the Setup Executable**:
+   Get the latest single-file installer: [`DownloadSorter-Setup-v2.0.2-windows-x64.exe`](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
+2. **Run the Installer**:
+   Double-click the setup `.exe`.
+   - Installs cleanly into `%LOCALAPPDATA%\Programs\DownloadSorter` (no Administrator privileges required).
+   - Automatically creates Desktop and Start Menu shortcuts.
+   - Registers in Windows Installed Apps for seamless 1-click uninstallation.
+3. **Enjoy Automated Organization**:
+   The interactive 3-step Welcome Wizard launches automatically on completion so you can choose your persona profile and set your filing preferences.
+
+*Unattended / Silent deployment:* Run `DownloadSorter-Setup-v2.0.2-windows-x64.exe /S` (supports optional `/D=C:\Custom\Path`).
+
+---
+
 ## Folder Architecture
 
 Newly downloaded files are routed into an organized tree directly inside your Downloads folder:

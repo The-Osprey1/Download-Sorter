@@ -43,6 +43,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
+            dist/DownloadSorter-Setup-v*-windows-x64.exe
             dist/DownloadSorter-v*-windows-x64.zip
             dist/checksums.txt
           draft: false

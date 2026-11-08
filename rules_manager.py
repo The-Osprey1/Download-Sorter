@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -1124,35 +1125,11 @@ class LiveSandboxWidget(QFrame):
         layout.addWidget(self._input)
 
         # Quick Preset Chips
-        chips_box = QHBoxLayout()
-        chips_box.setSpacing(6)
-        chips_box.addWidget(QLabel("TEST PRESETS:"))
-
-        presets = [
-            ("ME3210 Exam", "ME3210_Exam_Review.pdf"),
-            ("Haas CNC .nc", "bracket_op1.nc"),
-            ("Bambu Slicer .gcode", "vase_multicolor.gcode"),
-            ("3MF Model", "turbine_bracket.3mf"),
-            ("ZIP Archive", "hardware_pack.zip"),
-        ]
-        for label, fname in presets:
-            btn = QPushButton(label)
-            btn.setProperty("class", "chip")
-            btn.setStyleSheet(f"""
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 11px;
-                color: {COLORS['textMuted']};
-                padding: 3px 9px;
-                font-family: '{TYPE['mono']}';
-                font-size: 10px;
-            """)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda _c=False, f=fname: self._set_input(f))
-            chips_box.addWidget(btn)
-
-        chips_box.addStretch()
-        layout.addLayout(chips_box)
+        self._current_persona = "maker_3d"
+        self._chips_box = QHBoxLayout()
+        self._chips_box.setSpacing(6)
+        layout.addLayout(self._chips_box)
+        self._rebuild_chips()
 
         # Result Display Card
         self._result_frame = QFrame()
@@ -1238,6 +1215,63 @@ class LiveSandboxWidget(QFrame):
             }}
         """)
         layout.addWidget(self._trace_list)
+
+    def set_persona(self, persona: str) -> None:
+        """Update preset chips to reflect the active user profile."""
+        self._current_persona = persona
+        self._rebuild_chips()
+
+    def _rebuild_chips(self) -> None:
+        if not hasattr(self, "_chips_box"):
+            return
+        while self._chips_box.count() > 0:
+            item = self._chips_box.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        lbl = QLabel("TEST PRESETS:")
+        lbl.setFont(QFont(TYPE["ui"], 9, QFont.Weight.Bold))
+        lbl.setStyleSheet(f"color: {COLORS['textMuted']};")
+        self._chips_box.addWidget(lbl)
+
+        persona = getattr(self, "_current_persona", "maker_3d")
+        if persona == "maker_3d":
+            presets = [
+                ("Haas CNC .nc", "bracket_op1.nc"),
+                ("Bambu Slicer .gcode", "vase_multicolor.gcode"),
+                ("3MF Model", "turbine_bracket.3mf"),
+                ("ME3210 Exam", "ME3210_Exam_Review.pdf"),
+                ("ZIP Archive", "hardware_pack.zip"),
+            ]
+            self._input.setPlaceholderText("Enter hypothetical filename (e.g. ME3210_Exam_Review.pdf, bracket_op1.nc, vase.3mf)...")
+        else:
+            presets = [
+                ("Invoice_2026.pdf", "Invoice_2026.pdf"),
+                ("Family_Photo.jpg", "Family_Photo.jpg"),
+                ("Syllabus_Fall.pdf", "Syllabus_Fall.pdf"),
+                ("Zoom_Installer.exe", "Zoom_Installer.exe"),
+                ("Vacation_Photos.zip", "Vacation_Photos.zip"),
+            ]
+            self._input.setPlaceholderText("Enter hypothetical filename (e.g. Invoice_2026.pdf, Family_Photo.jpg, Syllabus_Fall.pdf)...")
+
+        for label, fname in presets:
+            btn = QPushButton(label)
+            btn.setProperty("class", "chip")
+            btn.setStyleSheet(f"""
+                background: {COLORS['surfaceRaised']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 11px;
+                color: {COLORS['textMuted']};
+                padding: 3px 9px;
+                font-family: '{TYPE['mono']}';
+                font-size: 10px;
+            """)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _c=False, f=fname: self._set_input(f))
+            self._chips_box.addWidget(btn)
+
+        self._chips_box.addStretch()
 
     def _set_input(self, fname: str) -> None:
         self._input.setText(fname)
@@ -1778,7 +1812,10 @@ class MachineRemodelWidget(QFrame):
 class RulesManagerDialog(QDialog):
     """Visual Rules Manager & Live Sorter Sandbox Dialog for Suite Central."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(self, parent: QWidget | None = None, initial_view: str = "customize"):
+        if isinstance(parent, str):
+            initial_view = parent
+            parent = None
         super().__init__(parent)
         self.setWindowTitle("Visual Rules Manager & Live Sorter Sandbox")
         self.setMinimumSize(880, 800)
@@ -1798,6 +1835,7 @@ class RulesManagerDialog(QDialog):
         self._config: dict[str, Any] = {}
         self._init_ui()
         self.load_data()
+        self.switch_view(initial_view)
 
     def _init_ui(self) -> None:
         self.setStyleSheet(f"""
@@ -1920,22 +1958,86 @@ class RulesManagerDialog(QDialog):
 
         # Close Button
         close_btn = QPushButton("✕")
-        close_btn.setFixedSize(26, 26)
+        close_btn.setFixedSize(28, 28)
+        close_btn.setStyleSheet("padding: 0px;")
         close_btn.clicked.connect(self.close)
         header.addWidget(close_btn)
 
         main_layout.addLayout(header)
 
         # -------------------------------------------------------------
-        # Section 1: Active Project Catch-All Mode
+        # Segmented View Switcher Bar (Home vs Customize)
         # -------------------------------------------------------------
-        self._active_project_card = ActiveProjectCard()
-        self._active_project_card.state_changed.connect(self._on_rules_or_project_changed)
-        main_layout.addWidget(self._active_project_card)
+        self._view_switcher = QWidget()
+        switcher_row = QHBoxLayout(self._view_switcher)
+        switcher_row.setContentsMargins(0, 0, 0, 0)
+        switcher_row.setSpacing(6)
+
+        self._seg_btn_home = QPushButton("🏠 Home & Activity")
+        self._seg_btn_home.setCheckable(True)
+
+        self._seg_btn_rules = QPushButton("⚙️ Customize Rules & Remodel")
+        self._seg_btn_rules.setCheckable(True)
+
+        self._view_btn_home = self._seg_btn_home
+        self._view_btn_rules = self._seg_btn_rules
+
+        self._view_btn_group = QButtonGroup(self)
+        self._view_btn_group.addButton(self._seg_btn_home, 0)
+        self._view_btn_group.addButton(self._seg_btn_rules, 1)
+        self._view_btn_group.idClicked.connect(lambda vid: self._on_view_switcher_clicked(vid))
+
+        switcher_style = f"""
+            QPushButton {{
+                background: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: {RADII['small']}px;
+                color: {COLORS['textMuted']};
+                padding: 6px 18px;
+                font-weight: 600;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background: {COLORS['surfaceHover']};
+                border-color: {ACCENTS['downloadSorter']};
+            }}
+            QPushButton:checked {{
+                background: {COLORS['surfaceRaised']};
+                color: {ACCENTS['downloadSorter']};
+                border: 1px solid {ACCENTS['downloadSorter']};
+            }}
+        """
+        self._seg_btn_home.setStyleSheet(switcher_style)
+        self._seg_btn_rules.setStyleSheet(switcher_style)
+
+        switcher_row.addWidget(self._seg_btn_home)
+        switcher_row.addWidget(self._seg_btn_rules)
+        switcher_row.addStretch()
+        main_layout.addWidget(self._view_switcher)
 
         # -------------------------------------------------------------
-        # Section 2: Rules Precedence Tabs
+        # Central View Stack: Page 0 (Home), Page 1 (Customize)
         # -------------------------------------------------------------
+        self._view_stack = QStackedWidget(self)
+
+        # Page 0: Home Dashboard
+        from onboarding import HomeDashboardWidget
+        self._home_widget = HomeDashboardWidget(config=self._config, parent=self)
+        self._home_widget.persona_changed.connect(self.set_active_persona)
+        self._view_stack.addWidget(self._home_widget)
+
+        # Page 1: Customize Rules Container
+        self._customize_container = QWidget(parent=self)
+        custom_layout = QVBoxLayout(self._customize_container)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.setSpacing(10)
+
+        # Section 1: Active Project Catch-All Mode
+        self._active_project_card = ActiveProjectCard()
+        self._active_project_card.state_changed.connect(self._on_rules_or_project_changed)
+        custom_layout.addWidget(self._active_project_card)
+
+        # Section 2: Rules Precedence Tabs (STRICT CONTRACT: EXACTLY 3 TABS!)
         self._tabs = QTabWidget()
 
         self._keyword_table = RuleTableWidget(rule_type="keyword")
@@ -1949,13 +2051,14 @@ class RulesManagerDialog(QDialog):
         self._remodel_widget = MachineRemodelWidget()
         self._tabs.addTab(self._remodel_widget, "Machine Remodel")
 
-        main_layout.addWidget(self._tabs, 1)
+        custom_layout.addWidget(self._tabs, 1)
 
-        # -------------------------------------------------------------
         # Section 3: Live Sorter Sandbox Simulator
-        # -------------------------------------------------------------
         self._sandbox = LiveSandboxWidget()
-        main_layout.addWidget(self._sandbox)
+        custom_layout.addWidget(self._sandbox)
+
+        self._view_stack.addWidget(self._customize_container)
+        main_layout.addWidget(self._view_stack, 1)
 
         # Footer credit (single-sourced from about.py)
         self._credit_lbl = QLabel(f"{about.APP_NAME} {about.__version__} · {about.CREDIT}")
@@ -1963,6 +2066,55 @@ class RulesManagerDialog(QDialog):
         self._credit_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         self._credit_lbl.setStyleSheet(f"color: {COLORS['textFaint']}; font-size: 10px;")
         main_layout.addWidget(self._credit_lbl)
+
+    def switch_view(self, view_name: str) -> None:
+        """Switch between 'home' (Page 0) and 'customize' (Page 1) views."""
+        name = (view_name or "").lower().strip()
+        if name in ("home", "dashboard", "0"):
+            self._seg_btn_home.setChecked(True)
+            self._view_stack.setCurrentIndex(0)
+            self._on_view_changed(0)
+        else:
+            self._seg_btn_rules.setChecked(True)
+            self._view_stack.setCurrentIndex(1)
+            self._on_view_changed(1)
+
+    def switch_to_view(self, view_name: str) -> None:
+        """Alias for switch_view."""
+        self.switch_view(view_name)
+
+    def _on_view_switcher_clicked(self, view_id: int) -> None:
+        self.switch_view("home" if view_id == 0 else "customize")
+
+    def _on_view_changed(self, view_id: int) -> None:
+        is_rules = (view_id == 1)
+        if hasattr(self, "_preset_lib_btn"):
+            self._preset_lib_btn.setVisible(is_rules)
+        if hasattr(self, "_export_btn"):
+            self._export_btn.setVisible(is_rules)
+        if hasattr(self, "_import_btn"):
+            self._import_btn.setVisible(is_rules)
+        if hasattr(self, "_reset_btn"):
+            self._reset_btn.setVisible(is_rules)
+        if hasattr(self, "_save_btn"):
+            self._save_btn.setVisible(is_rules)
+        if view_id == 0 and hasattr(self, "_home_widget"):
+            self._home_widget.refresh_data()
+
+    def set_active_persona(self, persona_id: str) -> None:
+        """Configure conditional maker elements and notify sandbox and home widget."""
+        self._current_persona = persona_id
+        is_maker = (persona_id == "maker_3d")
+        if hasattr(self, "_active_project_card"):
+            self._active_project_card.setVisible(is_maker)
+        if hasattr(self, "_sandbox") and hasattr(self._sandbox, "set_persona"):
+            self._sandbox.set_persona(persona_id)
+        if hasattr(self, "_home_widget") and hasattr(self._home_widget, "set_persona"):
+            self._home_widget.set_persona(persona_id)
+
+    def set_persona(self, persona_id: str) -> None:
+        """Alias for set_active_persona."""
+        self.set_active_persona(persona_id)
 
     def load_data(self) -> None:
         """Load persistent config and active project state into UI."""
@@ -1972,6 +2124,10 @@ class RulesManagerDialog(QDialog):
 
         active_proj = suite_data.get_active_project()
         self._active_project_card.set_state(active_proj)
+
+        # Apply active persona visibility rules
+        active_persona = self._config.get("user_persona", "maker_3d")
+        self.set_active_persona(active_persona)
 
         self._on_rules_or_project_changed()
 
@@ -2102,6 +2258,8 @@ class RulesManagerDialog(QDialog):
             self._save_timer.stop()
         if hasattr(self, "_active_project_card") and hasattr(self._active_project_card, "_countdown_timer"):
             self._active_project_card._countdown_timer.stop()
+        if hasattr(self, "_home_widget") and hasattr(self._home_widget, "_refresh_timer"):
+            self._home_widget._refresh_timer.stop()
         super().closeEvent(event)
 
     def hideEvent(self, event) -> None:
@@ -2109,10 +2267,12 @@ class RulesManagerDialog(QDialog):
             self._save_timer.stop()
         if hasattr(self, "_active_project_card") and hasattr(self._active_project_card, "_countdown_timer"):
             self._active_project_card._countdown_timer.stop()
+        if hasattr(self, "_home_widget") and hasattr(self._home_widget, "_refresh_timer"):
+            self._home_widget._refresh_timer.stop()
         super().hideEvent(event)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Launch the Rules Manager dialog standalone."""
     if about.handle_version_flag():
         return 0
@@ -2131,16 +2291,38 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Visual Rules Manager for Download Sorter.")
     parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument("--tab", type=str, default="", help="Active tab to display on startup.")
-    args, _unknown = parser.parse_known_args()
+    parser.add_argument("--home", action="store_true", help="Launch directly into Home Dashboard view.")
+    parser.add_argument("--welcome", action="store_true", help="Launch the First-Run Welcome Wizard.")
+    raw_args = argv if argv is not None else sys.argv[1:]
+    args, _unknown = parser.parse_known_args(raw_args)
 
     app = QApplication.instance()
     owns_app = False
     if app is None:
         app = QApplication(sys.argv)
         owns_app = True
-    dialog = RulesManagerDialog()
-    if args.tab.lower() == "remodel":
-        dialog._tabs.setCurrentWidget(dialog._remodel_widget)
+
+    if args.welcome:
+        from onboarding import WelcomeWizardDialog
+        wizard = WelcomeWizardDialog()
+        result = wizard.exec()
+        if result == QDialog.DialogCode.Accepted:
+            dialog = RulesManagerDialog(initial_view="home")
+            dialog.show()
+            if owns_app:
+                return app.exec()
+        return 0
+
+    init_view = "home" if (args.home or not args.tab) else "customize"
+    dialog = RulesManagerDialog(initial_view=init_view)
+    if args.tab:
+        dialog.switch_view("customize")
+        if args.tab.lower() == "remodel":
+            dialog._tabs.setCurrentWidget(dialog._remodel_widget)
+        elif args.tab.lower() in ("keyword", "keywords"):
+            dialog._tabs.setCurrentWidget(dialog._keyword_table)
+        elif args.tab.lower() in ("extension", "extensions"):
+            dialog._tabs.setCurrentWidget(dialog._extension_table)
     dialog.show()
     if owns_app:
         return app.exec()

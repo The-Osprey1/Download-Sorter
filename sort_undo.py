@@ -132,7 +132,7 @@ def undo_moves(targets: list[dict], dry_run: bool = False) -> int:
     return restored_count
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     setup_logging()
     parser = argparse.ArgumentParser(description="Undo recent download-sorter moves.")
     parser.add_argument("--version", action="version", version=about.version_string())
@@ -151,13 +151,29 @@ def main() -> int:
     parser.add_argument(
         "-l", "--list", action="store_true", help="List recent active move history"
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--notify", action="store_true", help="Display desktop ribbon summary toast upon completion"
+    )
+    parser.add_argument(
+        "--quiet-toast", action="store_true", help="Quietly display desktop ribbon summary toast"
+    )
+    args = parser.parse_args(argv)
 
     records = load_history()
     active = get_active_moves(records)
 
     if not active:
         print("No reversible move history found.")
+        if getattr(args, "notify", False) or getattr(args, "quiet_toast", False):
+            try:
+                import ribbon_popup
+                ribbon_popup.notify_summary(
+                    "Undo Last Batch",
+                    "No reversible move history found.",
+                    accent="#FA7183",
+                )
+            except Exception:
+                pass
         return 0
 
     if args.list:
@@ -186,6 +202,13 @@ def main() -> int:
     count = undo_moves(targets, dry_run=args.dry_run)
     action_word = "Would restore" if args.dry_run else "Restored"
     print(f"{action_word} {count} file(s).")
+    if getattr(args, "notify", False) or getattr(args, "quiet_toast", False):
+        try:
+            import ribbon_popup
+            msg = f"Restored {count} file(s) to Downloads." if count > 0 else "Nothing was restored."
+            ribbon_popup.notify_summary("Undo Last Batch", msg, accent="#FA7183")
+        except Exception:
+            pass
     return 0
 
 
