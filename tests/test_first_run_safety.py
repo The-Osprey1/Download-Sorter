@@ -160,9 +160,13 @@ def test_existing_files_cutoff_reads_only_numbers():
 
 
 def test_sort_existing_skips_files_from_before_the_cutoff(config, downloads):
-    old = _make(downloads / "old_report.pdf", age=3600)
+    # Windows also records when a file was created, which a test cannot backdate,
+    # so put a real gap between the old file, the cutoff and the new file.
+    old = _make(downloads / "old_report.pdf")
+    time.sleep(0.3)
+    cutoff = time.time()
+    time.sleep(0.3)
     new = _make(downloads / "new_report.pdf")
-    cutoff = time.time() - 60
 
     moved = sorter.sort_existing(config, batch_id="t1", skip_before=cutoff)
 
