@@ -95,6 +95,7 @@ py-modules = [
     "toggle_pause",
     "tray",
     "ui_icons",
+    "ui_motion",
     "ui_style",
     "unzip_3d",
     "unzip_archive",

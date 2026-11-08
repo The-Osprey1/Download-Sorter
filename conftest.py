@@ -16,6 +16,10 @@ if sys.platform == "win32":
 
 import pytest
 
+# Animations finish instantly in tests, so labels show their final values at
+# once. tests/test_ui_motion.py turns them back on where it checks them.
+os.environ.setdefault("DOWNLOAD_SORTER_REDUCED_MOTION", "1")
+
 
 # pystray's Windows backend registers a window class named after id(icon) when
 # an Icon is created, and only unregisters it when the icon has run.  The tests

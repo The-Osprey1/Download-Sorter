@@ -52,6 +52,16 @@ from onboarding import SettingsWidget
 from rules_manager import RulesManagerDialog
 
 
+
+def _wait_for_sort(qapp, widget, timeout: float = 10.0) -> None:
+    """The Sort Downloads now button sorts in the background; wait for it to finish."""
+    deadline = time.monotonic() + timeout
+    while widget.is_sorting() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+    qapp.processEvents()
+    assert not widget.is_sorting(), "Sort Downloads now did not finish"
+
 @pytest.fixture(scope="session")
 def qapp():
     """Ensure a QApplication instance is running in headless offscreen mode."""
@@ -110,9 +120,9 @@ class TestDashboardQuickActions:
             # Update mock counter for post-sort refresh
             moves_count[0] = 7
 
-            # Trigger sort via button click
+            # Trigger sort via button click (it runs in the background)
             widget._btn_sort_now.click()
-            qapp.processEvents()
+            _wait_for_sort(qapp, widget)
 
             mock_sort.assert_called_once()
             called_args, called_kwargs = mock_sort.call_args
@@ -149,7 +159,7 @@ class TestDashboardQuickActions:
 
             # Clicking the button must not raise an unhandled exception
             widget._btn_sort_now.click()
-            qapp.processEvents()
+            _wait_for_sort(qapp, widget)
             assert widget.isVisible()
         finally:
             widget.close()

@@ -72,6 +72,7 @@ if str(ROOT) not in sys.path:
 
 import about
 import ui_icons
+import ui_motion
 import ui_style
 
 try:
@@ -1713,7 +1714,7 @@ class RulesManagerDialog(QDialog):
         page = aliases.get(name, "rules")
         idx = self.PAGES.index(page)
         self._nav_buttons[page].setChecked(True)
-        self._view_stack.setCurrentIndex(idx)
+        ui_motion.crossfade_to(self._view_stack, idx)
         if name in ("extension", "extensions"):
             self._tabs.setCurrentWidget(self._extension_table)
         elif name in ("keyword", "keywords"):

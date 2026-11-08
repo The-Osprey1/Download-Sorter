@@ -451,13 +451,13 @@ def test_home_dashboard_actions_sort_and_undo(qapp, monkeypatch):
 
         mock_sort = MagicMock(return_value=3)
         mock_undo = MagicMock(return_value=3)
-        monkeypatch.setattr(widget, "sort_now", mock_sort, raising=False)
+        # The button sorts in the background through start_sort_now.
+        monkeypatch.setattr(widget, "start_sort_now", mock_sort, raising=False)
         monkeypatch.setattr(widget, "undo_last", mock_undo, raising=False)
 
         widget._btn_sort_now.click()
         qapp.processEvents()
-        if hasattr(widget, "sort_now"):
-            mock_sort.assert_called_once()
+        mock_sort.assert_called_once()
 
         widget._btn_undo_last.click()
         qapp.processEvents()
