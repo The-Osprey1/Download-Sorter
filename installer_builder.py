@@ -153,9 +153,12 @@ namespace DownloadSorterInstaller
             for (int i = 0; i < args.Length; i++)
             {
                 string a = args[i].Trim();
+                // /S and /D= are the documented options; /SILENT, /VERYSILENT and
+                // /DIR= are accepted too, for people used to Inno Setup installers.
                 if (string.Equals(a, "/S", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(a, "-S", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(a, "/silent", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(a, "/verysilent", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(a, "--silent", StringComparison.OrdinalIgnoreCase))
                 {
                     silent = true;
@@ -676,8 +679,14 @@ def build_setup_exe(
     dist_dir: Path | str | None = None,
     version: str | None = None,
     output_exe: Path | str | None = None,
+    use_inno: bool = False,
 ) -> Path:
-    """High-level builder producing DownloadSorter-Setup-v{VERSION}-windows-x64.exe."""
+    """High-level builder producing DownloadSorter-Setup-v{VERSION}-windows-x64.exe.
+
+    The single-file installer is always built unless ``use_inno`` is set, so the
+    setup file (and its documented /S and /D= options) does not depend on
+    whether Inno Setup happens to be installed on the build machine.
+    """
     ver = version or getattr(about, "__version__", "2.0.2")
     dist = Path(dist_dir) if dist_dir else (REPO_ROOT / "dist" / "DownloadSorter")
     target_out_dir = dist.parent if dist.name == "DownloadSorter" else (REPO_ROOT / "dist")
@@ -689,7 +698,7 @@ def build_setup_exe(
         generate_app_icon(ico_path)
 
     # Optional Inno Setup compilation if ISCC is available and installer.iss exists
-    iscc = find_iscc_compiler()
+    iscc = find_iscc_compiler() if use_inno else None
     iss_file = REPO_ROOT / "installer.iss"
     if iscc and iss_file.exists():
         try:

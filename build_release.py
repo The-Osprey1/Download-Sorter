@@ -36,7 +36,7 @@ def calculate_sha256(file_path: Path) -> str:
     return hasher.hexdigest()
 
 
-def build_standalone() -> int:
+def build_standalone(use_inno: bool = False) -> int:
     print("=" * 60)
     print(f"  Building Download Sorter v{VERSION} Standalone Release")
     print("=" * 60)
@@ -127,7 +127,7 @@ def build_standalone() -> int:
         setup_path.unlink()
 
     print(f"[*] Building single-file setup executable: {setup_path.name}...")
-    installer_builder.build_setup_exe(dist_dir=RELEASE_DIR, version=VERSION, output_exe=setup_path)
+    installer_builder.build_setup_exe(dist_dir=RELEASE_DIR, version=VERSION, output_exe=setup_path, use_inno=use_inno)
     setup_size_mb = round(setup_path.stat().st_size / (1024 * 1024), 2)
     print(f"[OK] Setup executable created ({setup_size_mb} MB)")
 
@@ -153,4 +153,12 @@ def build_standalone() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(build_standalone())
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build the Download Sorter Windows release.")
+    parser.add_argument(
+        "--inno",
+        action="store_true",
+        help="Build the setup file with Inno Setup (installer.iss) instead of the single-file installer.",
+    )
+    sys.exit(build_standalone(use_inno=parser.parse_args().inno))
