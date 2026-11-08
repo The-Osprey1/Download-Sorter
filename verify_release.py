@@ -66,6 +66,7 @@ REQUIRED_RELEASE_FILES = [
     "ui_icons.py",
     "ui_motion.py",
     "ui_style.py",
+    "update_check.py",
     "installer_builder.py",
     "installer.iss",
     "DownloadSorter.ico",

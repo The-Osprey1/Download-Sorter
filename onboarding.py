@@ -47,6 +47,7 @@ import learning
 import ui_icons
 import ui_motion
 import ui_style
+import update_check
 
 try:
     import config_manager as suite_data
@@ -930,6 +931,7 @@ class HomeDashboardWidget(QWidget):
     # Results from background work, delivered on the window's thread.
     _sort_finished = Signal(int, str)
     _preview_ready = Signal(int, int)
+    _update_ready = Signal(object)
 
     POLL_MS = 2000
     START_TIMEOUT_S = 15.0
@@ -948,8 +950,10 @@ class HomeDashboardWidget(QWidget):
         self._waiting = 0
         self._preview_generation = 0
 
+        self._update_checked = False
         self._sort_finished.connect(self._finish_sort)
         self._preview_ready.connect(self._on_preview_ready)
+        self._update_ready.connect(self._on_update_ready)
 
         self._init_ui()
 
@@ -967,6 +971,10 @@ class HomeDashboardWidget(QWidget):
 
         header, _ = ui_style.page_header("Home")
         layout.addWidget(header)
+
+        # "Download Sorter 2.1.0 is available. [Download]"
+        self._update_banner = ui_motion.Banner(self)
+        layout.addWidget(self._update_banner)
 
         # Status and the main actions
         self._status_card, hero = ui_style.card(spacing=6)
@@ -1267,6 +1275,44 @@ class HomeDashboardWidget(QWidget):
             parts.append(f"{len(ordered) - shown} more")
         return ", ".join(parts) + "." if parts else ""
 
+    # ---- newer version -------------------------------------------------
+
+    def refresh_update_notice(self) -> None:
+        """Once per window: ask (in the background) whether a newer version exists."""
+        if self._update_checked or not update_check.is_enabled(self._config):
+            return
+        self._update_checked = True
+        config = copy.deepcopy(self._config)
+
+        def work() -> None:
+            try:
+                release = update_check.check(config)
+            except Exception:
+                release = None
+            try:
+                self._update_ready.emit(release)
+            except RuntimeError:
+                pass  # the window was closed meanwhile
+
+        threading.Thread(target=work, name="home-update-check", daemon=True).start()
+
+    def _on_update_ready(self, release: Any) -> None:
+        if not release:
+            return
+        url = str(release.get("url") or update_check.RELEASES_PAGE)
+        self._update_banner.show_message(
+            f"Download Sorter {update_check.display_version(release)} is available. "
+            "Download it, then run the installer; your rules and settings are kept.",
+            "info", "Download", lambda: self._open_url(url), timeout_ms=0,
+        )
+
+    @staticmethod
+    def _open_url(url: str) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl(url))
+
     # ---- files still waiting in Downloads --------------------------------
 
     def refresh_waiting(self) -> None:
@@ -1482,6 +1528,7 @@ class HomeDashboardWidget(QWidget):
             self._refresh_timer.start()
         self.refresh_status()
         self.refresh_waiting()
+        self.refresh_update_notice()
 
     def _stop_live_updates(self) -> None:
         # While the window is closing, Qt may already have deleted child widgets.
@@ -1596,6 +1643,11 @@ class SettingsWidget(QWidget):
 
         info = self._section(layout, "About")
         info.addWidget(ui_style.label(f"{about.APP_NAME} {about.__version__}"))
+        self._chk_updates = QCheckBox("Check for new versions once a day")
+        self._chk_updates.setToolTip(
+            "Asks GitHub which version is newest. Nothing about you or your files is sent.")
+        self._chk_updates.toggled.connect(self._on_updates_toggled)
+        info.addWidget(self._chk_updates)
         info.addWidget(ui_style.label(about.CREDIT, "muted"))
         link = ui_style.label(
             f'<a href="{about.REPO_URL}" style="color: {COLORS["info"]}; text-decoration: none;">'
@@ -1630,6 +1682,10 @@ class SettingsWidget(QWidget):
         self._chk_learning.blockSignals(True)
         self._chk_learning.setChecked(learning.is_enabled(self._config))
         self._chk_learning.blockSignals(False)
+        block = self._config.get("update_check")
+        self._chk_updates.blockSignals(True)
+        self._chk_updates.setChecked(bool(block.get("enabled", True)) if isinstance(block, dict) else True)
+        self._chk_updates.blockSignals(False)
         self.set_persona(self._config.get("user_persona", "everyday_home"))
 
     def set_persona(self, persona_id: str) -> None:
@@ -1655,6 +1711,18 @@ class SettingsWidget(QWidget):
 
     def _on_unpack_toggled(self, checked: bool) -> None:
         _set_auto_unzip(self._config, checked)
+        if hasattr(suite_data, "save_sorter_config"):
+            try:
+                suite_data.save_sorter_config(self._config)
+            except Exception:
+                pass
+
+    def _on_updates_toggled(self, checked: bool) -> None:
+        block = self._config.get("update_check")
+        if not isinstance(block, dict):
+            block = {}
+            self._config["update_check"] = block
+        block["enabled"] = bool(checked)
         if hasattr(suite_data, "save_sorter_config"):
             try:
                 suite_data.save_sorter_config(self._config)

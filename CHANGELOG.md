@@ -19,11 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * Pausing, resuming and undoing each say what happens next.
 * **Smoother window (`rules_manager.py`, `ui_motion.py`)**: pages fade in when you switch between them, and messages slide in and fade out. All motion is skipped when Windows' "Show animations in Windows" setting is off.
 * **Tray messages (`tray.py`)**: pausing and resuming from the tray now say what happens next.
-
 * **Zip files are kept as they are unless you choose otherwise (`sorter.py`, `onboarding.py`, `config.json`)**: the welcome steps now ask "Unzip downloaded .zip files" (off by default), and the shipped default is off. Before, every zip was unpacked into Extracted automatically. The switch is still in Settings.
 * **No personal paths in the app (`rules_manager.py`)**: the "Try a filename" box no longer looks for sample programs in a folder on the developer's PC.
 
 ### Added
+* **"A newer version is available" (new `update_check.py`, Home, tray, Settings)**: once a day at most, Download Sorter asks GitHub which version is newest. When there is a newer one, Home shows "Download Sorter X is available" with a Download button, and the tray mentions it once. Only the app name and version are sent. Failures are silent. Turn it off in Settings, under "Check for new versions once a day".
+* **Tray tooltip stays within Windows' 127-character limit (`tray.py`)**: a long tooltip would raise an error in the tray library. The credit line is dropped first when space runs out.
 * `sorter.preview_existing`: lists what "Sort Downloads now" would move, without moving anything or writing to the log.
 
 ## [2.0.2] - 2026-11-04

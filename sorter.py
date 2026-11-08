@@ -68,6 +68,8 @@ V2_DEFAULTS: dict = {
     "mirror": {"enabled": False},
     # Learning from how the user organizes files (stage 1 only watches and logs).
     "learning": {"enabled": False},
+    # Once a day, ask GitHub which version is newest (see update_check.py).
+    "update_check": {"enabled": True},
     "remodel": {
         "enabled": True,
         "quarantine_days": 30,

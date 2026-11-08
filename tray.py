@@ -143,6 +143,9 @@ def spawn_window(*args: str) -> None:
         logging.warning("Could not spawn window %s: %s", args, exc)
 
 
+TOOLTIP_MAX = 127
+
+
 class SorterTray:
     def __init__(self, wait_for_setup: bool = False) -> None:
         self.wait_for_setup = wait_for_setup
@@ -173,7 +176,21 @@ class SorterTray:
             state = "Paused" if is_paused() else "Watching Downloads"
         held = self._held_count()
         held_line = f"\n{held} 3MF(s) held in Downloads" if held > 0 else ""
-        return f"{about.APP_NAME} - {state}\n{moves_today()} file(s) filed today{held_line}\n{about.CREDIT}"
+        update_line = ""
+        try:
+            import update_check
+            release = update_check.cached_update()
+            if release:
+                update_line = f"\nVersion {update_check.display_version(release)} is available"
+        except Exception:
+            pass
+        text = f"{about.APP_NAME} - {state}\n{moves_today()} file(s) filed today{held_line}{update_line}"
+        with_credit = f"{text}\n{about.CREDIT}"
+        # Windows tray tooltips hold at most 127 characters (pystray raises on
+        # longer ones), so the credit is the first thing to go.
+        if len(with_credit) <= TOOLTIP_MAX:
+            return with_credit
+        return text[:TOOLTIP_MAX]
 
     def refresh(self) -> None:
         self.icon.icon = make_icon(is_paused(), self._held_count())
@@ -307,8 +324,25 @@ class SorterTray:
                 self.icon.stop()
         threading.Thread(target=work, daemon=True, name="sorter-watch").start()
 
+    def check_for_update(self) -> None:
+        """Once a day at most: mention a newer version, once per version."""
+        def work() -> None:
+            try:
+                import update_check
+                release = update_check.check(self.config)
+                if release and update_check.should_notify(release):
+                    self.notify(
+                        f"Version {update_check.display_version(release)} is available. "
+                        "Open Download Sorter to download it."
+                    )
+                    self.refresh()
+            except Exception:
+                logging.debug("Update check failed", exc_info=True)
+        threading.Thread(target=work, daemon=True, name="sorter-update-check").start()
+
     def run(self) -> int:
         self.start_watcher()
+        self.check_for_update()
         self.icon.run()
         self.stop_event.set()
         watch.WAKE_EVENT.set()

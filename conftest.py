@@ -20,6 +20,9 @@ import pytest
 # Animations finish instantly in tests, so labels show their final values at
 # once. tests/test_ui_motion.py turns them back on where it checks them.
 os.environ.setdefault("DOWNLOAD_SORTER_REDUCED_MOTION", "1")
+# Never ask GitHub for the latest version during tests (tests/test_update_check.py
+# turns it back on with a fake network).
+os.environ.setdefault("DOWNLOAD_SORTER_NO_UPDATE_CHECK", "1")
 
 
 # pystray's Windows backend registers a window class named after id(icon) when

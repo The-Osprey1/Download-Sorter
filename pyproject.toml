@@ -97,6 +97,7 @@ py-modules = [
     "ui_icons",
     "ui_motion",
     "ui_style",
+    "update_check",
     "unzip_3d",
     "unzip_archive",
     "watch",
