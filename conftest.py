@@ -17,6 +17,29 @@ if sys.platform == "win32":
 import pytest
 
 
+# pystray's Windows backend registers a window class named after id(icon) when
+# an Icon is created, and only unregisters it when the icon has run.  The tests
+# build many tray icons without running them, so a later icon that Python puts
+# at a reused address fails with "WinError 1410: Class already exists".  Keeping
+# every test-created icon alive means no address (and so no class name) is reused.
+# The app itself creates one icon per process, so this only affects tests.
+_TEST_TRAY_ICONS: list = []
+
+if sys.platform == "win32":
+    try:
+        import pystray._win32 as _pystray_win32
+    except Exception:  # pystray missing or not importable: nothing to protect
+        _pystray_win32 = None
+    if _pystray_win32 is not None:
+        _original_icon_init = _pystray_win32.Icon.__init__
+
+        def _icon_init_kept_alive(self, *args, **kwargs):
+            _TEST_TRAY_ICONS.append(self)
+            _original_icon_init(self, *args, **kwargs)
+
+        _pystray_win32.Icon.__init__ = _icon_init_kept_alive
+
+
 @pytest.fixture(autouse=True)
 def isolate_sorter_state(tmp_path, monkeypatch):
     import sorter
