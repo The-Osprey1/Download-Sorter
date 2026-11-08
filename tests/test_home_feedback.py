@@ -92,7 +92,7 @@ def test_preview_lists_files_without_moving_or_logging(downloads, caplog):
 
     names = {src.name: dest for src, dest in preview}
     assert set(names) == {"report.pdf", "photo.jpg"}
-    assert names["report.pdf"].parent == downloads / "Documents" / "PDFs"
+    assert names["report.pdf"].parent == downloads / "Documents"
     assert report.exists() and photo.exists(), "a preview must not move anything"
     assert not sorter.HISTORY_FILE.exists() or not sorter.HISTORY_FILE.read_text(encoding="utf-8").strip()
     assert not [r for r in caplog.records if str(r.msg).startswith("[DRY-RUN]")]
@@ -150,11 +150,11 @@ def test_sort_now_reports_what_it_did(qapp, home, downloads):
     assert home._btn_sort_now.text() == "Sorting..."
     _wait(qapp, lambda: not home.is_sorting())
 
-    assert (downloads / "Documents" / "PDFs" / "report.pdf").exists()
+    assert (downloads / "Documents" / "report.pdf").exists()
     banner = home._banner
     assert banner.isVisible()
     assert banner.text().startswith("Sorted 3 files into 2 folders:")
-    assert "PDFs (2)" in banner.text()
+    assert "Documents (2)" in banner.text()
     assert banner.action_text() == "Undo"
     assert home._activity_table.rowCount() == 3
     _wait(qapp, lambda: home._btn_sort_now.text() == "Sort Downloads now")
@@ -191,7 +191,7 @@ def test_files_filed_in_the_background_appear_without_a_click(qapp, home, downlo
 
     assert home._activity_table.rowCount() == 1
     assert home._activity_table.item(0, 0).text() == "report.pdf"
-    assert home._banner.text() == "Filed report.pdf in PDFs."
+    assert home._banner.text() == "Filed report.pdf in Documents."
     assert "1 file organized today" == home._files_today_lbl.text()
 
 

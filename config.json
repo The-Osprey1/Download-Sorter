@@ -12,8 +12,8 @@
   "auto_unzip": false,
   "extracted_destination": "Extracted",
   "gcode_sniffer_enabled": true,
-  "haas_destination": "Code\\Haas",
-  "gcode_destination": "Code\\Gcode",
+  "haas_destination": "3D Models",
+  "gcode_destination": "3D Models",
   "document_sources": [],
   "documents_keep_extensions": [
     ".pdf",
@@ -90,56 +90,49 @@
   "keyword_rules": [],
   "extension_rules": [
     {
-      "name": "3D STL",
-      "folder": "3D Models\\STL",
+      "name": "Documents",
+      "folder": "Documents",
       "extensions": [
-        ".stl"
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".odt",
+        ".rtf",
+        ".txt",
+        ".md",
+        ".xls",
+        ".xlsx",
+        ".xlsm",
+        ".csv",
+        ".ods",
+        ".ppt",
+        ".pptx",
+        ".odp",
+        ".key",
+        ".epub",
+        ".mobi",
+        ".tex",
+        ".bib",
+        ".pkpass"
       ],
       "enabled": true
     },
     {
-      "name": "3D 3MF",
-      "folder": "3D Models\\3MF",
+      "name": "3D Models & Print Files",
+      "folder": "3D Models",
       "extensions": [
-        ".3mf"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "3D OBJ",
-      "folder": "3D Models\\OBJ",
-      "extensions": [
-        ".obj"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "3D STEP",
-      "folder": "3D Models\\STEP",
-      "extensions": [
+        ".stl",
+        ".3mf",
+        ".obj",
         ".step",
         ".stp",
         ".iges",
-        ".igs"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "3D Other",
-      "folder": "3D Models\\Other",
-      "extensions": [
+        ".igs",
         ".3ds",
         ".fbx",
         ".blend",
         ".glb",
-        ".gltf"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "3D CAD",
-      "folder": "3D Models\\CAD",
-      "extensions": [
+        ".gltf",
         ".f3d",
         ".f3z",
         ".ipt",
@@ -148,58 +141,14 @@
         ".sldasm",
         ".slddrw",
         ".dwg",
-        ".dxf"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "Haas / G-Code",
-      "folder": "Code\\Gcode",
-      "extensions": [
+        ".dxf",
+        ".gcode",
+        ".bgcode",
         ".nc",
         ".tap",
         ".ngc",
-        ".gcode",
-        ".bgcode"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "PDF Documents",
-      "folder": "Documents\\PDFs",
-      "extensions": [
-        ".pdf"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "Word Documents",
-      "folder": "Documents\\Word",
-      "extensions": [
-        ".doc",
-        ".docx",
-        ".odt",
-        ".rtf"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "Text Documents",
-      "folder": "Documents\\Text",
-      "extensions": [
-        ".txt",
-        ".md"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "Spreadsheets",
-      "folder": "Spreadsheets",
-      "extensions": [
-        ".xls",
-        ".xlsx",
-        ".csv",
-        ".ods"
+        ".gco",
+        ".g"
       ],
       "enabled": true
     },
@@ -216,7 +165,11 @@
         ".svg",
         ".bmp",
         ".tif",
-        ".tiff"
+        ".tiff",
+        ".ico",
+        ".ai",
+        ".eps",
+        ".cdr"
       ],
       "enabled": true
     },
@@ -228,7 +181,10 @@
         ".mov",
         ".mkv",
         ".avi",
-        ".webm"
+        ".webm",
+        ".flv",
+        ".wmv",
+        ".m4v"
       ],
       "enabled": true
     },
@@ -241,7 +197,9 @@
         ".flac",
         ".m4a",
         ".aac",
-        ".ogg"
+        ".ogg",
+        ".aiff",
+        ".wma"
       ],
       "enabled": true
     },
@@ -253,7 +211,11 @@
         ".rar",
         ".7z",
         ".tar",
-        ".gz"
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".tgz",
+        ".iso"
       ],
       "enabled": true
     },
@@ -268,18 +230,39 @@
       "enabled": true
     },
     {
-      "name": "Code",
+      "name": "Code & Data",
       "folder": "Code",
       "extensions": [
         ".py",
         ".js",
         ".ts",
-        ".cpp",
-        ".h",
-        ".cs",
-        ".json",
+        ".jsx",
+        ".tsx",
         ".html",
-        ".css"
+        ".css",
+        ".cpp",
+        ".c",
+        ".h",
+        ".hpp",
+        ".cs",
+        ".java",
+        ".rs",
+        ".go",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".xml",
+        ".ini",
+        ".env",
+        ".sql",
+        ".db",
+        ".sqlite",
+        ".parquet",
+        ".feather",
+        ".log",
+        ".dmp",
+        ".out"
       ],
       "enabled": true
     }
@@ -318,5 +301,5 @@
     "active_folder_days": 14,
     "desktop_min_age_days": 30
   },
-  "makerworld_destination": "3D Models\\MakerWorld"
+  "makerworld_destination": "3D Models"
 }

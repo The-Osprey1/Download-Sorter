@@ -80,12 +80,12 @@ def _hold_state() -> dict:
 # ---------------------------------------------------------------------------
 
 def test_duplicate_is_quarantined_not_deleted_and_undo_restores_it(downloads, config):
-    _make(downloads / "Documents" / "PDFs" / "report.pdf", b"%PDF identical")
+    _make(downloads / "Documents" / "report.pdf", b"%PDF identical")
     dup = _make(downloads / "report.pdf", b"%PDF identical")
 
     result = sorter.move_file(dup, config, batch_id="dup1", check_age=False)
 
-    assert result == downloads / "Documents" / "PDFs" / "report.pdf"
+    assert result == downloads / "Documents" / "report.pdf"
     assert not dup.exists()
     parked = list((downloads / sorter.DUPLICATES_DIR_NAME).rglob("report.pdf"))
     assert len(parked) == 1, "duplicate must be kept in _Duplicates, not deleted"
@@ -97,7 +97,7 @@ def test_duplicate_is_quarantined_not_deleted_and_undo_restores_it(downloads, co
 
 
 def test_keep_here_duplicate_is_never_touched(downloads, config):
-    _make(downloads / "3D Models" / "3MF" / "Benchy.3mf", b"identical 3mf")
+    _make(downloads / "3D Models" / "Benchy.3mf", b"identical 3mf")
     kept = _make(downloads / "Benchy.3mf", b"identical 3mf")
     hold_manager.keep_here(kept)
 
@@ -107,7 +107,7 @@ def test_keep_here_duplicate_is_never_touched(downloads, config):
 
 
 def test_held_duplicate_stays_held_instead_of_being_set_aside(downloads, config):
-    _make(downloads / "3D Models" / "3MF" / "Benchy.3mf", b"identical 3mf")
+    _make(downloads / "3D Models" / "Benchy.3mf", b"identical 3mf")
     fresh = _make(downloads / "Benchy.3mf", b"identical 3mf")
 
     assert sorter.move_file(fresh, config, check_age=False) is None

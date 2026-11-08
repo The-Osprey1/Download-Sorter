@@ -72,8 +72,8 @@ def test_real_documents_still_reach_their_folders(filename, persona_id, folder):
 
 
 def test_maker_profile_lets_the_file_type_rules_and_detectors_work():
-    assert _routed("gear.stl", "maker_3d") == "3D Models\\STL"
-    assert _routed("benchy.stl", "maker_3d") == "3D Models\\STL"
+    assert _routed("gear.stl", "maker_3d") == "3D Models"
+    assert _routed("benchy.stl", "maker_3d") == "3D Models"
     cfg = config_manager.apply_persona_profile(copy.deepcopy(sorter.DEFAULT_CONFIG), "maker_3d")
     for rule in cfg["keyword_rules"]:
         assert "haas" not in [w.lower() for w in rule.get("match", [])]

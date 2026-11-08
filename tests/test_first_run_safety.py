@@ -78,7 +78,7 @@ def test_defaults_have_no_personal_keyword_rules():
 
 def test_everyday_pdf_is_not_filed_as_school_work(config):
     for name in ("Performance Review.pdf", "Eye Exam Results.pdf", "Cal Poly Pomona map.pdf"):
-        assert sorter.evaluate_routing(name, config)["destination"] == "Documents\\PDFs", name
+        assert sorter.evaluate_routing(name, config)["destination"] == "Documents", name
 
 
 def test_documents_are_not_scanned_by_default():
@@ -173,7 +173,7 @@ def test_sort_existing_skips_files_from_before_the_cutoff(config, downloads):
     assert moved == 1
     assert old.exists()
     assert not new.exists()
-    assert (downloads / "Documents" / "PDFs" / "new_report.pdf").exists()
+    assert (downloads / "Documents" / "new_report.pdf").exists()
 
 
 def test_explicit_sort_ignores_the_cutoff(config, downloads):
@@ -228,8 +228,8 @@ def test_watcher_waits_for_the_wizard_then_sorts(config, downloads):
         time.sleep(0.05)  # make sure the file's modified time changes
         _save(config)
 
-        pdfs = downloads / "Documents" / "PDFs"
-        assert _wait_for(lambda: (pdfs / "existing.pdf").exists() and (pdfs / "arrived_during_wizard.pdf").exists())
+        docs = downloads / "Documents"
+        assert _wait_for(lambda: (docs / "existing.pdf").exists() and (docs / "arrived_during_wizard.pdf").exists())
         assert not watch.SETUP_PENDING.is_set()
     finally:
         _stop_watcher(thread, stop)
@@ -250,7 +250,7 @@ def test_watcher_keeps_existing_files_when_user_said_not_now(config, downloads):
         assert _wait_for(lambda: not watch.SETUP_PENDING.is_set())
         later = _make(downloads / "later.pdf")
         watch.WAKE_EVENT.set()
-        assert _wait_for(lambda: (downloads / "Documents" / "PDFs" / "later.pdf").exists())
+        assert _wait_for(lambda: (downloads / "Documents" / "later.pdf").exists())
         assert not later.exists()
         assert existing.exists(), "files that were already there stay put"
     finally:

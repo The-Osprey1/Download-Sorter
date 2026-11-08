@@ -56,14 +56,14 @@ def test_keyword_rule_precedence_and_extension_restriction(base_config):
 
     res3 = evaluate_routing('ime3311_gear.stl', base_config, active_project=None)
     assert res3['match_type'] == 'extension'
-    assert res3['destination'] == '3D Models\\STL'
+    assert res3['destination'] == '3D Models'
 
 def test_rule_enabled_toggle(base_config):
     cfg = copy.deepcopy(base_config)
     cfg['keyword_rules'][0]['enabled'] = False
     res = evaluate_routing('IME3311_LabReport.pdf', cfg, active_project=None)
     assert res['winning_rule'] != 'IME 3311 Coursework'
-    assert res['destination'] == 'Documents\\PDFs'
+    assert res['destination'] == 'Documents'
 
     for r in cfg['extension_rules']:
         if '.pdf' in r.get('extensions', []):

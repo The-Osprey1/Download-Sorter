@@ -158,12 +158,12 @@ def test_ambiguous_and_empty_sniffer():
 def test_routing_with_sniffer_content_sample(config):
     res_haas = evaluate_routing("sample1_contour.nc", config, content_sample=HAAS_SAMPLE_1)
     assert res_haas["match_type"] == "gcode_sniffer"
-    assert res_haas["destination"] == "Code\\Haas"
+    assert res_haas["destination"] == "3D Models"
     assert res_haas["sniffer_details"]["is_haas"] is True
 
     res_3d = evaluate_routing("bracket_test.gcode", config, content_sample=BAMBU_SAMPLE)
     assert res_3d["match_type"] == "gcode_sniffer"
-    assert res_3d["destination"] == "Code\\Gcode"
+    assert res_3d["destination"] == "3D Models"
     assert res_3d["sniffer_details"]["is_3d_printer"] is True
 
 def test_routing_with_file_on_disk(config, tmp_path):
@@ -171,18 +171,18 @@ def test_routing_with_file_on_disk(config, tmp_path):
     haas_file.write_text(HAAS_SAMPLE_2, encoding="utf-8")
     res = evaluate_routing(haas_file.name, config, file_path=haas_file)
     assert res["match_type"] == "gcode_sniffer"
-    assert res["destination"] == "Code\\Haas"
+    assert res["destination"] == "3D Models"
 
     bambu_file = tmp_path / "filament_clip.gcode"
     bambu_file.write_text(BAMBU_SAMPLE, encoding="utf-8")
     res_bambu = evaluate_routing(bambu_file.name, config, file_path=bambu_file)
     assert res_bambu["match_type"] == "gcode_sniffer"
-    assert res_bambu["destination"] == "Code\\Gcode"
+    assert res_bambu["destination"] == "3D Models"
 
 def test_sniffer_disabled_toggle(config):
     cfg = copy.deepcopy(config)
     cfg["gcode_sniffer_enabled"] = False
     res = evaluate_routing("sample1_contour.nc", cfg, content_sample=HAAS_SAMPLE_1)
     assert res["match_type"] == "extension"
-    assert res["destination"] == "Code\\Gcode"
+    assert res["destination"] == "3D Models"
 

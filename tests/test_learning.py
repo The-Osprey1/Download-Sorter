@@ -258,7 +258,7 @@ def test_learning_from_moves_and_logging_guesses(downloads, learning_on, sites):
     watch._handle_post_move(dest, downloads, learning_on)
     sorted_rec = learning.read_log()[-1]
     assert sorted_rec["kind"] == "sorted"
-    assert sorted_rec["rules_put_it_in"] == "Documents\\PDFs"
+    assert sorted_rec["rules_put_it_in"] == "Documents"
     assert sorted_rec["would_suggest"][0]["folder"] == "Banking"
 
     rep = learning.report()

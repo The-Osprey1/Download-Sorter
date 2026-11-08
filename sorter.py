@@ -112,8 +112,8 @@ DEFAULT_CONFIG: dict = {
     "auto_unzip": False,
     "extracted_destination": "Extracted",
     "gcode_sniffer_enabled": True,
-    "haas_destination": "Code\\Haas",
-    "gcode_destination": "Code\\Gcode",
+    "haas_destination": "3D Models",
+    "gcode_destination": "3D Models",
     # Moving 3D/CAD files out of Documents is a maker feature: it is off until the
     # user picks the "3D Printing, CAD & CNC Maker" profile (see MAKER_DOCUMENT_SOURCES).
     "document_sources": [],
@@ -142,23 +142,81 @@ DEFAULT_CONFIG: dict = {
     # profile the user picks.  Out of the box, files are sorted by extension only.
     "keyword_rules": [],
     "extension_rules": [
-        {"name": "3D STL", "folder": "3D Models\\STL", "extensions": [".stl"], "enabled": True},
-        {"name": "3D 3MF", "folder": "3D Models\\3MF", "extensions": [".3mf"], "enabled": True},
-        {"name": "3D OBJ", "folder": "3D Models\\OBJ", "extensions": [".obj"], "enabled": True},
-        {"name": "3D STEP", "folder": "3D Models\\STEP", "extensions": [".step", ".stp", ".iges", ".igs"], "enabled": True},
-        {"name": "3D Other", "folder": "3D Models\\Other", "extensions": [".3ds", ".fbx", ".blend", ".glb", ".gltf"], "enabled": True},
-        {"name": "3D CAD", "folder": "3D Models\\CAD", "extensions": [".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf"], "enabled": True},
-        {"name": "Haas / G-Code", "folder": "Code\\Gcode", "extensions": [".nc", ".tap", ".ngc", ".gcode", ".bgcode"], "enabled": True},
-        {"name": "PDF Documents", "folder": "Documents\\PDFs", "extensions": [".pdf"], "enabled": True},
-        {"name": "Word Documents", "folder": "Documents\\Word", "extensions": [".doc", ".docx", ".odt", ".rtf"], "enabled": True},
-        {"name": "Text Documents", "folder": "Documents\\Text", "extensions": [".txt", ".md"], "enabled": True},
-        {"name": "Spreadsheets", "folder": "Spreadsheets", "extensions": [".xls", ".xlsx", ".csv", ".ods"], "enabled": True},
-        {"name": "Images", "folder": "Images", "extensions": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".svg", ".bmp", ".tif", ".tiff"], "enabled": True},
-        {"name": "Videos", "folder": "Videos", "extensions": [".mp4", ".mov", ".mkv", ".avi", ".webm"], "enabled": True},
-        {"name": "Audio", "folder": "Audio", "extensions": [".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg"], "enabled": True},
-        {"name": "Archives", "folder": "Archives", "extensions": [".zip", ".rar", ".7z", ".tar", ".gz"], "enabled": True},
-        {"name": "Installers", "folder": "Installers", "extensions": [".exe", ".msi", ".msix"], "enabled": True},
-        {"name": "Code", "folder": "Code", "extensions": [".py", ".js", ".ts", ".cpp", ".h", ".cs", ".json", ".html", ".css"], "enabled": True},
+        {
+            "name": "Documents",
+            "folder": "Documents",
+            "extensions": [
+                ".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md",
+                ".xls", ".xlsx", ".xlsm", ".csv", ".ods",
+                ".ppt", ".pptx", ".odp", ".key",
+                ".epub", ".mobi", ".tex", ".bib", ".pkpass",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "3D Models & Print Files",
+            "folder": "3D Models",
+            "extensions": [
+                ".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs",
+                ".3ds", ".fbx", ".blend", ".glb", ".gltf",
+                ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf",
+                ".gcode", ".bgcode", ".nc", ".tap", ".ngc", ".gco", ".g",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "Images",
+            "folder": "Images",
+            "extensions": [
+                ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".svg", ".bmp", ".tif", ".tiff",
+                ".ico", ".ai", ".eps", ".cdr",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "Videos",
+            "folder": "Videos",
+            "extensions": [
+                ".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "Audio",
+            "folder": "Audio",
+            "extensions": [
+                ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".aiff", ".wma",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "Archives",
+            "folder": "Archives",
+            "extensions": [
+                ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".iso",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "Installers",
+            "folder": "Installers",
+            "extensions": [
+                ".exe", ".msi", ".msix",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "Code & Data",
+            "folder": "Code",
+            "extensions": [
+                ".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css",
+                ".cpp", ".c", ".h", ".hpp", ".cs", ".java", ".rs", ".go",
+                ".json", ".yaml", ".yml", ".toml", ".xml", ".ini", ".env",
+                ".sql", ".db", ".sqlite", ".parquet", ".feather",
+                ".log", ".dmp", ".out",
+            ],
+            "enabled": True,
+        },
     ],
     "default_folder": "Other",
 }

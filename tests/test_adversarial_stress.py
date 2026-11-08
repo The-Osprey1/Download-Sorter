@@ -47,7 +47,7 @@ M30
 
     res = evaluate_routing("bracket.nc", base_config, content_sample=sample)
     assert res["match_type"] == "gcode_sniffer"
-    assert res["destination"] == "Code\\Haas"
+    assert res["destination"] == "3D Models"
 
 def test_ambiguous_header_printer_dominant(base_config):
     """3D printer gcode with Haas-like program name in comment and extruder moves."""
@@ -71,7 +71,7 @@ M140 S0
 
     res = evaluate_routing("nozzle_bracket.gcode", base_config, content_sample=sample)
     assert res["match_type"] == "gcode_sniffer"
-    assert res["destination"] == "Code\\Gcode"
+    assert res["destination"] == "3D Models"
 
 def test_ambiguous_header_equal_signals_falls_back_to_extension(base_config):
     """G-code with minimal signals that don't satisfy either threshold falls to extension rule."""
@@ -86,8 +86,8 @@ G01 X20.0 Y20.0
 
     res = evaluate_routing("generic.nc", base_config, content_sample=sample)
     assert res["match_type"] == "extension"
-    assert res["destination"] == "Code\\Gcode"
-    assert res["winning_rule"] == "Haas / G-Code"
+    assert res["destination"] == "3D Models"
+    assert res["winning_rule"] == "3D Models & Print Files"
 
 # ============================================================================
 # 2. Empty, Massive, or Truncated Files
@@ -104,7 +104,7 @@ def test_empty_file_on_disk(base_config, tmp_path):
 
     res = evaluate_routing(empty_file.name, base_config, file_path=empty_file)
     assert res["match_type"] == "extension"
-    assert res["destination"] == "Code\\Gcode"
+    assert res["destination"] == "3D Models"
 
 def test_single_byte_files(base_config, tmp_path):
     """Files with 1 character or single newline should not crash."""
@@ -112,13 +112,13 @@ def test_single_byte_files(base_config, tmp_path):
     f_newline.write_text("\n", encoding="utf-8")
     res_nl = evaluate_routing("newline.nc", base_config, file_path=f_newline)
     assert res_nl["match_type"] == "extension"
-    assert res_nl["destination"] == "Code\\Gcode"
+    assert res_nl["destination"] == "3D Models"
 
     f_semi = tmp_path / "comment.gcode"
     f_semi.write_text(";", encoding="utf-8")
     res_semi = evaluate_routing("comment.gcode", base_config, file_path=f_semi)
     assert res_semi["match_type"] == "extension"
-    assert res_semi["destination"] == "Code\\Gcode"
+    assert res_semi["destination"] == "3D Models"
 
 def test_massive_multi_megabyte_gcode(base_config, tmp_path):
     """Massive file (5+ MB, 100k+ lines) should read safely with seek optimization."""
@@ -134,7 +134,7 @@ def test_massive_multi_megabyte_gcode(base_config, tmp_path):
 
     res = evaluate_routing(big_file.name, base_config, file_path=big_file)
     assert res["match_type"] == "gcode_sniffer"
-    assert res["destination"] == "Code\\Gcode"
+    assert res["destination"] == "3D Models"
     assert res["sniffer_details"]["is_3d_printer"] is True
 
 def test_massive_single_line_gcode(base_config, tmp_path):
@@ -144,7 +144,7 @@ def test_massive_single_line_gcode(base_config, tmp_path):
 
     res = evaluate_routing(long_line_file.name, base_config, file_path=long_line_file)
     assert res["match_type"] == "extension"
-    assert res["destination"] == "Code\\Gcode"
+    assert res["destination"] == "3D Models"
 
 def test_corrupted_binary_bytes_in_gcode(base_config, tmp_path):
     """Binary bytes (e.g. utf-16 BOM or null bytes) in .nc file should be handled gracefully."""
@@ -165,22 +165,22 @@ def test_uppercase_extensions(base_config):
     
     res_nc = evaluate_routing("PART.NC", base_config, content_sample=haas_sample)
     assert res_nc["match_type"] == "gcode_sniffer"
-    assert res_nc["destination"] == "Code\\Haas"
+    assert res_nc["destination"] == "3D Models"
 
     res_tap = evaluate_routing("MOLD.TAP", base_config, content_sample=haas_sample)
     assert res_tap["match_type"] == "gcode_sniffer"
-    assert res_tap["destination"] == "Code\\Haas"
+    assert res_tap["destination"] == "3D Models"
 
     res_stl = evaluate_routing("BRACKET.STL", base_config)
     assert res_stl["match_type"] == "extension"
-    assert res_stl["destination"] == "3D Models\\STL"
+    assert res_stl["destination"] == "3D Models"
 
 def test_mixed_case_extensions(base_config):
     """Mixed case extensions (.Nc, .TaP, .GCode) must match properly."""
     haas_sample = "%\nO00001\nG90 G54\nM30\n%\n"
     res = evaluate_routing("part.Nc", base_config, content_sample=haas_sample)
     assert res["match_type"] == "gcode_sniffer"
-    assert res["destination"] == "Code\\Haas"
+    assert res["destination"] == "3D Models"
 
 def test_nc1_extension_fallback(base_config):
     """DSTV .nc1 steel files are not in GCODE_SNIFFER_EXTENSIONS, safely falling back to Other."""
@@ -229,7 +229,7 @@ def test_active_project_past_expiry(base_config):
     res = evaluate_routing("bracket.stl", base_config, active_project=proj)
     assert res["is_active_project"] is False
     assert res["match_type"] == "extension"
-    assert res["destination"] == "3D Models\\STL"
+    assert res["destination"] == "3D Models"
 
 def test_active_project_nonexistent_directory(base_config):
     """Non-existent directory path string should be returned without throwing."""
@@ -325,7 +325,7 @@ def test_vulnerability_missing_target_directory_returns_empty_destination(base_c
     """Missing target_directory invalidates active project and falls back to extension rule."""
     res = evaluate_routing("part.stl", base_config, active_project={"enabled": True})
     assert res["match_type"] == "extension"
-    assert res["destination"] == "3D Models\\STL"
+    assert res["destination"] == "3D Models"
 
 def test_vulnerability_sniff_non_string_list_raises_attribute_error():
     """Passing list of non-strings to sniff_machine_type does not raise AttributeError and returns generic."""
@@ -345,4 +345,4 @@ def test_vulnerability_negative_expiry_fails_to_expire(base_config):
     res = evaluate_routing("part.stl", base_config, active_project=proj)
     assert res["is_active_project"] is False
     assert res["match_type"] == "extension"
-    assert res["destination"] == "3D Models\\STL"
+    assert res["destination"] == "3D Models"

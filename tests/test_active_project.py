@@ -67,13 +67,13 @@ def test_non_cad_university_documents_bypass_active_project(config, active_proje
     res3 = evaluate_routing("budget_calculations.xlsx", config, active_project=active_project_dict)
     assert res3["is_active_project"] is False
     assert res3["match_type"] == "extension"
-    assert res3["destination"] == "Spreadsheets"
+    assert res3["destination"] == "Documents"
 
     # Generic PDF without keywords
     res4 = evaluate_routing("unrelated_paper.pdf", config, active_project=active_project_dict)
     assert res4["is_active_project"] is False
     assert res4["match_type"] == "extension"
-    assert res4["destination"] == "Documents\\PDFs"
+    assert res4["destination"] == "Documents"
 
 def test_active_project_auto_expiry(config, active_project_dict):
     # Expired timestamp (1 hour ago)
@@ -81,7 +81,7 @@ def test_active_project_auto_expiry(config, active_project_dict):
     res = evaluate_routing("gear.stl", config, active_project=active_project_dict)
     assert res["is_active_project"] is False
     assert res["match_type"] == "extension"
-    assert res["destination"] == "3D Models\\STL"
+    assert res["destination"] == "3D Models"
 
 def test_active_project_corrupted_expiry(config, active_project_dict):
     # Corrupted non-numeric expiry must be treated as invalid/expired
@@ -89,14 +89,14 @@ def test_active_project_corrupted_expiry(config, active_project_dict):
     res = evaluate_routing("gear.stl", config, active_project=active_project_dict)
     assert res["is_active_project"] is False
     assert res["match_type"] == "extension"
-    assert res["destination"] == "3D Models\\STL"
+    assert res["destination"] == "3D Models"
 
 def test_active_project_manual_disabled(config, active_project_dict):
     active_project_dict["enabled"] = False
     res = evaluate_routing("nozzle.3mf", config, active_project=active_project_dict)
     assert res["is_active_project"] is False
     assert res["match_type"] == "extension"
-    assert res["destination"] == "3D Models\\3MF"
+    assert res["destination"] == "3D Models"
 
 def test_load_active_project_from_disk(tmp_path):
     state_file = tmp_path / "active_project.json"
