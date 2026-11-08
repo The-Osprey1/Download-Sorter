@@ -33,6 +33,7 @@ jobs:
   build-and-release:
     name: Build & Release Windows x64 Standalone
     runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout code
@@ -70,14 +71,26 @@ jobs:
 
       - name: Check that an update replaces a running copy and opens it again
         shell: pwsh
+        timeout-minutes: 15
         run: |
+          # Wait for the installer itself only. "Start-Process -Wait" also waits
+          # for every program the installer starts, and with /UPDATE it reopens
+          # Download Sorter, which keeps running, so -Wait never returned.
+          function Wait-Installer($proc) {
+            $null = $proc.Handle  # without this, ExitCode can come back empty
+            if (-not $proc.WaitForExit(180000)) { throw "The installer did not finish within 3 minutes" }
+            $proc.WaitForExit()  # let .NET collect the exit code
+            return $proc.ExitCode
+          }
+
           $setup = Get-ChildItem dist -Filter "DownloadSorter-Setup-v*-windows-x64.exe" | Select-Object -First 1
           $dir = Join-Path $env:RUNNER_TEMP "ds-update-check"
           $exe = Join-Path $dir "DownloadSorter.exe"
 
           # 1. A normal silent install.
-          $p = Start-Process $setup.FullName -ArgumentList "/S", "/D=$dir" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "First install failed with exit code $($p.ExitCode)" }
+          $p = Start-Process $setup.FullName -ArgumentList "/S", "/D=$dir" -PassThru
+          $code = Wait-Installer $p
+          if ($code -ne 0) { throw "First install failed with exit code $code" }
           if (-not (Test-Path $exe)) { throw "DownloadSorter.exe is missing after the first install" }
 
           # 2. Start the app from that folder, so its files are in use.
@@ -88,8 +101,9 @@ jobs:
           Start-Sleep -Seconds 2
 
           # 3. Update over it, the way the app's own updater does.
-          $p = Start-Process $setup.FullName -ArgumentList "/S", "/D=$dir", "/UPDATE" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Update install failed with exit code $($p.ExitCode)" }
+          $p = Start-Process $setup.FullName -ArgumentList "/S", "/D=$dir", "/UPDATE" -PassThru
+          $code = Wait-Installer $p
+          if ($code -ne 0) { throw "Update install failed with exit code $code" }
 
           # 4. The running copy was closed and its files replaced.
           if (-not $running.HasExited) { throw "The installer did not close the running app" }
