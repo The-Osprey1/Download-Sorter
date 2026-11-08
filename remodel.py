@@ -74,6 +74,23 @@ ELECTRONIC_CAD_EXTENSIONS: set[str] = {
 }
 
 KEEP_MARKER_NAME: str = ".download-sorter-keep"
+
+# Folder names that say "nobody sorted this yet". Only folders whose name is
+# made up entirely of these words are offered for splitting by file type.
+# A folder someone named ("Wedding 2019", "Taxes 2024", a game) already is
+# their organization, so it defaults to Keep intact.
+UNSORTED_FOLDER_WORDS: set[str] = {
+    "new", "old", "folder", "folders", "untitled", "copy", "my", "the", "to", "and",
+    "misc", "miscellaneous", "stuff", "things", "mixed", "messy", "mess", "unsorted",
+    "sort", "random", "various", "temp", "tmp", "junk", "dump", "everything",
+    "download", "downloads", "downloaded", "files", "file", "saved", "desktop",
+}
+
+
+def looks_unsorted(folder_name: str) -> bool:
+    """True when a folder's name suggests a dumping ground rather than a project."""
+    words = re.findall(r"[a-z]+", folder_name.lower())
+    return bool(words) and all(word in UNSORTED_FOLDER_WORDS for word in words)
 REMODEL_DIR_NAME: str = "remodels"
 QUARANTINE_DIR_NAME: str = "_Remodel Quarantine"
 RECEIPT_FILENAME: str = "Where did my files go.html"
@@ -476,6 +493,7 @@ class FolderCard:
     total_size_mb: float
     protection: ProtectionCheck
     preview_categories: dict[str, int] = field(default_factory=dict)
+    suggestion: str = ""  # why this action was suggested, in plain words
 
 
 @dataclass
@@ -540,8 +558,13 @@ class RemodelEngine:
                 if prot.is_protected:
                     protected_items.append((entry, prot.reason))
                     card_action = "keep_intact"
-                else:
+                    suggestion = prot.reason
+                elif looks_unsorted(entry.name):
                     card_action = "organize"
+                    suggestion = "Looks unsorted"
+                else:
+                    card_action = "keep_intact"
+                    suggestion = "Has its own name, so it stays together"
 
                 # Calculate folder statistics and category preview
                 f_count = 0
@@ -607,6 +630,7 @@ class RemodelEngine:
                     total_size_mb=round(f_bytes / (1024 * 1024), 2),
                     protection=prot,
                     preview_categories=cat_preview,
+                    suggestion=suggestion,
                 ))
 
             elif entry.is_file():
@@ -755,7 +779,7 @@ class RemodelEngine:
             if action == "keep_intact":
                 skipped_items.append({
                     "path": folder_key,
-                    "reason": f"Kept intact: {card.protection.reason or 'User opted to keep intact'}",
+                    "reason": f"Kept intact: {card.protection.reason or card.suggestion or 'User opted to keep intact'}",
                 })
                 continue
             elif action == "skip":
@@ -1242,7 +1266,7 @@ def main() -> int:
         print("FOLDER REVIEW CARDS:")
         for c in plan.cards:
             status_tag = f"[{c.action.upper()}]"
-            prot_desc = f" ({c.protection.reason})" if c.protection.is_protected else ""
+            prot_desc = f" ({c.suggestion})" if c.suggestion else ""
             print(f"  • {c.folder_path.name:<25} {c.file_count:>4} files ({c.total_size_mb:>6.1f} MB) {status_tag}{prot_desc}")
 
     if plan.duplicates_to_quarantine:
