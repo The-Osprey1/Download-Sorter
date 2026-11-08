@@ -52,7 +52,10 @@ if (Test-Path $startupUninstaller) {
 } else {
     Unregister-ScheduledTask -TaskName "DownloadSorter" -Confirm:$false -ErrorAction SilentlyContinue
 }
-Write-Host "[OK] Startup task removed." -ForegroundColor Green
+# The welcome wizard and the Home dashboard register startup through the
+# per-user Run key instead of a scheduled task; remove that too.
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "DownloadSorter" -ErrorAction SilentlyContinue
+Write-Host "[OK] Startup entries removed." -ForegroundColor Green
 
 # 3. Remove context menus
 Write-Host "[*] Removing Explorer context menus..." -ForegroundColor Yellow
@@ -80,6 +83,31 @@ if (Test-Path $appDataDir) {
     } else {
         Write-Host "[INFO] Preserved personal data at $appDataDir." -ForegroundColor Gray
     }
+}
+
+# 5. Remove the installed program itself (only for a copy installed by the
+#    single-file setup, which registers itself under this Uninstall key).
+#    A source checkout or portable folder is never deleted.
+$uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\DownloadSorter"
+$installLocation = (Get-ItemProperty -Path $uninstallKey -ErrorAction SilentlyContinue).InstallLocation
+$isInstalledCopy = $false
+if ($installLocation) {
+    $registered = [System.IO.Path]::GetFullPath($installLocation).TrimEnd('\')
+    $current = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
+    $isInstalledCopy = ($registered -ieq $current) -and (Test-Path (Join-Path $root "DownloadSorter.exe"))
+}
+if ($isInstalledCopy) {
+    Write-Host "[*] Removing shortcuts and the Installed Apps entry..." -ForegroundColor Yellow
+    $desktopLink = Join-Path ([Environment]::GetFolderPath("DesktopDirectory")) "Download Sorter.lnk"
+    $startLink = Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs\Download Sorter.lnk"
+    Remove-Item -Path $desktopLink, $startLink -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+
+    # This script lives inside the folder being removed, so delete it from a
+    # short-lived background command once this script has exited.
+    Write-Host "[*] Removing program files from $root..." -ForegroundColor Yellow
+    $cleanup = "ping 127.0.0.1 -n 4 >nul & rmdir /s /q `"$root`""
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $cleanup -WindowStyle Hidden -WorkingDirectory $env:TEMP
 }
 
 Write-Host ""

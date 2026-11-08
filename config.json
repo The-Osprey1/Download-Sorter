@@ -14,10 +14,7 @@
   "gcode_sniffer_enabled": true,
   "haas_destination": "Code\\Haas",
   "gcode_destination": "Code\\Gcode",
-  "document_sources": [
-    "${USERPROFILE}\\Documents",
-    "${USERPROFILE}\\OneDrive\\Documents"
-  ],
+  "document_sources": [],
   "documents_keep_extensions": [
     ".pdf",
     ".doc",
@@ -59,7 +56,6 @@
     ".ngc"
   ],
   "documents_ignore_dirs": [
-    "antigravity",
     "Sorter Recovery",
     "CAD & 3D Projects",
     "Arduino",
@@ -91,58 +87,7 @@
     "desktop.ini",
     "thumbs.db"
   ],
-  "keyword_rules": [
-    {
-      "name": "IME 3311 Coursework",
-      "folder": "Documents\\School\\IME 3311",
-      "match": [
-        "ime3311",
-        "ime 3311",
-        "solidcast",
-        "casting congress",
-        "metal casting",
-        "foundry"
-      ],
-      "extensions": [
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".xls",
-        ".xlsx",
-        ".csv",
-        ".txt",
-        ".rtf",
-        ".odt"
-      ],
-      "enabled": true
-    },
-    {
-      "name": "School Documents",
-      "folder": "Documents\\School",
-      "match": [
-        "transcript",
-        "homework",
-        "assignment",
-        "syllabus",
-        "calpoly",
-        "cal poly",
-        "pomona",
-        "me3210",
-        "me 3210",
-        "exam",
-        "review"
-      ],
-      "extensions": [
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".txt",
-        ".rtf",
-        ".odt"
-      ],
-      "enabled": true
-    }
-  ],
+  "keyword_rules": [],
   "extension_rules": [
     {
       "name": "3D STL",

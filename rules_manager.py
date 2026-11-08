@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import sys
 import time
@@ -2272,6 +2273,22 @@ class RulesManagerDialog(QDialog):
         super().hideEvent(event)
 
 
+def _start_background_sorter() -> None:
+    """Start the tray sorter in the background if it is not already running (Windows)."""
+    if sys.platform != "win32":
+        return
+    try:
+        if suite_data.is_sorter_running():
+            return
+        import subprocess
+        subprocess.Popen(
+            suite_data._get_launch_command(["--tray"]),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        logging.exception("Could not start the background sorter after setup")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Launch the Rules Manager dialog standalone."""
     if about.handle_version_flag():
@@ -2307,6 +2324,9 @@ def main(argv: list[str] | None = None) -> int:
         wizard = WelcomeWizardDialog()
         result = wizard.exec()
         if result == QDialog.DialogCode.Accepted:
+            # The installer opens the wizard on its own; without this the sorter
+            # would not run until the next sign-in.
+            _start_background_sorter()
             dialog = RulesManagerDialog(initial_view="home")
             dialog.show()
             if owns_app:

@@ -24,6 +24,7 @@ from sorter import (
     compile_routing,
     get_default_config,
     document_roots,
+    existing_files_cutoff,
     is_incomplete,
     is_internal_path,
     is_keep_protected,
@@ -53,6 +54,8 @@ PENDING_MISPLACED: set[Path] = set()
 QUEUE_LOCK = threading.Lock()
 PENDING_DEADLINES: dict[tuple[str, Path], float] = {}
 WAKE_EVENT = threading.Event()
+# Set while run(wait_for_setup=True) is holding off until the welcome wizard is done.
+SETUP_PENDING = threading.Event()
 
 
 def _settle_seconds(config: dict) -> float:
@@ -663,11 +666,51 @@ class FolderWatches:
         return True
 
 
-def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
+def _startup_sweep(config: dict, routing_context: RoutingContext | None, root: Path) -> None:
+    """Sort what is already in the watched folders, as a restart would.
+
+    Files that were already there when the user finished the welcome wizard and
+    chose not to organize existing files are left alone (``skip_files_before``).
+    """
+    batch_id = uuid.uuid4().hex[:8]
+    cutoff = existing_files_cutoff(config)
+    moved = sort_existing(
+        config,
+        batch_id=batch_id,
+        routing_context=routing_context,
+        skip_before=cutoff,
+    )
+    logging.info("Startup sort moved %s file(s) in %s", moved, root)
+    docs_moved = sort_existing_documents(
+        config,
+        batch_id=batch_id,
+        routing_context=routing_context,
+        skip_before=cutoff,
+    )
+    logging.info("Startup Documents sweep moved %s file(s)", docs_moved)
+    misplaced_moved = sort_existing_misplaced(
+        config,
+        batch_id=batch_id,
+        routing_context=routing_context,
+        skip_before=cutoff,
+    )
+    if misplaced_moved:
+        logging.info("Startup category sweep corrected %s misplaced file(s)", misplaced_moved)
+
+
+def run(
+    stop: "threading.Event | None" = None,
+    on_sorted=None,
+    wait_for_setup: bool = False,
+) -> int:
     """Watch the folders until stop is set. Safe to call from a background thread.
 
     on_sorted, if given, is called with the number of files moved each time a
     batch is drained, so a host like the tray app can report activity.
+
+    wait_for_setup: when True and the welcome wizard has not been completed yet,
+    nothing is sorted until the saved settings say it has.  New downloads that
+    arrive in the meantime stay queued and are sorted with the chosen profile.
     """
     reloader = ConfigReloader(CONFIG_PATH)
     config = reloader.config
@@ -697,32 +740,19 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
             switcher_monitor.start()
         except Exception as err:
             logging.debug("Quick switcher monitor start skipped: %s", err)
+    setup_pending = wait_for_setup and not config.get("onboarding_completed", False)
     try:
         # Observe first, reconcile second: a download arriving during the scan is
         # queued and cannot fall into the startup race window.
-        batch_id = uuid.uuid4().hex[:8]
-        moved = sort_existing(
-            config,
-            batch_id=batch_id,
-            routing_context=routing_context,
-        )
-        logging.info("Startup sort moved %s file(s) in %s", moved, root)
-        docs_moved = sort_existing_documents(
-            config,
-            batch_id=batch_id,
-            routing_context=routing_context,
-        )
-        logging.info("Startup Documents sweep moved %s file(s)", docs_moved)
-        misplaced_moved = sort_existing_misplaced(
-            config,
-            batch_id=batch_id,
-            routing_context=routing_context,
-        )
-        if misplaced_moved:
-            logging.info("Startup category sweep corrected %s misplaced file(s)", misplaced_moved)
+        if setup_pending:
+            SETUP_PENDING.set()
+            write_runtime_state("waiting_for_setup", "waiting for the welcome wizard")
+            logging.info("Waiting for the welcome wizard to finish before sorting anything")
+        else:
+            _startup_sweep(config, routing_context, root)
 
         while not (stop is not None and stop.is_set()):
-            fallback_due = coordinator.wait(ignore_pending=is_paused())
+            fallback_due = coordinator.wait(ignore_pending=is_paused() or setup_pending)
             if stop is not None and stop.is_set():
                 break
 
@@ -731,20 +761,37 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
             if reloader.dirty or fallback_due:
                 changed, new_config = reloader.check_for_updates()
             if time.monotonic() - last_heartbeat >= 300.0:
-                write_runtime_state("running", "heartbeat")
+                write_runtime_state("waiting_for_setup" if setup_pending else "running", "heartbeat")
                 last_heartbeat = time.monotonic()
             if changed:
                 config = new_config
                 routing_context = reloader.routing_context
-                if folders.retarget(config, routing_context):
+                retargeted = folders.retarget(config, routing_context)
+                if not retargeted:
+                    folders.update_config(config, routing_context)
+                root = watch_root(config)
+                if setup_pending and config.get("onboarding_completed", False):
+                    # The wizard just saved the user's profile: start sorting with it.
+                    setup_pending = False
+                    SETUP_PENDING.clear()
+                    write_runtime_state("running", "welcome wizard finished")
+                    logging.info("Welcome wizard finished; sorting starts now")
+                    _startup_sweep(config, routing_context, root)
+                    if on_sorted is not None:
+                        try:
+                            on_sorted(0)
+                        except Exception:
+                            logging.exception("Activity callback failed")
+                elif retargeted and not setup_pending:
                     # Watched folders changed: behave as a restart would for the new
                     # folders (sweep what is already there).
-                    root = watch_root(config)
+                    cutoff = existing_files_cutoff(config)
                     sweep_id = uuid.uuid4().hex[:8]
-                    sort_existing(config, batch_id=sweep_id, routing_context=routing_context)
-                    sort_existing_documents(config, batch_id=sweep_id, routing_context=routing_context)
-                else:
-                    folders.update_config(config, routing_context)
+                    sort_existing(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
+                    sort_existing_documents(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
+
+            if setup_pending:
+                continue
 
             moved = drain(config, root=root, routing_context=routing_context, on_activity=on_sorted)
             if moved and on_sorted is not None:
@@ -755,6 +802,7 @@ def run(stop: "threading.Event | None" = None, on_sorted=None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        SETUP_PENDING.clear()
         observer.stop()
         write_runtime_state("stopped", "watch loop exited")
     observer.join()

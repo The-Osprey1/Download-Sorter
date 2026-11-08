@@ -9,11 +9,14 @@ Provides:
 from __future__ import annotations
 
 import copy
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from typing import Any
+import uuid
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
@@ -49,6 +52,41 @@ try:
     import sorter
 except ImportError:
     sorter = None
+
+
+def _sorter_is_running() -> bool:
+    """True when the background tray/watcher holds the single-instance lock."""
+    if hasattr(suite_data, "is_sorter_running"):
+        try:
+            return bool(suite_data.is_sorter_running())
+        except Exception:
+            return False
+    return False
+
+
+def _sorter_is_waiting_for_setup() -> bool:
+    """True when a running background sorter is holding off until this wizard is saved.
+
+    That sorter does the initial sort itself once it sees the saved settings, so
+    the wizard must not sort at the same time.  When the tour is re-run later the
+    sorter is not waiting, and the wizard does the sort.
+    """
+    if not _sorter_is_running() or sorter is None:
+        return False
+    try:
+        state = json.loads(Path(sorter.RUNTIME_STATE_FILE).read_text(encoding="utf-8"))
+        return state.get("status") == "waiting_for_setup"
+    except Exception:
+        return False
+
+
+def _auto_unzip_enabled(config: dict[str, Any]) -> bool:
+    """Same lookup the sorter uses when it decides whether to extract a zip."""
+    watch_block = config.get("watch")
+    if isinstance(watch_block, dict) and "auto_unzip" in watch_block:
+        return bool(watch_block["auto_unzip"])
+    return bool(config.get("auto_unzip", True))
+
 
 try:
     import sort_undo
@@ -883,6 +921,16 @@ class WelcomeWizardDialog(QDialog):
 
             self._config["onboarding_completed"] = True
 
+            sort_now = hasattr(self, "_chk_sort_now") and self._chk_sort_now.isChecked()
+            if sort_now:
+                self._config.pop("skip_files_before", None)
+            else:
+                # "Leave my existing files alone": automatic sweeps (now and after
+                # every restart) skip anything already in Downloads at this moment.
+                self._config["skip_files_before"] = time.time()
+
+            # Saving with onboarding_completed=True is what lets a waiting
+            # background sorter start; it then does the initial sort itself.
             if hasattr(suite_data, "save_sorter_config"):
                 suite_data.save_sorter_config(self._config)
 
@@ -898,10 +946,12 @@ class WelcomeWizardDialog(QDialog):
                 except Exception:
                     pass
 
-            if hasattr(self, "_chk_sort_now") and self._chk_sort_now.isChecked():
+            if sort_now and not _sorter_is_waiting_for_setup():
+                # No background sorter to hand the initial sort to: do it here,
+                # as one batch so "Undo last sort" can put everything back.
                 if sorter and hasattr(sorter, "sort_existing"):
                     try:
-                        sorter.sort_existing(self._config, dry_run=False)
+                        sorter.sort_existing(self._config, dry_run=False, batch_id=uuid.uuid4().hex[:8])
                     except Exception:
                         pass
         except Exception:
@@ -1237,7 +1287,7 @@ class HomeDashboardWidget(QWidget):
                 pass
 
         self._chk_unpack.blockSignals(True)
-        self._chk_unpack.setChecked(bool(self._config.get("auto_unpack_zips", False)))
+        self._chk_unpack.setChecked(_auto_unzip_enabled(self._config))
         self._chk_unpack.blockSignals(False)
 
         current_persona = self._config.get("user_persona", "everyday_home")
@@ -1390,7 +1440,14 @@ class HomeDashboardWidget(QWidget):
                 pass
 
     def _on_unpack_toggled(self, checked: bool) -> None:
-        self._config["auto_unpack_zips"] = checked
+        # The sorter reads watch.auto_unzip first and the top-level key as a
+        # fallback, so keep both in step.
+        watch_block = self._config.get("watch")
+        if not isinstance(watch_block, dict):
+            watch_block = {}
+            self._config["watch"] = watch_block
+        watch_block["auto_unzip"] = checked
+        self._config["auto_unzip"] = checked
         if hasattr(suite_data, "save_sorter_config"):
             try:
                 suite_data.save_sorter_config(self._config)

@@ -396,8 +396,12 @@ class TestDashboardQuickActions:
             widget._chk_context.setChecked(True)
             assert calls["context"] == [True]
 
-            widget._chk_unpack.setChecked(True)
-            assert widget._config["auto_unpack_zips"] is True
+            # Flip the switch to the opposite of its current state and check the
+            # setting the sorter actually reads (watch.auto_unzip) follows it.
+            target = not widget._chk_unpack.isChecked()
+            widget._chk_unpack.setChecked(target)
+            assert widget._config["watch"]["auto_unzip"] is target
+            assert widget._config["auto_unzip"] is target
             assert len(calls["saved"]) > 0
         finally:
             widget.close()

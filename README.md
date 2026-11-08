@@ -1,6 +1,6 @@
 # Download Sorter
 
-> **Made by Devyn Fidel (2026)** · v2.0.0 · [MIT License](LICENSE)
+> **Made by Devyn Fidel (2026)** · v2.0.2 · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
@@ -8,7 +8,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
 [![Author: Devyn Fidel](https://img.shields.io/badge/author-Devyn%20Fidel-69E6AD.svg)](https://github.com/The-Osprey1/Download-Sorter)
-[![Tests Passing](https://img.shields.io/badge/tests-1064%20passed-69E6AD.svg?style=flat)](tests/)
 
 A lightweight, local-first automated file organizer for Windows that keeps your **Downloads** and **Documents** folders organized without sending your data to any cloud service.
 
@@ -28,7 +27,7 @@ For everyday users on Windows 10 & 11 (zero Python installation or terminal comm
    - Automatically creates Desktop and Start Menu shortcuts.
    - Registers in Windows Installed Apps for seamless 1-click uninstallation.
 3. **Enjoy Automated Organization**:
-   The interactive 3-step Welcome Wizard launches automatically on completion so you can choose your persona profile and set your filing preferences.
+   The interactive 3-step Welcome Wizard launches automatically on completion so you can choose your persona profile and set your filing preferences. Nothing is moved until you finish the wizard, and if you untick **"Organize existing files"**, the files already in your Downloads folder are left where they are.
 
 *Unattended / Silent deployment:* Run `DownloadSorter-Setup-v2.0.2-windows-x64.exe /S` (supports optional `/D=C:\Custom\Path`).
 
@@ -64,7 +63,7 @@ Downloads/
   └── Other/ (Uncategorized fallback)
 ```
 
-Targeted CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`) found in Windows Documents are safely organized into the Downloads 3D tree, while application folders (like `OneDrive`, `Steam`, `My Games`, `SOLIDCast`, `Adobe`) and OneDrive cloud placeholders are automatically protected and skipped.
+With the **3D Printing, CAD & CNC Maker** profile, stray CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`) found in Windows Documents are also organized into the Downloads 3D tree. Other profiles never touch your Documents folder. Application folders (like `OneDrive`, `Steam`, `My Games`, `SOLIDCast`, `Adobe`) and OneDrive cloud placeholders are always protected and skipped.
 
 ---
 
@@ -135,7 +134,7 @@ download-sorter-remodel --undo
 ```
 
 ### 5. Low-Resource Background Daemon & System Tray (`tray.py`)
-* **Background Watchdog**: Watches Downloads and Documents using low-CPU native event hooks.
+* **Background Watchdog**: Watches Downloads (and Documents, with the Maker profile) using low-CPU native event hooks.
 * **Single-Instance Mutex**: Prevents multiple daemon instances from colliding.
 * **Instant Tray Control**: Right-click the tray icon to pause/resume sorting, trigger manual sorts, undo recent moves, remodel messy folders, or open rules.
 * **Live Daily Counter**: Displays files sorted today and active held 3MF models.
@@ -185,7 +184,7 @@ unzip-archive "path\to\archive.zip"
 ## Installation & Setup
 
 ### Option 1: Standalone Windows App (No Python Required)
-1. Download the latest **`DownloadSorter-v2.0.0-windows-x64.zip`** from [GitHub Releases](https://github.com/The-Osprey1/Download-Sorter/releases).
+1. Download the latest **`DownloadSorter-v<version>-windows-x64.zip`** from [GitHub Releases](https://github.com/The-Osprey1/Download-Sorter/releases).
 2. Extract the ZIP anywhere on your system (e.g. `C:\Users\<user>\Download-Sorter` or Program Files).
 3. Double-click **`setup.bat`** (or run `.\setup.bat`). It will:
    - Configure optional automatic startup at login.
@@ -295,7 +294,10 @@ Download Sorter installs dedicated CLI console scripts on PATH:
 This repository includes a comprehensive 4-Tier test suite covering feature tests, boundary cases, cross-feature interactions, visual design consistency, and real-world stress scenarios:
 
 ```powershell
-# Run the complete test suite (1,064 tests)
+# Install the test tools (not needed to use the app)
+.\.venv\Scripts\pip.exe install -e .[dev]
+
+# Run the complete test suite
 .\.venv\Scripts\pytest.exe
 
 # Run visual design consistency tests only
