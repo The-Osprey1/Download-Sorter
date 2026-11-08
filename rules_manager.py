@@ -1355,8 +1355,11 @@ class MachineRemodelWidget(QFrame):
             top_h.addWidget(ui_style.label(card.folder_path.name, "section"))
             if card.protection.is_protected:
                 badge_text, fg, bg = f"Left alone: {card.protection.reason}", COLORS["success"], COLORS["successSubtle"]
+            elif card.action == "keep_intact":
+                badge_text = "Kept together: it has its own name"
+                fg, bg = COLORS["textMuted"], COLORS["surfaceHover"]
             else:
-                badge_text, fg, bg = "Can be organized", COLORS["info"], COLORS["infoSubtle"]
+                badge_text, fg, bg = "Looks unsorted: can be organized", COLORS["info"], COLORS["infoSubtle"]
             badge = QLabel(badge_text)
             badge.setStyleSheet(f"color: {fg}; background: {bg}; border-radius: 4px; padding: 2px 8px; font-size: 12px;")
             top_h.addWidget(badge)

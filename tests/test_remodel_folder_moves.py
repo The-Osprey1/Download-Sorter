@@ -45,6 +45,11 @@ def _plan(engine: remodel.RemodelEngine, root: Path) -> remodel.RemodelPlan:
     return engine.scan(root, active_folder_days=0)
 
 
+def _organize_every_folder(plan: remodel.RemodelPlan) -> dict[str, str]:
+    """What a user does by ticking "Organize by file type" on every card."""
+    return {str(card.folder_path): "organize" for card in plan.cards}
+
+
 def _folder_moves(result: dict) -> list[dict]:
     return [m for m in result["executed_moves"] if m["action"] == "organize_folder_item"]
 
@@ -98,7 +103,8 @@ def test_skipped_files_stay_put_and_never_take_another_files_name(engine, root):
     lock = _write(root / "Thesis/~$report.docx", "office lock file")
     partial = _write(root / "Thesis/movie.mp4.crdownload", "half a download")
 
-    engine.apply(_plan(engine, root))
+    plan = _plan(engine, root)
+    engine.apply(plan, card_overrides=_organize_every_folder(plan))
 
     assert not report.exists()
     assert (root / "Documents/PDFs/report.pdf").read_text(encoding="utf-8") == "the real report"
@@ -112,7 +118,8 @@ def test_same_name_in_two_folders_keeps_both(engine, root):
     _write(root / "Trip 2019/notes.txt", "trip notes")
     _write(root / "Recipes/notes.txt", "recipe notes")
 
-    engine.apply(_plan(engine, root))
+    plan = _plan(engine, root)
+    engine.apply(plan, card_overrides=_organize_every_folder(plan))
 
     texts = sorted(p.read_text(encoding="utf-8") for p in (root / "Documents/Text").glob("notes*.txt"))
     assert texts == ["recipe notes", "trip notes"]
@@ -127,3 +134,43 @@ def test_folder_whose_files_are_all_in_subfolders(engine, root):
 
     assert len(_folder_moves(result)) == 2
     assert sorted(p.read_text(encoding="utf-8") for p in (root / "Documents/PDFs").glob("*.pdf")) == ["a", "b"]
+
+
+@pytest.mark.parametrize("name", ["New folder", "New folder (2)", "Misc", "Old Downloads",
+                                  "Mixed Stuff", "Messy_Folder", "untitled folder", "to sort"])
+def test_dumping_ground_names_look_unsorted(name):
+    assert remodel.looks_unsorted(name)
+
+
+@pytest.mark.parametrize("name", ["Wedding 2019", "Taxes 2024", "Senior Design Project",
+                                  "Band Album", "Steam", "Old Photos", "2019", ""])
+def test_named_folders_do_not_look_unsorted(name):
+    assert not remodel.looks_unsorted(name)
+
+
+def test_named_folder_defaults_to_keep_intact(engine, root):
+    _write(root / "Wedding 2019/first_dance.mp4", "video")
+    _write(root / "Wedding 2019/guests.xlsx", "list")
+    _write(root / "New folder/report.pdf", "pdf")
+
+    plan = _plan(engine, root)
+    cards = {c.folder_path.name: c for c in plan.cards}
+
+    assert cards["Wedding 2019"].action == "keep_intact"
+    assert not cards["Wedding 2019"].protection.is_protected, "the user can still choose Organize"
+    assert cards["New folder"].action == "organize"
+
+    result = engine.apply(plan, dry_run=True)
+    moved_from = {Path(m["src"]).parent.name for m in _folder_moves(result)}
+    assert moved_from == {"New folder"}
+
+
+def test_named_folder_can_still_be_organized_on_request(engine, root):
+    _write(root / "Wedding 2019/first_dance.mp4", "video")
+    _write(root / "Wedding 2019/guests.xlsx", "list")
+
+    plan = _plan(engine, root)
+    folder = str(next(c.folder_path for c in plan.cards if c.folder_path.name == "Wedding 2019"))
+    result = engine.apply(plan, card_overrides={folder: "organize"}, dry_run=True)
+
+    assert len(_folder_moves(result)) == 2

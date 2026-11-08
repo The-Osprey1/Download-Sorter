@@ -336,7 +336,8 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
                 "name": "Invoices & Receipts",
                 "folder": "Documents\\Invoices & Receipts",
                 "match": [
-                    "invoice", "receipt", "billing", "statement", "payment",
+                    "invoice", "receipt", "billing", "billing_statement", "account_statement",
+                    "card_statement", "payment_confirmation", "payment_receipt",
                     "order_confirmation", "tax_invoice", "purchase_order", "remittance",
                 ],
                 "extensions": [".pdf", ".png", ".jpg", ".docx", ".xlsx", ".csv"],
@@ -346,8 +347,8 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
                 "name": "Financial & Taxes",
                 "folder": "Documents\\Financial & Tax",
                 "match": [
-                    "tax", "w2", "w-2", "1099", "1040", "tax_return",
-                    "bank_statement", "paystub", "w9", "w-9", "dividend",
+                    "tax_return", "tax_form", "tax_summary", "tax_documents", "w-2", "1099", "1040",
+                    "bank_statement", "paystub", "pay_stub", "w-9", "dividend",
                 ],
                 "extensions": [".pdf", ".xlsx", ".xls", ".csv", ".doc", ".docx"],
                 "enabled": True,
@@ -395,7 +396,7 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
                 "folder": "Documents\\School\\Notes",
                 "match": [
                     "syllabus", "lecture", "lecture_notes", "course_outline",
-                    "class_notes", "handout", "reading",
+                    "class_notes", "handout", "reading_list", "required_reading",
                 ],
                 "extensions": [".pdf", ".docx", ".pptx", ".txt"],
                 "enabled": True,
@@ -451,7 +452,7 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
                 "name": "CNC & Slicer G-Code",
                 "folder": "Code\\Gcode",
                 "match": [
-                    "slice", "layer", "toolpath", "contour", "gcode", "haas",
+                    "slice", "layer", "toolpath", "contour", "gcode",
                 ],
                 "extensions": [".gcode", ".bgcode", ".nc", ".tap", ".ngc"],
                 "enabled": True,
@@ -463,7 +464,7 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
                     "bracket", "mount", "enclosure", "adapter", "gear",
                     "spacer", "chassis", "flange", "bushing",
                 ],
-                "extensions": [".step", ".stp", ".iges", ".f3d", ".sldprt", ".ipt", ".stl"],
+                "extensions": [".step", ".stp", ".iges", ".f3d", ".sldprt", ".ipt"],
                 "enabled": True,
             },
         ],
@@ -633,14 +634,14 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
         "id": "everyday_home",
         "name": "Everyday",
         "icon": "profile_home",
-        "description": "Documents, photos, videos, music, installers and zip files each go into their own folder.",
-        "presets": ["office_admin"],
+        "description": "Documents, photos, videos, music, installers and zip files each go into their own folder, and so do receipts, manuals and travel bookings.",
+        "presets": [],
         "show_maker_features": False,
         "default_rules": [
             {
                 "name": "Invoices & Receipts",
                 "folder": "Documents\\Invoices & Receipts",
-                "match": ["invoice", "receipt", "billing", "statement", "payment"],
+                "match": ["invoice", "receipt", "billing", "billing_statement", "payment_confirmation"],
                 "extensions": [".pdf", ".png", ".jpg", ".docx"],
                 "enabled": True,
             },
@@ -665,7 +666,8 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
         "name": "Student",
         "icon": "profile_school",
         "description": "Everything in Everyday, plus folders for syllabi, notes, assignments, exams and research papers.",
-        "presets": ["academic_student", "office_admin"],
+        "presets": ["academic_student"],
+        "includes": "everyday_home",
         "show_maker_features": False,
         "default_rules": [
             {
@@ -673,7 +675,7 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
                 "folder": "Documents\\School\\Notes",
                 "match": [
                     "syllabus", "lecture", "lecture_notes", "course_outline",
-                    "class_notes", "handout", "reading",
+                    "class_notes", "handout", "reading_list", "required_reading",
                 ],
                 "extensions": [".pdf", ".docx", ".pptx", ".txt"],
                 "enabled": True,
@@ -714,15 +716,17 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
         "id": "office_admin",
         "name": "Office and work",
         "icon": "profile_office",
-        "description": "Everything in Everyday, plus folders for invoices, receipts, tax forms, résumés and travel bookings.",
+        "description": "Everything in Everyday, plus folders for invoices, tax forms, bank statements and résumés.",
         "presets": ["office_admin"],
+        "includes": "everyday_home",
         "show_maker_features": False,
         "default_rules": [
             {
                 "name": "Invoices & Receipts",
                 "folder": "Documents\\Invoices & Receipts",
                 "match": [
-                    "invoice", "receipt", "billing", "statement", "payment",
+                    "invoice", "receipt", "billing", "billing_statement", "account_statement",
+                    "card_statement", "payment_confirmation", "payment_receipt",
                     "order_confirmation", "tax_invoice", "purchase_order", "remittance",
                 ],
                 "extensions": [".pdf", ".png", ".jpg", ".docx", ".xlsx", ".csv"],
@@ -732,8 +736,8 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
                 "name": "Financial & Taxes",
                 "folder": "Documents\\Financial & Tax",
                 "match": [
-                    "tax", "w2", "w-2", "1099", "1040", "tax_return",
-                    "bank_statement", "paystub", "w9", "w-9", "dividend",
+                    "tax_return", "tax_form", "tax_summary", "tax_documents", "w-2", "1099", "1040",
+                    "bank_statement", "paystub", "pay_stub", "w-9", "dividend",
                 ],
                 "extensions": [".pdf", ".xlsx", ".xls", ".csv", ".doc", ".docx"],
                 "enabled": True,
@@ -775,38 +779,13 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
         "name": "3D printing, CAD and CNC",
         "icon": "profile_maker",
         "description": "Everything in Everyday, plus 3D models, slicer projects and G-code. Also moves stray CAD and 3D files out of Documents.",
-        "presets": ["maker_3d", "office_admin"],
+        "presets": [],
+        "includes": "everyday_home",
         "show_maker_features": True,
-        "default_rules": [
-            {
-                "name": "3MF Slicer Projects",
-                "folder": "3D Models\\3MF",
-                "match": [
-                    "bambu", "orca", "prusa", "plate", "multicolor", "ams",
-                ],
-                "extensions": [".3mf"],
-                "enabled": True,
-            },
-            {
-                "name": "CNC & Slicer G-Code",
-                "folder": "Code\\Gcode",
-                "match": [
-                    "slice", "layer", "toolpath", "contour", "gcode", "haas",
-                ],
-                "extensions": [".gcode", ".bgcode", ".nc", ".tap", ".ngc"],
-                "enabled": True,
-            },
-            {
-                "name": "CAD & Mechanical Parts",
-                "folder": "3D Models\\CAD",
-                "match": [
-                    "bracket", "mount", "enclosure", "adapter", "gear",
-                    "spacer", "chassis", "flange", "bushing",
-                ],
-                "extensions": [".step", ".stp", ".iges", ".f3d", ".sldprt", ".ipt", ".stl"],
-                "enabled": True,
-            },
-        ],
+        # No keyword rules of its own: the file-type rules and the 3MF, MakerWorld
+        # and G-code detectors already file maker downloads, and name rules here
+        # fought them ("haas" beat the Haas detector, "gear.stl" left 3D Models\\STL).
+        "default_rules": [],
     },
 ]
 
@@ -814,6 +793,59 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
 def get_persona_profiles() -> list[dict[str, Any]]:
     """Return a deep copy of all available user persona profiles."""
     return copy.deepcopy(PERSONA_PROFILES)
+
+
+def profile_rules(persona_id: str) -> list[dict[str, Any]]:
+    """The keyword rules a profile sets up: its own, its presets', and those of
+    the profile it builds on ("Everything in Everyday, plus...")."""
+    profile = next((p for p in PERSONA_PROFILES if p["id"] == persona_id), None)
+    if not profile:
+        raise ValueError(f"Unknown persona ID: {persona_id}")
+    rules: list[dict[str, Any]] = []
+
+    def add(rule: dict[str, Any]) -> None:
+        name = (rule.get("name") or "").lower()
+        if name and not any((r.get("name") or "").lower() == name for r in rules):
+            rules.append(copy.deepcopy(rule))
+
+    for rule in profile.get("default_rules", []):
+        add(rule)
+    for preset_id in profile.get("presets", []):
+        preset = next((p for p in BUILTIN_PRESETS if p["id"] == preset_id), None)
+        for rule in (preset or {}).get("rules", []):
+            add(rule)
+    if profile.get("includes"):
+        for rule in profile_rules(profile["includes"]):
+            add(rule)
+    return rules
+
+
+# Words earlier versions put in the built-in rules, so rules saved by an older
+# version still count as untouched.
+_LEGACY_PROFILE_RULE_WORDS: frozenset[str] = frozenset({
+    "statement", "payment", "tax", "w-2", "w-9", "reading", "haas",
+})
+
+
+def _builtin_rule_words() -> dict[tuple[str, str], set[str]]:
+    words: dict[tuple[str, str], set[str]] = {}
+    sources = [p.get("default_rules", []) for p in PERSONA_PROFILES]
+    sources += [p.get("rules", []) for p in BUILTIN_PRESETS]
+    for rules in sources:
+        for rule in rules:
+            key = ((rule.get("name") or "").lower(), (rule.get("folder") or "").lower())
+            words.setdefault(key, set()).update(str(w).lower() for w in rule.get("match", []))
+    return words
+
+
+def is_untouched_profile_rule(rule: dict[str, Any]) -> bool:
+    """True when a rule is a built-in profile rule the user has not added words to."""
+    key = ((rule.get("name") or "").lower(), (rule.get("folder") or "").lower())
+    known = _builtin_rule_words().get(key)
+    if known is None:
+        return False
+    words = {str(w).lower() for w in rule.get("match", [])}
+    return words <= (known | _LEGACY_PROFILE_RULE_WORDS)
 
 
 def apply_persona_profile(config: dict[str, Any], persona_id: str) -> dict[str, Any]:
@@ -839,25 +871,18 @@ def apply_persona_profile(config: dict[str, Any], persona_id: str) -> dict[str, 
         else:
             updated["document_sources"] = []
 
-    # Populate default rules for the persona
-    new_rules: list[dict[str, Any]] = copy.deepcopy(profile.get("default_rules", []))
+    new_rules = profile_rules(persona_id)
+    new_names = {(r.get("name") or "").lower() for r in new_rules}
 
-    # Merge rules from referenced presets without duplicates
-    for preset_id in profile.get("presets", []):
-        preset = next((p for p in BUILTIN_PRESETS if p["id"] == preset_id), None)
-        if preset:
-            for rule in preset.get("rules", []):
-                r_name = (rule.get("name") or "").lower()
-                if r_name and not any((r.get("name") or "").lower() == r_name for r in new_rules):
-                    new_rules.append(copy.deepcopy(rule))
-
-    # Retain existing rules that don't collide with the persona's rules
-    existing = updated.get("keyword_rules", [])
-    for r in existing:
-        if isinstance(r, dict) and r.get("name"):
-            r_name = r["name"].lower()
-            if not any((nr.get("name") or "").lower() == r_name for nr in new_rules):
-                new_rules.append(copy.deepcopy(r))
+    # Keep the user's own rules. A rule an earlier profile added (same name and
+    # folder as a built-in rule, no words the user typed in) is dropped, so
+    # switching from 3D printing to Student does not leave CAD rules behind.
+    for r in updated.get("keyword_rules", []):
+        if not isinstance(r, dict) or not r.get("name"):
+            continue
+        if r["name"].lower() in new_names or is_untouched_profile_rule(r):
+            continue
+        new_rules.append(copy.deepcopy(r))
 
     updated["keyword_rules"] = new_rules
     return updated
@@ -908,7 +933,7 @@ _ACADEMIC_COURSE_CODE_EXTENSIONS: frozenset[str] = frozenset({
 })
 
 _OFFICE_RECOMMEND_KEYWORDS: tuple[str, ...] = (
-    "invoice", "receipt", "billing", "statement", "tax", "w2",
+    "invoice", "receipt", "billing", "bank_statement", "tax_return", "w2",
     "w-2", "1099", "1040", "paystub", "pay_stub", "resume",
     "curriculum_vitae", "cv", "itinerary", "boarding_pass",
     "purchase_order", "remittance", "dividend", "financial",

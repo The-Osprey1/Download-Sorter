@@ -988,8 +988,15 @@ def matches_keyword(name: str, token: str) -> bool:
     token = token.strip()
     if not token:
         return False
-    # Word boundary supporting delimiters: start/end, spaces, -, _, ., [], (), etc.
-    pattern = rf"(?:^|[^a-zA-Z0-9]){re.escape(token.lower())}(?:[^a-zA-Z0-9]|$)"
+    # Whole words only: the keyword must sit between the start/end of the name or
+    # a non-alphanumeric character (space, -, _, ., brackets...).  Inside a
+    # multi-word keyword any separator works, or none, so "bank_statement"
+    # matches "Bank Statement.pdf", "bank-statement.pdf" and "BankStatement.pdf".
+    parts = [part for part in re.split(r"[\s_\-.]+", token.lower()) if part]
+    if not parts:
+        return False
+    body = r"[^a-z0-9]*".join(re.escape(part) for part in parts)
+    pattern = rf"(?:^|[^a-z0-9]){body}(?:[^a-z0-9]|$)"
     return bool(re.search(pattern, name.lower()))
 
 
