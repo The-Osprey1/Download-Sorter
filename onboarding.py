@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 
 import about
 from suite_theme import ACCENTS, COLORS, RADII, TYPE
+import learning
 import ui_icons
 import ui_style
 
@@ -1290,6 +1291,27 @@ class SettingsWidget(QWidget):
         downloads.addWidget(self._chk_unpack)
         downloads.addWidget(ui_style.label("The original zip file is kept in the Archives folder.", "muted", wrap=True))
 
+        learn = self._section(
+            layout, "Learning (preview)",
+            "When you move a sorted file into another folder inside Downloads, Download Sorter "
+            "notes the words in its name, its type and the website it came from. For now it only "
+            "keeps a practice log of what it would have suggested; it doesn't move or suggest "
+            "anything. Everything stays on this PC.",
+        )
+        self._chk_learning = QCheckBox("Learn from how I organize files")
+        self._chk_learning.toggled.connect(self._on_learning_toggled)
+        learn.addWidget(self._chk_learning)
+        learn_row = QHBoxLayout()
+        learn_row.setSpacing(8)
+        self._btn_learning_report = ui_style.button("See what it has learned")
+        self._btn_learning_report.clicked.connect(self._show_learning_report)
+        learn_row.addWidget(self._btn_learning_report)
+        self._btn_learning_forget = ui_style.button("Forget everything", "ghost")
+        self._btn_learning_forget.clicked.connect(self._forget_learning)
+        learn_row.addWidget(self._btn_learning_forget)
+        learn_row.addStretch()
+        learn.addLayout(learn_row)
+
         info = self._section(layout, "About")
         info.addWidget(ui_style.label(f"{about.APP_NAME} {about.__version__}"))
         info.addWidget(ui_style.label(about.CREDIT, "muted"))
@@ -1323,6 +1345,9 @@ class SettingsWidget(QWidget):
         self._chk_unpack.blockSignals(True)
         self._chk_unpack.setChecked(_auto_unzip_enabled(self._config))
         self._chk_unpack.blockSignals(False)
+        self._chk_learning.blockSignals(True)
+        self._chk_learning.setChecked(learning.is_enabled(self._config))
+        self._chk_learning.blockSignals(False)
         self.set_persona(self._config.get("user_persona", "everyday_home"))
 
     def set_persona(self, persona_id: str) -> None:
@@ -1360,6 +1385,58 @@ class SettingsWidget(QWidget):
                 suite_data.save_sorter_config(self._config)
             except Exception:
                 pass
+
+    def _on_learning_toggled(self, checked: bool) -> None:
+        block = self._config.get("learning")
+        if not isinstance(block, dict):
+            block = {}
+            self._config["learning"] = block
+        block["enabled"] = bool(checked)
+        if hasattr(suite_data, "save_sorter_config"):
+            try:
+                suite_data.save_sorter_config(self._config)
+            except Exception:
+                pass
+
+    def learning_report_text(self) -> str:
+        rep = learning.report()
+        if not rep["your_moves"]:
+            return (
+                "Nothing yet. Move a few sorted files into the folders you'd rather keep them in "
+                "(inside Downloads), and it will start learning from those moves."
+            )
+        lines = [f"Files you've moved: {rep['your_moves']}"]
+        if rep["judged"]:
+            lines.append(
+                f"Its first guess was right {rep['first_guess_right']} of {rep['judged']} times "
+                f"({round(100 * rep['first_guess_rate'])}%), and the right folder was in its top three "
+                f"{rep['in_top_three']} times ({round(100 * rep['top_three_rate'])}%)."
+            )
+        else:
+            lines.append("It needs a few more of your moves before its guesses can be checked.")
+        if rep["folders"]:
+            lines.append("")
+            lines.append("Folders it has learned about:")
+            for f in rep["folders"][:8]:
+                noun = "example" if f["examples"] == 1 else "examples"
+                lines.append(f"  {f['folder']}: {f['examples']} {noun}")
+        if rep["sites"]:
+            lines.append("")
+            lines.append("Websites it has seen: " + ", ".join(rep["sites"][:6]))
+        return "\n".join(lines)
+
+    def _show_learning_report(self) -> None:
+        QMessageBox.information(self, "What it has learned", self.learning_report_text())
+
+    def _forget_learning(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Forget everything",
+            "Delete everything Download Sorter has learned from your moves, and its practice log?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            learning.forget()
 
     def _on_persona_combo_changed(self, index: int) -> None:
         persona_id = str(self._persona_combo.itemData(index))

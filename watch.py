@@ -11,6 +11,8 @@ import threading
 import time
 import uuid
 
+import sorter
+
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -190,8 +192,31 @@ class DownloadsHandler(FileSystemEventHandler):
             self._queue(event.src_path)
 
     def on_moved(self, event) -> None:  # type: ignore[no-untyped-def]
-        if not event.is_directory:
-            self._queue(event.dest_path)
+        if event.is_directory:
+            return
+        if self._handle_user_move(event.src_path, event.dest_path):
+            return
+        self._queue(event.dest_path)
+
+    def _handle_user_move(self, src: str, dest: str) -> bool:
+        """A file the user moved between folders stays where they put it.
+
+        Without this, a file dragged into a folder like Downloads\\Banking was
+        treated as a misplaced download and moved straight back out. When learning
+        is switched on, the move is also an example of where such files belong.
+        """
+        with self._lock:
+            cfg = self.config
+        try:
+            import learning
+            if not learning.is_user_move(src, dest, self.root, cfg):
+                return False
+            sorter.remember_user_placed(Path(dest))
+            learning.observe_user_move(Path(dest), self.root, cfg)
+        except Exception:
+            logging.exception("Could not handle the move of %s", dest)
+            return False
+        return True
 
     def on_modified(self, event) -> None:  # type: ignore[no-untyped-def]
         if not event.is_directory:
@@ -264,6 +289,11 @@ def _handle_post_move(
             notify_file_moved(dest, target_root)
         except Exception as err:
             logging.debug("Ribbon notification skipped: %s", err)
+    try:
+        import learning
+        learning.observe_sorted(dest, target_root, config)
+    except Exception as err:
+        logging.debug("Learning log skipped: %s", err)
     if config.get("quick_switcher_enabled", True):
         try:
             from quick_switcher import record_recent_file

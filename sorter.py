@@ -65,6 +65,8 @@ V2_DEFAULTS: dict = {
         "slicers": ["bambu-studio.exe", "orca-slicer.exe", "prusa-slicer.exe"],
     },
     "mirror": {"enabled": False},
+    # Learning from how the user organizes files (stage 1 only watches and logs).
+    "learning": {"enabled": False},
     "remodel": {
         "enabled": True,
         "quarantine_days": 30,
@@ -590,8 +592,31 @@ def remember_restored(path: Path) -> None:
     _save_restored(data)
 
 
+def remember_user_placed(path: Path) -> None:
+    """Mark a file the user moved into a folder themselves; the sorter won't move it again.
+
+    Unlike a file Undo put back, this stays in force when the file is edited: the
+    user chose the folder, not the contents. It ends when the file is moved away.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return
+    data = {k: v for k, v in _load_restored().items() if Path(v.get("path", "")).exists()}
+    data[failure_key(path)] = {
+        "path": str(path),
+        "signature": file_signature(path),
+        "reason": "placed_by_you",
+        "restored_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _save_restored(data)
+
+
 def is_restored_by_undo(path: Path) -> bool:
-    """True while ``path`` is a file Undo put back and nobody has changed it since."""
+    """True while the sorter must leave ``path`` alone.
+
+    That's a file Undo put back (until it changes), or a file the user moved into
+    a folder themselves (for as long as it stays there).
+    """
     data = _load_restored()
     if not data:
         return False
@@ -599,6 +624,8 @@ def is_restored_by_undo(path: Path) -> bool:
     entry = data.get(key)
     if not entry:
         return False
+    if entry.get("reason") == "placed_by_you" and Path(path).is_file():
+        return True
     if entry.get("signature") == file_signature(Path(path)):
         return True
     data.pop(key, None)

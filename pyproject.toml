@@ -79,6 +79,7 @@ py-modules = [
     "config_manager",
     "gcode_peek",
     "hold_manager",
+    "learning",
     "onboarding",
     "main",
     "quick_switcher",
