@@ -631,9 +631,9 @@ def reset_sorter_config_to_defaults(config_path: Path | str | None = None) -> di
 PERSONA_PROFILES: list[dict[str, Any]] = [
     {
         "id": "everyday_home",
-        "name": "Everyday & Home PC",
-        "icon": "🏠",
-        "description": "Keep Downloads tidy by automatically filing PDFs, photos, videos, music, installers, and zip files into clear folders.",
+        "name": "Everyday",
+        "icon": "profile_home",
+        "description": "Documents, photos, videos, music, installers and zip files each go into their own folder.",
         "presets": ["office_admin"],
         "show_maker_features": False,
         "default_rules": [
@@ -662,9 +662,9 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
     },
     {
         "id": "academic_student",
-        "name": "Student & Schoolwork",
-        "icon": "🎓",
-        "description": "Organize syllabi, homework assignments, lecture notes, study guides, and research papers alongside everyday downloads.",
+        "name": "Student",
+        "icon": "profile_school",
+        "description": "Everything in Everyday, plus folders for syllabi, notes, assignments, exams and research papers.",
         "presets": ["academic_student", "office_admin"],
         "show_maker_features": False,
         "default_rules": [
@@ -712,9 +712,9 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
     },
     {
         "id": "office_admin",
-        "name": "Office, Invoices & Work",
-        "icon": "💼",
-        "description": "Automatically sort invoices, receipts, tax forms, spreadsheets, resumes, and travel documents.",
+        "name": "Office and work",
+        "icon": "profile_office",
+        "description": "Everything in Everyday, plus folders for invoices, receipts, tax forms, résumés and travel bookings.",
         "presets": ["office_admin"],
         "show_maker_features": False,
         "default_rules": [
@@ -772,9 +772,9 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
     },
     {
         "id": "maker_3d",
-        "name": "3D Printing, CAD & CNC Maker",
-        "icon": "🛠️",
-        "description": "Full engineering suite: MakerWorld 3MF grace-period holds, Bambu/Orca slicer awareness, CAD assemblies, and Haas CNC toolpaths.",
+        "name": "3D printing, CAD and CNC",
+        "icon": "profile_maker",
+        "description": "Everything in Everyday, plus 3D models, slicer projects and G-code. Also moves stray CAD and 3D files out of Documents.",
         "presets": ["maker_3d", "office_admin"],
         "show_maker_features": True,
         "default_rules": [
@@ -1038,24 +1038,24 @@ def recommend_persona_profile(
 
     if max_score <= 0 or files_scanned == 0:
         recommended_id = "everyday_home"
-        reason = "Everyday & Home PC is recommended to keep your photos, music, documents, and downloads tidy!"
+        reason = "Everyday is a good fit for most PCs."
     else:
         # Highest score wins; ties broken by specialized order
         recommended_id = max(specialized, key=lambda k: scores[k])
         if recommended_id == "maker_3d":
             count = match_counts["maker_3d"]
             file_word = "file" if count == 1 else "files"
-            reason = f"We spotted {count} 3D/CAD or Maker {file_word} in your Downloads — 3D Printing, CAD & CNC Maker is recommended for your PC!"
+            reason = f"I found {count} 3D or CAD {file_word} in your Downloads, so I'd suggest the 3D printing profile."
         elif recommended_id == "academic_student":
             count = match_counts["academic_student"]
             file_word = "file" if count == 1 else "files"
-            reason = f"We spotted {count} coursework or study {file_word} in your Downloads — Student & Schoolwork is recommended for your PC!"
+            reason = f"I found {count} coursework {file_word} in your Downloads, so I'd suggest the Student profile."
         elif recommended_id == "office_admin":
             count = match_counts["office_admin"]
             file_word = "file" if count == 1 else "files"
-            reason = f"We spotted {count} invoices, receipts, or work documents in your Downloads — Office, Invoices & Work is recommended for your PC!"
+            reason = f"I found {count} invoices, receipts or work {file_word} in your Downloads, so I'd suggest the Office profile."
         else:
-            reason = "Everyday & Home PC is recommended to keep your photos, music, documents, and downloads tidy!"
+            reason = "Everyday is a good fit for most PCs."
 
     return {
         "recommended_id": recommended_id,

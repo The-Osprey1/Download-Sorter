@@ -42,6 +42,8 @@ from PySide6.QtWidgets import (
 
 import about
 from suite_theme import ACCENTS, COLORS, RADII, TYPE
+import ui_icons
+import ui_style
 
 try:
     import config_manager as suite_data
@@ -361,11 +363,12 @@ class PersonaCard(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(12)
 
-        icon_lbl = QLabel(icon)
-        icon_lbl.setFont(QFont(TYPE["ui"], 20))
-        icon_lbl.setFixedWidth(38)
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(icon_lbl)
+        icon_name = icon if icon in ui_icons.names() else ui_icons.PERSONA_ICONS.get(self.persona_id, "folder")
+        self._icon_lbl = QLabel()
+        self._icon_lbl.setFixedSize(40, 40)
+        self._icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._icon_name = icon_name
+        layout.addWidget(self._icon_lbl, 0, Qt.AlignmentFlag.AlignTop)
 
         text_layout = QVBoxLayout()
         text_layout.setSpacing(3)
@@ -373,56 +376,49 @@ class PersonaCard(QFrame):
         self._title_row = QHBoxLayout()
         self._title_row.setSpacing(8)
 
-        self._title_lbl = QLabel(name)
-        self._title_lbl.setFont(QFont(TYPE["ui"], 11, QFont.Weight.Bold))
+        self._title_lbl = QLabel(name.replace("&", "and"))
+        self._title_lbl.setStyleSheet("font-size: 14px; font-weight: 600;")
         self._title_row.addWidget(self._title_lbl)
 
         if badge:
-            self._badge_lbl = QLabel(f" {badge} ")
-            self._badge_lbl.setFont(QFont(TYPE["ui"], 8, QFont.Weight.Medium))
-            self._badge_lbl.setStyleSheet(f"""
-                background: {COLORS['surface']};
-                color: {COLORS['textMuted']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-            """)
+            self._badge_lbl = QLabel(badge)
+            self._badge_lbl.setStyleSheet(
+                f"color: {COLORS['textMuted']}; border: 1px solid {COLORS['border']};"
+                " border-radius: 4px; padding: 1px 6px; font-size: 11px;"
+            )
             self._title_row.addWidget(self._badge_lbl)
 
         self._title_row.addStretch()
         text_layout.addLayout(self._title_row)
 
         self._desc_lbl = QLabel(description)
-        self._desc_lbl.setFont(QFont(TYPE["ui"], 10))
-        self._desc_lbl.setStyleSheet(f"color: {COLORS['textMuted']};")
+        self._desc_lbl.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 12px;")
         self._desc_lbl.setWordWrap(True)
         text_layout.addWidget(self._desc_lbl)
 
         layout.addLayout(text_layout, 1)
 
         self._indicator = QLabel("○")
-        self._indicator.setFont(QFont(TYPE["ui"], 14))
+        self._indicator.setFont(QFont(TYPE["ui"], 13))
         self._indicator.setStyleSheet(f"color: {COLORS['textMuted']};")
         layout.addWidget(self._indicator)
 
         self.update_style()
 
-    def set_recommended(self, is_rec: bool, badge_text: str = "✨ Recommended for your PC") -> None:
+    def set_recommended(self, is_rec: bool, badge_text: str = "Recommended") -> None:
         """Display or hide the smart recommendation badge on this card."""
         if is_rec:
             if self._rec_badge_lbl is None:
-                self._rec_badge_lbl = QLabel(f" {badge_text} ")
-                self._rec_badge_lbl.setFont(QFont(TYPE["ui"], 8, QFont.Weight.Bold))
-                self._rec_badge_lbl.setStyleSheet(f"""
-                    background: {COLORS['successSubtle']};
-                    color: {ACCENTS['downloadSorter']};
-                    border: 1px solid {COLORS['successBorder']};
-                    border-radius: 4px;
-                    padding: 1px 5px;
-                """)
+                self._rec_badge_lbl = QLabel(badge_text)
+                self._rec_badge_lbl.setStyleSheet(
+                    f"background: {COLORS['successSubtle']}; color: {ACCENTS['downloadSorter']};"
+                    f" border: 1px solid {COLORS['successBorder']}; border-radius: 4px;"
+                    " padding: 1px 6px; font-size: 11px; font-weight: 600;"
+                )
                 # Insert right after _title_lbl (index 1)
                 self._title_row.insertWidget(1, self._rec_badge_lbl)
             else:
-                self._rec_badge_lbl.setText(f" {badge_text} ")
+                self._rec_badge_lbl.setText(badge_text)
                 self._rec_badge_lbl.setVisible(True)
         else:
             if self._rec_badge_lbl is not None:
@@ -437,15 +433,20 @@ class PersonaCard(QFrame):
         self.update_style()
 
     def update_style(self) -> None:
+        icon_color = ACCENTS["downloadSorter"] if self._selected else COLORS["textMuted"]
+        self._icon_lbl.setPixmap(ui_icons.pixmap(self._icon_name, icon_color, 22))
+        self._icon_lbl.setStyleSheet(
+            f"background: {COLORS['successSubtle'] if self._selected else COLORS['surfaceRaised']};"
+            f" border-radius: {RADII['control']}px;"
+        )
         if self._selected:
             self.setStyleSheet(f"""
                 PersonaCard {{
                     background-color: {COLORS['surfaceRaised']};
-                    border: 2px solid {ACCENTS['downloadSorter']};
+                    border: 1px solid {ACCENTS['downloadSorter']};
                     border-radius: {RADII['card']}px;
                 }}
             """)
-            self._title_lbl.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
         else:
             self.setStyleSheet(f"""
                 PersonaCard {{
@@ -458,7 +459,6 @@ class PersonaCard(QFrame):
                     border-color: {COLORS['borderStrong']};
                 }}
             """)
-            self._title_lbl.setStyleSheet(f"color: {COLORS['text']};")
 
     def mousePressEvent(self, event) -> None:
         self.clicked.emit(self.persona_id)
@@ -504,7 +504,7 @@ class WelcomeWizardDialog(QDialog):
             }
 
         self._recommended_persona_id: str = rec.get("recommended_id", "everyday_home")
-        self._recommendation_reason: str = rec.get("reason", "Everyday & Home PC is recommended for your PC.")
+        self._recommendation_reason: str = rec.get("reason", "Everyday is a good fit for most PCs.")
 
         # Default persona selection: pre-select recommended or preserve existing persona in config
         if "user_persona" in self._config:
@@ -515,47 +515,7 @@ class WelcomeWizardDialog(QDialog):
         self._init_ui()
 
     def _init_ui(self) -> None:
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {COLORS['canvas']};
-                color: {COLORS['text']};
-            }}
-            QLabel {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-            }}
-            QCheckBox {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-                spacing: 8px;
-            }}
-            QCheckBox::indicator {{
-                width: 16px;
-                height: 16px;
-                border-radius: {RADII['small']}px;
-                border: 1px solid {COLORS['border']};
-                background: {COLORS['surface']};
-            }}
-            QCheckBox::indicator:checked {{
-                background: {ACCENTS['downloadSorter']};
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-            QPushButton {{
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 7px 16px;
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['surfaceHover']};
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-        """)
+        self.setStyleSheet(ui_style.stylesheet())
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 18)
@@ -563,19 +523,15 @@ class WelcomeWizardDialog(QDialog):
 
         # Header Bar with Step Indicators
         header_layout = QHBoxLayout()
-        header_title = QLabel(f"✨ {about.APP_NAME}")
-        header_title.setFont(QFont(TYPE["ui"], 13, QFont.Weight.Bold))
-        header_title.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
+        header_title = ui_style.label(f"Welcome to {about.APP_NAME}", "section")
         header_layout.addWidget(header_title)
 
         header_layout.addStretch()
 
-        self._step_pill_1 = QLabel("1. Profile")
-        self._step_pill_2 = QLabel("2. How It Works")
-        self._step_pill_3 = QLabel("3. Setup")
+        self._step_pill_1 = QLabel("1  Profile")
+        self._step_pill_2 = QLabel("2  How it works")
+        self._step_pill_3 = QLabel("3  Finish")
         for pill in (self._step_pill_1, self._step_pill_2, self._step_pill_3):
-            pill.setFont(QFont(TYPE["ui"], 9, QFont.Weight.DemiBold))
-            pill.setStyleSheet(f"color: {COLORS['textMuted']}; padding: 3px 8px; border-radius: 9px;")
             header_layout.addWidget(pill)
 
         layout.addLayout(header_layout)
@@ -600,17 +556,12 @@ class WelcomeWizardDialog(QDialog):
         bubble_col = QVBoxLayout()
         bubble_col.setSpacing(4)
 
-        mascot_title = QLabel("Sorty · Folder Companion")
-        mascot_title.setFont(QFont(TYPE["ui"], 9, QFont.Weight.Bold))
-        mascot_title.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
-        bubble_col.addWidget(mascot_title)
-
+        bubble_col.addStretch()
         self._mascot_speech_lbl = QLabel(f"Hi! I'm Sorty! {self._recommendation_reason}")
-        self._mascot_speech_lbl.setFont(QFont(TYPE["ui"], 10))
-        self._mascot_speech_lbl.setStyleSheet(f"color: {COLORS['text']};")
         self._mascot_speech_lbl.setWordWrap(True)
         bubble_col.addWidget(self._mascot_speech_lbl)
 
+        bubble_col.addStretch()
         mascot_row.addLayout(bubble_col, 1)
         layout.addWidget(self._mascot_container)
 
@@ -623,7 +574,7 @@ class WelcomeWizardDialog(QDialog):
 
         # Footer Navigation
         footer = QHBoxLayout()
-        self._btn_back = QPushButton("← Back")
+        self._btn_back = ui_style.button("Back", None, "back")
         self._btn_back.clicked.connect(self._on_back_clicked)
         self._btn_back.setEnabled(False)
         self._btn_back.setVisible(False)
@@ -631,43 +582,20 @@ class WelcomeWizardDialog(QDialog):
 
         footer.addStretch()
 
-        self._credit_lbl = QLabel(f"{about.APP_NAME} {about.__version__} · {about.CREDIT}")
+        self._credit_lbl = ui_style.label(f"{about.APP_NAME} {about.__version__} · {about.CREDIT}", "caption")
         self._credit_lbl.setObjectName("creditFooter")
-        self._credit_lbl.setStyleSheet(f"color: {COLORS['textFaint']}; font-size: 10px;")
         footer.addWidget(self._credit_lbl)
 
         footer.addStretch()
 
-        self._btn_finish = QPushButton("Get Started ✓")
-        self._btn_finish.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENTS['downloadSorter']};
-                color: #0B0D12;
-                border: 1px solid {ACCENTS['downloadSorter']};
-                font-weight: bold;
-                padding: 7px 20px;
-            }}
-            QPushButton:hover {{
-                background: #82ecc0;
-            }}
-        """)
+        self._btn_finish = ui_style.button("Finish setup", "primary")
+        self._btn_finish.setMinimumWidth(120)
         self._btn_finish.clicked.connect(self._on_finish_clicked)
         self._btn_finish.setVisible(False)
         footer.addWidget(self._btn_finish)
 
-        self._btn_next = QPushButton("Next →")
-        self._btn_next.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENTS['downloadSorter']};
-                color: #0B0D12;
-                border: 1px solid {ACCENTS['downloadSorter']};
-                font-weight: bold;
-                padding: 7px 20px;
-            }}
-            QPushButton:hover {{
-                background: #82ecc0;
-            }}
-        """)
+        self._btn_next = ui_style.button("Next", "primary")
+        self._btn_next.setMinimumWidth(120)
         self._btn_next.clicked.connect(self._on_next_clicked)
         footer.addWidget(self._btn_next)
 
@@ -683,30 +611,22 @@ class WelcomeWizardDialog(QDialog):
         layout.setContentsMargins(0, 8, 0, 8)
         layout.setSpacing(10)
 
-        title = QLabel("How do you use your PC?")
-        title.setFont(QFont(TYPE["ui"], 14, QFont.Weight.Bold))
-        layout.addWidget(title)
-
-        sub = QLabel("Select your workflow profile to automatically configure the best sorting rules. You can change this anytime.")
-        sub.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 11px;")
-        sub.setWordWrap(True)
-        layout.addWidget(sub)
+        layout.addWidget(ui_style.label("What do you mostly download?", "title"))
+        layout.addWidget(ui_style.label(
+            "This picks a set of starter rules. Every profile sorts files by type; "
+            "you can switch later in Settings.", "muted", wrap=True))
+        layout.addSpacing(4)
 
         profiles: list[tuple[str, str, str, str]] = []
         if hasattr(suite_data, "get_persona_profiles"):
             try:
                 for p in suite_data.get_persona_profiles():
-                    profiles.append((p.get("id", ""), p.get("icon", "📁"), p.get("name", ""), p.get("description", "")))
+                    profiles.append((p.get("id", ""), "", p.get("name", ""), p.get("description", "")))
             except Exception:
                 profiles = []
 
         if not profiles:
-            profiles = [
-                ("everyday_home", "🏠", "Everyday & Home PC", "Keep Downloads tidy by automatically filing PDFs, photos, videos, music, installers, and zip archives into clear folders."),
-                ("academic_student", "🎓", "Student & Schoolwork", "Organize syllabi, homework assignments, lecture notes, study guides, and research papers alongside everyday downloads."),
-                ("office_admin", "💼", "Office, Invoices & Work", "Automatically sort invoices, receipts, tax forms, spreadsheets, resumes, and travel documents."),
-                ("maker_3d", "🛠️", "3D Printing, CAD & CNC Maker", "Full engineering suite: MakerWorld 3MF grace-period holds, Bambu/Orca slicer awareness, CAD assemblies, and Haas CNC toolpaths."),
-            ]
+            profiles = [(pid, "", name, "") for pid, name in PERSONA_LABELS]
 
         for pid, icon, name, desc in profiles:
             card = PersonaCard(pid, icon, name, desc, parent=page)
@@ -723,81 +643,70 @@ class WelcomeWizardDialog(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 8, 0, 8)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        title = QLabel("How Download Sorter Works")
-        title.setFont(QFont(TYPE["ui"], 14, QFont.Weight.Bold))
-        layout.addWidget(title)
+        layout.addWidget(ui_style.label("Here's what happens", "title"))
+        layout.addWidget(ui_style.label(
+            "Download Sorter runs quietly in the background. When a download finishes, "
+            "it moves the file into a folder for its type, inside your Downloads folder.",
+            "muted", wrap=True))
+        layout.addSpacing(4)
 
-        sub = QLabel("Silent, automated organization with complete user control and zero cloud telemetry.")
-        sub.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 11px;")
-        layout.addWidget(sub)
+        comp_card, comp = ui_style.card(spacing=0)
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        comp.addLayout(row)
 
-        # Before & After Comparison Card
-        comp_card = QFrame()
-        comp_card.setObjectName("compCard")
-        comp_card.setStyleSheet(f"QFrame#compCard {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {RADII['card']}px; }}")
-        comp_layout = QHBoxLayout(comp_card)
-        comp_layout.setContentsMargins(16, 14, 16, 14)
-        comp_layout.setSpacing(14)
+        def column(title: str, items: list[tuple[str, str]], icon_name: str) -> QVBoxLayout:
+            col = QVBoxLayout()
+            col.setSpacing(8)
+            col.addWidget(ui_style.label(title, "muted"))
+            for name, note in items:
+                line = QHBoxLayout()
+                line.setSpacing(8)
+                ic = QLabel()
+                ic.setPixmap(ui_icons.pixmap(icon_name, COLORS["textMuted"], 16))
+                line.addWidget(ic)
+                line.addWidget(ui_style.label(name))
+                if note:
+                    line.addWidget(ui_style.label(note, "caption"))
+                line.addStretch()
+                col.addLayout(line)
+            col.addStretch()
+            return col
 
-        # Left (Messy)
-        left_box = QVBoxLayout()
-        left_title = QLabel("📁 Messy Downloads\\")
-        left_title.setFont(QFont(TYPE["ui"], 11, QFont.Weight.Bold))
-        left_title.setStyleSheet(f"color: {COLORS['warning']};")
-        left_box.addWidget(left_title)
-        for item in ("📄 invoice_march.pdf", "📦 setup_v2.exe", "🖼️ vacation_photo.jpg", "📝 homework_draft.docx", "🗜️ model_parts.zip"):
-            lbl = QLabel(f"  {item}")
-            lbl.setFont(QFont(TYPE["mono"], 10))
-            lbl.setStyleSheet(f"color: {COLORS['textMuted']};")
-            left_box.addWidget(lbl)
-        comp_layout.addLayout(left_box, 1)
-
-        arrow_lbl = QLabel("➔")
-        arrow_lbl.setFont(QFont(TYPE["ui"], 20, QFont.Weight.Bold))
-        arrow_lbl.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
-        comp_layout.addWidget(arrow_lbl)
-
-        # Right (Organized)
-        right_box = QVBoxLayout()
-        right_title = QLabel("📁 Organized Folders\\")
-        right_title.setFont(QFont(TYPE["ui"], 11, QFont.Weight.Bold))
-        right_title.setStyleSheet(f"color: {ACCENTS['downloadSorter']};")
-        right_box.addWidget(right_title)
-        for item in ("📁 Documents\\ (invoice, homework)", "📁 Installers\\ (setup_v2.exe)", "📁 Images\\ (vacation_photo.jpg)", "📁 Archives\\ (model_parts.zip)"):
-            lbl = QLabel(f"  {item}")
-            lbl.setFont(QFont(TYPE["mono"], 10))
-            lbl.setStyleSheet(f"color: {COLORS['text']};")
-            right_box.addWidget(lbl)
-        comp_layout.addLayout(right_box, 1)
-
+        row.addLayout(column("Downloads, before", [
+            ("invoice_march.pdf", ""), ("setup_v2.exe", ""), ("vacation_photo.jpg", ""),
+            ("homework_draft.docx", ""), ("model_parts.zip", ""),
+        ], "file"), 1)
+        arrow = QLabel()
+        arrow.setPixmap(ui_icons.pixmap("next", ACCENTS["downloadSorter"], 20))
+        row.addWidget(arrow, 0, Qt.AlignmentFlag.AlignVCenter)
+        row.addLayout(column("Downloads, after", [
+            ("Documents", "2 files"), ("Installers", "1 file"),
+            ("Images", "1 file"), ("Archives", "1 file"),
+        ], "folder"), 1)
         layout.addWidget(comp_card)
 
-        # 3 Value Propositions
-        props_layout = QHBoxLayout()
-        props_layout.setSpacing(10)
-        props = [
-            ("🔒 100% Offline & Private", "Runs entirely on your PC. No files or metadata ever leave your machine."),
-            ("↺ 1-Click Instant Undo", "Every move is safely logged. Click 'Undo Last Sort' anytime to revert."),
-            ("🛡️ Zero Overwrites", "Files with duplicate names receive safe numeric suffixes."),
-        ]
-        for p_title, p_desc in props:
-            p_card = QFrame()
-            p_card.setObjectName("propCard")
-            p_card.setStyleSheet(f"QFrame#propCard {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {RADII['small']}px; }}")
-            p_layout = QVBoxLayout(p_card)
-            p_layout.setContentsMargins(12, 10, 12, 10)
-            t_lbl = QLabel(p_title)
-            t_lbl.setFont(QFont(TYPE["ui"], 10, QFont.Weight.Bold))
-            p_layout.addWidget(t_lbl)
-            d_lbl = QLabel(p_desc)
-            d_lbl.setFont(QFont(TYPE["ui"], 9))
-            d_lbl.setStyleSheet(f"color: {COLORS['textMuted']};")
-            d_lbl.setWordWrap(True)
-            p_layout.addWidget(d_lbl)
-            props_layout.addWidget(p_card, 1)
-        layout.addLayout(props_layout)
+        facts = QHBoxLayout()
+        facts.setSpacing(10)
+        for icon_name, title, text in (
+            ("lock", "Stays on your PC", "Nothing is uploaded. Download Sorter works completely offline."),
+            ("undo", "Easy to undo", "Any sort can be undone from the Home screen or the tray icon."),
+            ("copy", "Never overwrites", "If a file with the same name is already there, the new one gets a number."),
+        ):
+            fact_card, fact = ui_style.card(margins=(14, 12, 14, 12), spacing=6)
+            head = QHBoxLayout()
+            head.setSpacing(8)
+            ic = QLabel()
+            ic.setPixmap(ui_icons.pixmap(icon_name, ACCENTS["downloadSorter"], 16))
+            head.addWidget(ic)
+            head.addWidget(ui_style.label(title))
+            head.addStretch()
+            fact.addLayout(head)
+            fact.addWidget(ui_style.label(text, "muted", wrap=True))
+            facts.addWidget(fact_card, 1)
+        layout.addLayout(facts)
 
         layout.addStretch()
         return page
@@ -806,44 +715,32 @@ class WelcomeWizardDialog(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 8, 0, 8)
-        layout.setSpacing(14)
+        layout.setSpacing(10)
 
-        title = QLabel("Set It & Forget It")
-        title.setFont(QFont(TYPE["ui"], 14, QFont.Weight.Bold))
-        layout.addWidget(title)
+        layout.addWidget(ui_style.label("Almost done", "title"))
+        layout.addWidget(ui_style.label("You can change all of these later in Settings.", "muted"))
+        layout.addSpacing(4)
 
-        sub = QLabel("Configure how Download Sorter runs on your PC. All settings can be adjusted later.")
-        sub.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 11px;")
-        layout.addWidget(sub)
+        pref_card, prefs = ui_style.card(spacing=4)
 
-        pref_card = QFrame()
-        pref_card.setObjectName("prefCard")
-        pref_card.setStyleSheet(f"QFrame#prefCard {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']}; border-radius: {RADII['card']}px; }}")
-        pref_layout = QVBoxLayout(pref_card)
-        pref_layout.setContentsMargins(18, 16, 18, 16)
-        pref_layout.setSpacing(10)
+        def option(text: str, hint: str) -> QCheckBox:
+            chk = QCheckBox(text)
+            chk.setChecked(True)
+            prefs.addWidget(chk)
+            note = ui_style.label(hint, "muted", wrap=True)
+            note.setContentsMargins(26, 0, 0, 10)
+            prefs.addWidget(note)
+            return chk
 
-        self._chk_startup = QCheckBox("Start automatically when I sign in to Windows (Recommended)")
-        self._chk_startup.setChecked(True)
-        pref_layout.addWidget(self._chk_startup)
-        sub_startup = QLabel("    Keeps your Downloads folder clean in the background without needing to start the app manually.")
-        sub_startup.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 10px;")
-        pref_layout.addWidget(sub_startup)
-
-        self._chk_context = QCheckBox("Add 'Sort with DownloadSorter' to Windows Explorer right-click menu")
-        self._chk_context.setChecked(True)
-        pref_layout.addWidget(self._chk_context)
-        sub_context = QLabel("    Allows sorting any folder immediately by right-clicking it in Windows Explorer.")
-        sub_context.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 10px;")
-        pref_layout.addWidget(sub_context)
-
-        self._chk_sort_now = QCheckBox("Organize existing files in my Downloads folder right now")
-        self._chk_sort_now.setChecked(True)
-        pref_layout.addWidget(self._chk_sort_now)
-        sub_sort = QLabel("    Runs an initial sort on files currently sitting in your Downloads folder.")
-        sub_sort.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 10px;")
-        pref_layout.addWidget(sub_sort)
-
+        self._chk_startup = option(
+            "Start Download Sorter when I sign in",
+            "Keeps sorting new downloads without you having to open the app.")
+        self._chk_context = option(
+            "Add “Sort with Download Sorter” to the folder right-click menu",
+            "Lets you tidy any folder by right-clicking it in File Explorer.")
+        self._chk_sort_now = option(
+            "Sort the files already in my Downloads folder",
+            "Untick this to sort only new downloads. The first sort can be undone in one click.")
         layout.addWidget(pref_card)
         layout.addStretch()
         return page
@@ -868,30 +765,36 @@ class WelcomeWizardDialog(QDialog):
                 self._mascot_speech_lbl.setText(f"Hi! I'm Sorty! {self._recommendation_reason}")
             elif idx == 1:
                 self._mascot_speech_lbl.setText(
-                    "Rest easy! Download Sorter is 100% offline & private. "
-                    "Nothing ever leaves your PC, and every sort has 1-Click Instant Undo!"
+                    "I work offline and only move files around on your PC. Every move can be "
+                    "undone, so you can always put things back."
                 )
             elif idx == 2:
                 self._mascot_speech_lbl.setText(
-                    "Almost done! Choose how you'd like Download Sorter to run, "
-                    "then click 'Get Started' to enjoy a clutter-free PC!"
+                    "Almost done. Pick how I should run, then click Finish setup."
                 )
 
         if idx == 2:
-            self._btn_next.setText("Get Started ✓")
+            self._btn_next.setText("Finish setup")
             self._btn_next.setVisible(False)
             self._btn_finish.setVisible(True)
         else:
-            self._btn_next.setText("Next →")
+            self._btn_next.setText("Next")
             self._btn_next.setVisible(True)
             self._btn_finish.setVisible(False)
 
         pills = [self._step_pill_1, self._step_pill_2, self._step_pill_3]
         for i, pill in enumerate(pills):
             if i == idx:
-                pill.setStyleSheet(f"background: {ACCENTS['downloadSorter']}; color: #0B0D12; font-weight: bold; padding: 3px 10px; border-radius: 9px;")
+                pill.setStyleSheet(
+                    f"color: {COLORS['text']}; font-weight: 600; padding: 4px 2px;"
+                    f" border-bottom: 2px solid {ACCENTS['downloadSorter']};"
+                )
             else:
-                pill.setStyleSheet(f"background: {COLORS['surfaceRaised']}; color: {COLORS['textMuted']}; padding: 3px 8px; border-radius: 9px;")
+                done = i < idx
+                pill.setStyleSheet(
+                    f"color: {COLORS['textMuted'] if done else COLORS['textFaint']}; padding: 4px 2px;"
+                    " border-bottom: 2px solid transparent;"
+                )
 
     def _on_next_clicked(self) -> None:
         if self._current_step < 2:
@@ -961,11 +864,38 @@ class WelcomeWizardDialog(QDialog):
 
 
 # ============================================================================
-# 3. HomeDashboardWidget (Everyday View)
+# 3. Home and Settings pages (shown inside RulesManagerDialog)
 # ============================================================================
 
+PERSONA_LABELS: list[tuple[str, str]] = [
+    ("everyday_home", "Everyday"),
+    ("academic_student", "Student"),
+    ("office_admin", "Office and work"),
+    ("maker_3d", "3D printing, CAD and CNC"),
+]
+
+
+def _friendly_time(raw: str) -> str:
+    """'2026-11-08T14:05:00+00:00' -> 'Today, 2:05 PM' in local time."""
+    from datetime import datetime, timedelta
+
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return raw
+    if when.tzinfo is not None:
+        when = when.astimezone()
+    clock = when.strftime("%I:%M %p").lstrip("0")
+    today = datetime.now(when.tzinfo).date() if when.tzinfo else datetime.now().date()
+    if when.date() == today:
+        return f"Today, {clock}"
+    if when.date() == today - timedelta(days=1):
+        return f"Yesterday, {clock}"
+    return f"{when.strftime('%b')} {when.day}, {clock}"
+
+
 class HomeDashboardWidget(QWidget):
-    """Consumer-friendly Home & Activity Dashboard embedded in RulesManagerDialog."""
+    """Home page: whether sorting is on, the main actions, and recently sorted files."""
 
     persona_changed = Signal(str)
 
@@ -985,274 +915,150 @@ class HomeDashboardWidget(QWidget):
         self.refresh_data()
 
     def _init_ui(self) -> None:
-        self.setStyleSheet(f"""
-            HomeDashboardWidget {{
-                background-color: {COLORS['canvas']};
-            }}
-            QLabel {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-            }}
-            QPushButton {{
-                background: {COLORS['surfaceRaised']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 6px 14px;
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background: {COLORS['surfaceHover']};
-                border-color: {ACCENTS['downloadSorter']};
-            }}
-            QTableWidget {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                gridline-color: transparent;
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-            }}
-            QHeaderView::section {{
-                background-color: {COLORS['surfaceRaised']};
-                color: {COLORS['textMuted']};
-                padding: 6px;
-                border: none;
-                border-bottom: 1px solid {COLORS['border']};
-                font-weight: 600;
-            }}
-            QCheckBox {{
-                color: {COLORS['text']};
-                font-family: '{TYPE['ui']}';
-                font-size: 11px;
-                spacing: 6px;
-            }}
-            QComboBox {{
-                background: {COLORS['canvas']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['small']}px;
-                color: {COLORS['text']};
-                padding: 4px 8px;
-                font-size: 11px;
-            }}
-        """)
-
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 4, 0, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(20)
 
-        # ---------------------------------------------------------
-        # 1. Hero Card: Status & Quick Actions
-        # ---------------------------------------------------------
-        self._status_card = QFrame()
-        self._status_card.setObjectName("statusCard")
-        self._hero_card = self._status_card  # Test compatibility alias
-        self._status_card.setStyleSheet(f"""
-            QFrame#statusCard {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['card']}px;
-            }}
-        """)
-        hero_layout = QVBoxLayout(self._status_card)
-        hero_layout.setContentsMargins(14, 12, 14, 12)
-        hero_layout.setSpacing(12)
+        header, _ = ui_style.page_header("Home")
+        layout.addWidget(header)
 
-        # Top Status Line
+        # Status and the main actions
+        self._status_card, hero = ui_style.card(spacing=6)
+        self._hero_card = self._status_card  # older name kept for callers
+
         status_row = QHBoxLayout()
-        self._status_badge = QLabel("● Active — Watching Downloads")
-        self._status_badge.setFont(QFont(TYPE["ui"], 12, QFont.Weight.Bold))
-        self._status_badge.setStyleSheet(f"color: {COLORS['success']};")
+        status_row.setSpacing(10)
+        self._status_dot = ui_style.status_dot(COLORS["success"], 10)
+        status_row.addWidget(self._status_dot)
+        self._status_badge = ui_style.label("Sorting is on", "section")
         status_row.addWidget(self._status_badge)
-
         status_row.addStretch()
-
-        self._files_today_lbl = QLabel("📊 0 files organized today")
-        self._metric_lbl = self._files_today_lbl  # Test compatibility alias
-        self._files_today_lbl.setFont(QFont(TYPE["ui"], 9, QFont.Weight.DemiBold))
-        self._files_today_lbl.setStyleSheet(f"""
-            background: {COLORS['surfaceRaised']};
-            color: {COLORS['text']};
-            border: 1px solid {COLORS['border']};
-            border-radius: {RADII['small']}px;
-            padding: 4px 10px;
-        """)
+        self._files_today_lbl = ui_style.label("0 files organized today", "muted")
+        self._metric_lbl = self._files_today_lbl
         status_row.addWidget(self._files_today_lbl)
-        hero_layout.addLayout(status_row)
+        hero.addLayout(status_row)
 
-        # Status Description Subtitle
-        self._status_desc_lbl = QLabel("Watching Downloads folder in real-time. Incoming files are routed to organized categories.")
-        self._status_desc_lbl.setFont(QFont(TYPE["ui"], 10))
-        self._status_desc_lbl.setStyleSheet(f"color: {COLORS['textMuted']};")
-        hero_layout.addWidget(self._status_desc_lbl)
+        self._status_desc_lbl = ui_style.label("", "muted", wrap=True)
+        hero.addWidget(self._status_desc_lbl)
+        hero.addSpacing(10)
 
-        # 4 Quick Action Buttons
-        actions_row = QHBoxLayout()
-        actions_row.setSpacing(10)
-
-        self._btn_sort_now = QPushButton("⚡ Sort Downloads Now")
-        self._btn_sort_now.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENTS['downloadSorter']};
-                color: #0B0D12;
-                border: 1px solid {ACCENTS['downloadSorter']};
-                font-weight: bold;
-                padding: 7px 16px;
-            }}
-            QPushButton:hover {{
-                background: #82ecc0;
-            }}
-        """)
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self._btn_sort_now = ui_style.button("Sort Downloads now", "primary", "sort",
+                                             "Sort the files that are in your Downloads folder right now")
         self._btn_sort_now.clicked.connect(self.sort_now)
-        actions_row.addWidget(self._btn_sort_now)
+        actions.addWidget(self._btn_sort_now)
 
-        self._btn_undo_last = QPushButton("↺ Undo Last Sort")
+        self._btn_undo_last = ui_style.button("Undo last sort", None, "undo",
+                                              "Put the files from the most recent sort back where they were")
         self._btn_undo_last.clicked.connect(self.undo_last)
-        actions_row.addWidget(self._btn_undo_last)
+        actions.addWidget(self._btn_undo_last)
 
-        self._btn_open_downloads = QPushButton("📂 Open Downloads Folder")
-        self._btn_open_downloads.clicked.connect(self.open_downloads)
-        actions_row.addWidget(self._btn_open_downloads)
-
-        self._btn_pause_resume = QPushButton("⏸ Pause / ▶ Resume")
+        self._btn_pause_resume = ui_style.button("Pause sorting", None, "pause")
         self._btn_pause_resume.clicked.connect(self.toggle_pause)
-        actions_row.addWidget(self._btn_pause_resume)
+        actions.addWidget(self._btn_pause_resume)
 
-        actions_row.addStretch()
-        hero_layout.addLayout(actions_row)
+        actions.addStretch()
+        self._btn_open_downloads = ui_style.button("Open Downloads", "ghost", "folder")
+        self._btn_open_downloads.clicked.connect(self.open_downloads)
+        actions.addWidget(self._btn_open_downloads)
+        hero.addLayout(actions)
         layout.addWidget(self._status_card)
 
-        # ---------------------------------------------------------
-        # 2. Recent Files Activity Feed
-        # ---------------------------------------------------------
-        activity_box = QVBoxLayout()
-        activity_box.setSpacing(6)
-
+        # Recently sorted files
         feed_header = QHBoxLayout()
-        feed_title = QLabel("📋 Recent Sorting Activity")
-        feed_title.setFont(QFont(TYPE["ui"], 11, QFont.Weight.Bold))
-        feed_header.addWidget(feed_title)
-
+        feed_header.addWidget(ui_style.label("Recently sorted", "section"))
         feed_header.addStretch()
-
-        self._refresh_btn = QPushButton("↻ Refresh")
-        self._refresh_btn.setMinimumHeight(26)
+        self._refresh_btn = ui_style.icon_button("refresh", "Refresh")
         self._refresh_btn.clicked.connect(self.refresh_data)
         feed_header.addWidget(self._refresh_btn)
-        activity_box.addLayout(feed_header)
+        layout.addLayout(feed_header)
 
-        # Container layout for activity table and empty state
         self._activity_layout = QVBoxLayout()
+        self._activity_layout.setSpacing(0)
 
-        self._empty_state_lbl = QLabel("No files organized yet. When files land in Downloads, they will appear here.")
-        self._empty_widget = self._empty_state_lbl  # Test compatibility alias
+        self._empty_card, empty = ui_style.card(margins=(24, 32, 24, 32), spacing=8)
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mascot = SorterMascotWidget(self._empty_card)
+        mascot.set_state("happy")
+        empty.addWidget(mascot, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._empty_state_lbl = ui_style.label("Nothing sorted yet", "section")
         self._empty_state_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._empty_state_lbl.setStyleSheet(f"""
-            background: {COLORS['surface']};
-            border: 1px dashed {COLORS['border']};
-            border-radius: {RADII['small']}px;
-            color: {COLORS['textMuted']};
-            padding: 30px;
-            font-size: 11px;
-        """)
-        self._activity_layout.addWidget(self._empty_state_lbl)
+        self._empty_widget = self._empty_card
+        empty.addWidget(self._empty_state_lbl)
+        hint = ui_style.label("Files you download will show up here after they're sorted.", "muted")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.addWidget(hint)
+        self._activity_layout.addWidget(self._empty_card)
 
         self._activity_table = QTableWidget()
         self._activity_table.setColumnCount(4)
-        self._activity_table.setHorizontalHeaderLabels(["Filename", "Folder", "Timestamp", "Action"])
-        self._activity_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._activity_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        self._activity_table.setColumnWidth(1, 150)
-        self._activity_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self._activity_table.setColumnWidth(2, 160)
-        self._activity_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self._activity_table.setColumnWidth(3, 140)
+        self._activity_table.setHorizontalHeaderLabels(["File", "Moved to", "When", ""])
+        hdr = self._activity_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        hdr.setHighlightSections(False)
+        hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self._activity_table.setColumnWidth(1, 190)
+        self._activity_table.setColumnWidth(2, 150)
+        self._activity_table.setColumnWidth(3, 48)
         self._activity_table.verticalHeader().setVisible(False)
+        self._activity_table.verticalHeader().setDefaultSectionSize(40)
+        self._activity_table.setShowGrid(False)
         self._activity_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._activity_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._activity_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._activity_layout.addWidget(self._activity_table)
 
-        activity_box.addLayout(self._activity_layout, 1)
-        layout.addLayout(activity_box, 1)
+        layout.addLayout(self._activity_layout, 1)
 
-        # ---------------------------------------------------------
-        # 3. Quick Preferences Bar
-        # ---------------------------------------------------------
-        self._pref_bar = QFrame()
-        self._pref_bar.setObjectName("prefBar")
-        self._pref_bar.setStyleSheet(f"""
-            QFrame#prefBar {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: {RADII['card']}px;
-            }}
-        """)
-        pref_layout = QHBoxLayout(self._pref_bar)
-        pref_layout.setContentsMargins(12, 6, 12, 6)
-        pref_layout.setSpacing(14)
+    # ---- state ---------------------------------------------------------
 
-        self._chk_startup = QCheckBox("Windows Startup")
-        self._chk_startup.toggled.connect(self._on_startup_toggled)
-        pref_layout.addWidget(self._chk_startup)
-
-        self._chk_context = QCheckBox("Context Menu")
-        self._chk_context.toggled.connect(self._on_context_menu_toggled)
-        pref_layout.addWidget(self._chk_context)
-
-        self._chk_unpack = QCheckBox("Auto-Unpack ZIPs")
-        self._chk_unpack.toggled.connect(self._on_unpack_toggled)
-        pref_layout.addWidget(self._chk_unpack)
-
-        pref_layout.addStretch()
-
-        pref_layout.addWidget(QLabel("Profile:"))
-        self._persona_combo = QComboBox()
-        self._persona_combo.addItem("🏠 Everyday & Home", "everyday_home")
-        self._persona_combo.addItem("🎓 Student & School", "academic_student")
-        self._persona_combo.addItem("💼 Office & Finance", "office_admin")
-        self._persona_combo.addItem("🛠️ 3D Printing & CNC Maker", "maker_3d")
-        self._persona_combo.currentIndexChanged.connect(self._on_persona_combo_changed)
-        pref_layout.addWidget(self._persona_combo)
-
-        self._btn_rerun_tour = QPushButton("🧭 Re-run Welcome Tour...")
-        self._btn_rerun_tour.clicked.connect(self._on_rerun_tour)
-        pref_layout.addWidget(self._btn_rerun_tour)
-
-        layout.addWidget(self._pref_bar)
-
-    def refresh_status(self) -> None:
-        """Update active status badge, move count metric, and pause button."""
+    def _sorter_state(self) -> str:
+        """'paused', 'running' or 'stopped'."""
         is_paused = False
         if sorter and hasattr(sorter, "is_paused"):
             try:
                 is_paused = sorter.is_paused()
             except Exception:
                 pass
-
+        if is_paused:
+            return "paused"
         is_running = True
         if hasattr(suite_data, "is_sorter_running"):
             try:
                 is_running = suite_data.is_sorter_running()
             except Exception:
                 pass
+        return "running" if is_running else "stopped"
 
-        if is_paused:
-            self._status_badge.setText("⏸ Paused — Monitoring Suspended")
-            self._status_badge.setStyleSheet(f"color: {COLORS['warning']};")
-            self._btn_pause_resume.setText("▶ Resume Sorter")
-        elif is_running:
-            self._status_badge.setText("● Active — Watching Downloads")
-            self._status_badge.setStyleSheet(f"color: {COLORS['success']};")
-            self._btn_pause_resume.setText("⏸ Pause Sorter")
+    def refresh_status(self) -> None:
+        """Update the status line, the files-today count, and the pause button."""
+        state = self._sorter_state()
+        if state == "paused":
+            title, desc, color = ("Sorting is paused",
+                                  "New downloads stay where they land until you resume.",
+                                  COLORS["warning"])
+            btn_text, btn_icon = "Resume sorting", "play"
+        elif state == "running":
+            title, desc, color = ("Sorting is on",
+                                  "New files in your Downloads folder are filed automatically.",
+                                  COLORS["success"])
+            btn_text, btn_icon = "Pause sorting", "pause"
         else:
-            self._status_badge.setText("○ Idle — Sorter Stopped")
-            self._status_badge.setStyleSheet(f"color: {COLORS['textMuted']};")
-            self._btn_pause_resume.setText("▶ Start Sorter")
+            title, desc, color = ("Sorting is off",
+                                  "Download Sorter isn't running, so new downloads aren't filed. "
+                                  "You can still sort by hand.",
+                                  COLORS["textFaint"])
+            btn_text, btn_icon = "Start sorting", "play"
+        self._status_badge.setText(title)
+        self._status_desc_lbl.setText(desc)
+        ui_style.set_status_dot(self._status_dot, color)
+        self._btn_pause_resume.setText(btn_text)
+        self._btn_pause_resume.setIcon(ui_icons.icon(btn_icon))
 
-        # Files organized today metric
         moves_today = 0
         if sorter and hasattr(sorter, "IncrementalHistoryReader") and hasattr(sorter, "HISTORY_FILE"):
             try:
@@ -1260,44 +1066,16 @@ class HomeDashboardWidget(QWidget):
                 moves_today = reader.moves_today()
             except Exception:
                 pass
-        self._files_today_lbl.setText(f"📊 {moves_today} files organized today")
+        noun = "file" if moves_today == 1 else "files"
+        self._files_today_lbl.setText(f"{moves_today} {noun} organized today")
 
     def refresh_data(self) -> None:
-        """Reload configuration, preferences, and recent activity records."""
+        """Reload settings and the recent activity list."""
         if hasattr(suite_data, "load_sorter_config"):
             self._config = suite_data.load_sorter_config()
 
         self.refresh_status()
 
-        # Update checkboxes without triggering signals
-        if hasattr(suite_data, "is_startup_enabled"):
-            try:
-                self._chk_startup.blockSignals(True)
-                self._chk_startup.setChecked(bool(suite_data.is_startup_enabled()))
-                self._chk_startup.blockSignals(False)
-            except Exception:
-                pass
-
-        if hasattr(suite_data, "is_context_menu_enabled"):
-            try:
-                self._chk_context.blockSignals(True)
-                self._chk_context.setChecked(bool(suite_data.is_context_menu_enabled()))
-                self._chk_context.blockSignals(False)
-            except Exception:
-                pass
-
-        self._chk_unpack.blockSignals(True)
-        self._chk_unpack.setChecked(_auto_unzip_enabled(self._config))
-        self._chk_unpack.blockSignals(False)
-
-        current_persona = self._config.get("user_persona", "everyday_home")
-        idx = self._persona_combo.findData(current_persona)
-        if idx >= 0:
-            self._persona_combo.blockSignals(True)
-            self._persona_combo.setCurrentIndex(idx)
-            self._persona_combo.blockSignals(False)
-
-        # Load Recent Activity records
         records: list[dict[str, Any]] = []
         if hasattr(suite_data, "get_recent_activity"):
             try:
@@ -1306,49 +1084,38 @@ class HomeDashboardWidget(QWidget):
                 records = []
 
         if not records:
-            self._empty_state_lbl.setVisible(True)
+            self._empty_card.setVisible(True)
             self._activity_table.setVisible(False)
             self._activity_table.setRowCount(0)
-        else:
-            self._empty_state_lbl.setVisible(False)
-            self._activity_table.setVisible(True)
-            self._activity_table.setRowCount(0)
-            self._activity_table.setRowCount(len(records))
+            return
 
-            for row, rec in enumerate(records):
-                filename = str(rec.get("filename", ""))
-                folder = str(rec.get("folder", ""))
-                ts = str(rec.get("timestamp", ""))
-                dest = str(rec.get("dest", ""))
+        self._empty_card.setVisible(False)
+        self._activity_table.setVisible(True)
+        self._activity_table.setRowCount(0)
+        self._activity_table.setRowCount(len(records))
+        for row, rec in enumerate(records):
+            filename = str(rec.get("filename", ""))
+            folder = str(rec.get("folder", ""))
+            dest = str(rec.get("dest", ""))
 
-                f_item = QTableWidgetItem(filename)
-                f_item.setFont(QFont(TYPE["mono"], 10))
-                self._activity_table.setItem(row, 0, f_item)
+            f_item = QTableWidgetItem(filename)
+            f_item.setToolTip(dest or filename)
+            self._activity_table.setItem(row, 0, f_item)
 
-                folder_item = QTableWidgetItem(f"📁 {folder}")
-                folder_item.setForeground(QColor(ACCENTS["downloadSorter"]))
-                self._activity_table.setItem(row, 1, folder_item)
+            folder_item = QTableWidgetItem(folder)
+            folder_item.setIcon(ui_icons.icon("folder"))
+            folder_item.setForeground(QColor(COLORS["textMuted"]))
+            self._activity_table.setItem(row, 1, folder_item)
 
-                ts_item = QTableWidgetItem(ts)
-                ts_item.setForeground(QColor(COLORS["textMuted"]))
-                self._activity_table.setItem(row, 2, ts_item)
+            ts_item = QTableWidgetItem(_friendly_time(str(rec.get("timestamp", ""))))
+            ts_item.setForeground(QColor(COLORS["textMuted"]))
+            self._activity_table.setItem(row, 2, ts_item)
 
-                show_btn = QPushButton("📂 Show in Folder")
-                show_btn.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {COLORS['surfaceRaised']};
-                        border: 1px solid {COLORS['border']};
-                        border-radius: 4px;
-                        padding: 3px 8px;
-                        font-size: 10px;
-                    }}
-                    QPushButton:hover {{
-                        border-color: {ACCENTS['downloadSorter']};
-                        color: {ACCENTS['downloadSorter']};
-                    }}
-                """)
-                show_btn.clicked.connect(lambda _c=False, p=dest: self._show_in_folder(p))
-                self._activity_table.setCellWidget(row, 3, show_btn)
+            show_btn = ui_style.icon_button("reveal", "Show in folder")
+            show_btn.clicked.connect(lambda _c=False, p=dest: self._show_in_folder(p))
+            self._activity_table.setCellWidget(row, 3, show_btn)
+
+    # ---- actions -------------------------------------------------------
 
     def _show_in_folder(self, target_path: str) -> None:
         """Highlight target file in Windows Explorer."""
@@ -1364,12 +1131,12 @@ class HomeDashboardWidget(QWidget):
             pass
 
     def sort_now(self) -> int:
-        """Trigger an immediate manual sort of downloads."""
+        """Sort Downloads now, as one batch so "Undo last sort" reverses all of it."""
         count = 0
         if sorter and hasattr(sorter, "sort_existing"):
             try:
                 cfg = suite_data.load_sorter_config() if hasattr(suite_data, "load_sorter_config") else self._config
-                count = sorter.sort_existing(cfg, dry_run=False)
+                count = sorter.sort_existing(cfg, dry_run=False, batch_id=uuid.uuid4().hex[:8])
             except Exception:
                 pass
         self.refresh_data()
@@ -1408,17 +1175,157 @@ class HomeDashboardWidget(QWidget):
             pass
 
     def toggle_pause(self) -> None:
-        """Toggle sorter background pause state."""
-        if sorter and hasattr(sorter, "is_paused") and hasattr(sorter, "set_paused"):
+        """Pause or resume sorting; start the background sorter if it isn't running."""
+        state = self._sorter_state()
+        if state == "stopped":
+            self._start_background_sorter()
+        elif sorter and hasattr(sorter, "is_paused") and hasattr(sorter, "set_paused"):
             try:
-                new_state = not sorter.is_paused()
-                sorter.set_paused(new_state)
+                sorter.set_paused(not sorter.is_paused())
             except Exception:
                 pass
         self.refresh_status()
 
+    def _start_background_sorter(self) -> None:
+        if sys.platform != "win32" or not hasattr(suite_data, "_get_launch_command"):
+            return
+        try:
+            subprocess.Popen(
+                suite_data._get_launch_command(["--tray"]),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            pass
+
     def set_persona(self, persona_id: str) -> None:
-        """Update internal persona state and combo selection."""
+        """Kept for callers; the profile now lives on the Settings page."""
+        self._config["user_persona"] = persona_id
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if hasattr(self, "_refresh_timer") and not self._refresh_timer.isActive():
+            self._refresh_timer.start()
+            self.refresh_status()
+
+    def closeEvent(self, event) -> None:
+        if hasattr(self, "_refresh_timer") and self._refresh_timer.isActive():
+            self._refresh_timer.stop()
+        super().closeEvent(event)
+
+    def hideEvent(self, event) -> None:
+        if hasattr(self, "_refresh_timer") and self._refresh_timer.isActive():
+            self._refresh_timer.stop()
+        super().hideEvent(event)
+
+
+class SettingsWidget(QWidget):
+    """Settings page: profile, Windows integration, zip handling, and About."""
+
+    persona_changed = Signal(str)
+
+    def __init__(self, config: dict[str, Any] | None = None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._config = copy.deepcopy(config) if config is not None else (
+            suite_data.load_sorter_config() if hasattr(suite_data, "load_sorter_config") else {}
+        )
+        self._init_ui()
+        self.refresh_data()
+
+    def _section(self, layout: QVBoxLayout, title: str, description: str = "") -> QVBoxLayout:
+        frame, body = ui_style.card(spacing=10)
+        body.addWidget(ui_style.label(title, "section"))
+        if description:
+            body.addWidget(ui_style.label(description, "muted", wrap=True))
+        layout.addWidget(frame)
+        return body
+
+    def _init_ui(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer.addWidget(scroll)
+        content = QWidget()
+        scroll.setWidget(content)
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 8, 0)
+        layout.setSpacing(16)
+
+        header, _ = ui_style.page_header("Settings")
+        layout.addWidget(header)
+
+        profile = self._section(
+            layout, "Profile",
+            "Your profile adds starter rules for the kinds of files you download. "
+            "Rules you've added yourself are kept when you switch.",
+        )
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self._persona_combo = QComboBox()
+        for pid, text in PERSONA_LABELS:
+            self._persona_combo.addItem(ui_icons.icon(ui_icons.PERSONA_ICONS[pid]), text, pid)
+        self._persona_combo.setMinimumWidth(240)
+        self._persona_combo.currentIndexChanged.connect(self._on_persona_combo_changed)
+        row.addWidget(self._persona_combo)
+        row.addStretch()
+        self._btn_rerun_tour = ui_style.button("Run setup again")
+        self._btn_rerun_tour.clicked.connect(self._on_rerun_tour)
+        row.addWidget(self._btn_rerun_tour)
+        profile.addLayout(row)
+
+        windows = self._section(layout, "Windows")
+        self._chk_startup = QCheckBox("Start Download Sorter when I sign in")
+        self._chk_startup.toggled.connect(self._on_startup_toggled)
+        windows.addWidget(self._chk_startup)
+        self._chk_context = QCheckBox("Add “Sort with Download Sorter” to the folder right-click menu")
+        self._chk_context.toggled.connect(self._on_context_menu_toggled)
+        windows.addWidget(self._chk_context)
+
+        downloads = self._section(layout, "Zip files")
+        self._chk_unpack = QCheckBox("Unzip downloaded .zip files into the Extracted folder")
+        self._chk_unpack.toggled.connect(self._on_unpack_toggled)
+        downloads.addWidget(self._chk_unpack)
+        downloads.addWidget(ui_style.label("The original zip file is kept in the Archives folder.", "muted", wrap=True))
+
+        info = self._section(layout, "About")
+        info.addWidget(ui_style.label(f"{about.APP_NAME} {about.__version__}"))
+        info.addWidget(ui_style.label(about.CREDIT, "muted"))
+        link = ui_style.label(
+            f'<a href="{about.REPO_URL}" style="color: {COLORS["info"]}; text-decoration: none;">'
+            f"{about.REPO_URL.replace('https://', '')}</a> · {about.LICENSE_NAME} license",
+            "muted",
+        )
+        link.setOpenExternalLinks(True)
+        info.addWidget(link)
+
+        layout.addStretch()
+
+    def refresh_data(self) -> None:
+        if hasattr(suite_data, "load_sorter_config"):
+            self._config = suite_data.load_sorter_config()
+        for chk, getter in (
+            (self._chk_startup, getattr(suite_data, "is_startup_enabled", None)),
+            (self._chk_context, getattr(suite_data, "is_context_menu_enabled", None)),
+        ):
+            if getter is None:
+                continue
+            try:
+                chk.blockSignals(True)
+                chk.setChecked(bool(getter()))
+            except Exception:
+                pass
+            finally:
+                chk.blockSignals(False)
+
+        self._chk_unpack.blockSignals(True)
+        self._chk_unpack.setChecked(_auto_unzip_enabled(self._config))
+        self._chk_unpack.blockSignals(False)
+        self.set_persona(self._config.get("user_persona", "everyday_home"))
+
+    def set_persona(self, persona_id: str) -> None:
         idx = self._persona_combo.findData(persona_id)
         if idx >= 0:
             self._persona_combo.blockSignals(True)
@@ -1476,16 +1383,4 @@ class HomeDashboardWidget(QWidget):
         wizard = WelcomeWizardDialog(config=self._config, parent=self.window())
         if wizard.exec() == QDialog.DialogCode.Accepted:
             self.refresh_data()
-            pid = self._config.get("user_persona", "everyday_home")
-            self.set_persona(pid)
-            self.persona_changed.emit(pid)
-
-    def closeEvent(self, event) -> None:
-        if hasattr(self, "_refresh_timer") and self._refresh_timer.isActive():
-            self._refresh_timer.stop()
-        super().closeEvent(event)
-
-    def hideEvent(self, event) -> None:
-        if hasattr(self, "_refresh_timer") and self._refresh_timer.isActive():
-            self._refresh_timer.stop()
-        super().hideEvent(event)
+            self.persona_changed.emit(self._config.get("user_persona", "everyday_home"))
