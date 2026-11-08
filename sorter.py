@@ -87,6 +87,12 @@ GCODE_SNIFFER_EXTENSIONS: set[str] = {
     ".nc", ".tap", ".ngc", ".gcode", ".bgcode", ".gco", ".g",
 }
 
+# Documents folders scanned for stray 3D/CAD files when the maker profile is chosen.
+MAKER_DOCUMENT_SOURCES: list[str] = [
+    "${USERPROFILE}\\Documents",
+    "${USERPROFILE}\\OneDrive\\Documents",
+]
+
 DEFAULT_CONFIG: dict = {
     "watch": {
         "folder": "${USERPROFILE}\\Downloads",
@@ -103,10 +109,9 @@ DEFAULT_CONFIG: dict = {
     "gcode_sniffer_enabled": True,
     "haas_destination": "Code\\Haas",
     "gcode_destination": "Code\\Gcode",
-    "document_sources": [
-        "${USERPROFILE}\\Documents",
-        "${USERPROFILE}\\OneDrive\\Documents",
-    ],
+    # Moving 3D/CAD files out of Documents is a maker feature: it is off until the
+    # user picks the "3D Printing, CAD & CNC Maker" profile (see MAKER_DOCUMENT_SOURCES).
+    "document_sources": [],
     "documents_keep_extensions": [
         ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".csv", ".odt", ".ods", ".rtf",
     ],
@@ -117,7 +122,7 @@ DEFAULT_CONFIG: dict = {
         ".dwg", ".dxf", ".nc", ".tap", ".ngc",
     ],
     "documents_ignore_dirs": [
-        "antigravity", "Sorter Recovery", "CAD & 3D Projects", "Arduino", "KiCad", "MAXON",
+        "Sorter Recovery", "CAD & 3D Projects", "Arduino", "KiCad", "MAXON",
         ".git", "node_modules", "My Games", "Saved Games", "Steam",
         "Electronic Arts", "EA Games", "Paradox Interactive", "Rockstar Games",
         "Adobe", "PowerToys", "SOLIDCast", "SOLIDCast Projects",
@@ -128,29 +133,9 @@ DEFAULT_CONFIG: dict = {
     "ignore_names": [
         "desktop.ini", "thumbs.db",
     ],
-    "keyword_rules": [
-        {
-            "name": "IME 3311 Coursework",
-            "folder": "Documents\\School\\IME 3311",
-            "match": [
-                "ime3311", "ime 3311", "ime-3311", "solidcast",
-                "casting congress", "metal casting", "foundry",
-            ],
-            "extensions": [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt", ".rtf", ".odt"],
-            "enabled": True,
-        },
-        {
-            "name": "School Documents",
-            "folder": "Documents\\School",
-            "match": [
-                "transcript", "homework", "assignment", "syllabus",
-                "calpoly", "cal poly", "pomona",
-                "me3210", "me 3210", "exam", "review",
-            ],
-            "extensions": [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt"],
-            "enabled": True,
-        },
-    ],
+    # Keyword rules are personal; the welcome wizard adds a starter set for the
+    # profile the user picks.  Out of the box, files are sorted by extension only.
+    "keyword_rules": [],
     "extension_rules": [
         {"name": "3D STL", "folder": "3D Models\\STL", "extensions": [".stl"], "enabled": True},
         {"name": "3D 3MF", "folder": "3D Models\\3MF", "extensions": [".3mf"], "enabled": True},
@@ -938,10 +923,28 @@ def is_keep_protected(path: Path) -> bool:
     return safe_ops.keep_marker_dir(path) is not None
 
 
+def same_folder(a: Path | str, b: Path | str) -> bool:
+    """True when ``a`` and ``b`` are the same folder, however each is spelled.
+
+    A folder can be reached by more than one spelling: a short 8.3 name
+    (C:\\Users\\RUNNER~1) and its long name, a linked folder, a mapped drive,
+    different letter case on Windows. Comparing the paths as written treats those
+    as different folders.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        pass
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, ValueError):
+        return Path(a) == Path(b)
+
+
 def is_managed_path(path: Path, root: Path, folders: list[str]) -> bool:
     try:
-        relative = path.resolve().relative_to(root)
-    except ValueError:
+        relative = path.resolve().relative_to(Path(root).resolve())
+    except (ValueError, OSError):
         return False
     if not relative.parts:
         return True
@@ -1582,9 +1585,9 @@ def move_file(
         return None
     if is_keep_protected(path):
         return None
-    if is_managed_path(path, from_root, folders) and path.parent != from_root:
-        return None
-    if path.parent != from_root:
+    # Only files directly in the folder being sorted are moved; anything in a
+    # sub-folder (including the category folders) is left where it is.
+    if not same_folder(path.parent, from_root):
         return None
 
     if check_age:
@@ -1769,12 +1772,48 @@ def relocate_from_documents(
     return destination
 
 
+def existing_files_cutoff(config: dict) -> float | None:
+    """Time before which files are left alone by automatic sweeps, or None.
+
+    The welcome wizard stores ``skip_files_before`` when the user unticks
+    "Organize existing files": the files already in Downloads at that moment are
+    theirs to keep where they are.  Explicit "Sort now" actions ignore it.
+    """
+    value = config.get("skip_files_before")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def arrived_before(path: Path, cutoff: float | None) -> bool:
+    """True when path was created and last changed before cutoff.
+
+    Uses the newer of the modified and created times: some browsers stamp a
+    download with the server's modified date, but its creation time on Windows
+    is when it landed in Downloads.
+    """
+    if cutoff is None:
+        return False
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    newest = st.st_mtime
+    created = getattr(st, "st_birthtime", None)
+    if created is None and sys.platform == "win32":
+        created = st.st_ctime
+    if created is not None:
+        newest = max(newest, created)
+    return newest < cutoff
+
+
 def sort_existing(
     config: dict,
     dry_run: bool = False,
     batch_id: str = "",
     target_dir: Path | None = None,
     routing_context: RoutingContext | None = None,
+    skip_before: float | None = None,
 ) -> int:
     downloads = watch_root(config)
     if not dry_run:
@@ -1785,6 +1824,8 @@ def sort_existing(
     moved = 0
     for item in list(root.iterdir()):
         if item.is_file():
+            if arrived_before(item, skip_before):
+                continue
             if move_file(
                 item,
                 config,
@@ -1803,6 +1844,7 @@ def sort_existing_documents(
     dry_run: bool = False,
     batch_id: str = "",
     routing_context: RoutingContext | None = None,
+    skip_before: float | None = None,
 ) -> int:
     if not dry_run:
         ensure_tree(config)
@@ -1810,6 +1852,8 @@ def sort_existing_documents(
     for source in document_roots(config):
         logging.info("Scanning Documents source %s", source)
         for item in iter_files(source, config, routing_context):
+            if arrived_before(item, skip_before):
+                continue
             if relocate_from_documents(
                 item,
                 config,
@@ -1914,6 +1958,7 @@ def sort_existing_misplaced(
     dry_run: bool = False,
     batch_id: str = "",
     routing_context: RoutingContext | None = None,
+    skip_before: float | None = None,
 ) -> int:
     """Sweep direct children of all managed category folders for misplaced files."""
     downloads = watch_root(config)
@@ -1924,6 +1969,8 @@ def sort_existing_misplaced(
         if folder.exists() and folder.is_dir():
             for item in list(folder.iterdir()):
                 if item.is_file():
+                    if arrived_before(item, skip_before):
+                        continue
                     if reclassify_misplaced_file(
                         item,
                         config,

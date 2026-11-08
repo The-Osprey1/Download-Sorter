@@ -18,8 +18,22 @@ import safe_ops
 import sorter
 
 
+def _ignore_download_readiness(test: unittest.TestCase) -> None:
+    """Treat every existing file as finished downloading for the rest of ``test``.
+
+    These tests are about the 3MF hold, not about waiting for downloads to finish.
+    On Windows a file written a moment ago can briefly look unfinished (the
+    antivirus still has it open, or its modified time is a clock tick ahead),
+    which made the hold tests fail now and then on the Windows test machines.
+    """
+    patcher = patch("sorter.is_file_ready_to_move", side_effect=lambda path, settle: Path(path).is_file())
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
 class Test3MFHoldLifecycle(unittest.TestCase):
     def setUp(self) -> None:
+        _ignore_download_readiness(self)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.test_root = Path(self.temp_dir.name)
         self.downloads = self.test_root / "Downloads"
@@ -244,6 +258,7 @@ class TestMakerWorldAndSecurity(unittest.TestCase):
 
 class Test3MFMilestone3Fixes(unittest.TestCase):
     def setUp(self) -> None:
+        _ignore_download_readiness(self)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.test_root = Path(self.temp_dir.name)
         self.downloads = self.test_root / "Downloads"

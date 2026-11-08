@@ -674,15 +674,15 @@ class TestStagedMachineRemodelTier1AndTier2(unittest.TestCase):
     # ---- Tier 1: Feature Coverage (>=5 tests) ----
 
     def test_t1_machine_remodel_widget_is_third_tab(self) -> None:
-        """F4-T1-1: MachineRemodelWidget is verified as the 3rd tab in RulesManagerDialog."""
+        """F4-T1-1: MachineRemodelWidget is the "Clean up a folder" page of RulesManagerDialog."""
         import rules_manager
         dlg = rules_manager.RulesManagerDialog()
         try:
-            self.assertEqual(dlg._tabs.count(), 3)
-            tab_text = dlg._tabs.tabText(2)
-            self.assertIn("Remodel", tab_text)
-            self.assertIsInstance(dlg._tabs.widget(2), rules_manager.MachineRemodelWidget)
+            dlg.switch_view("remodel")
             self.assertIsInstance(dlg._remodel_widget, rules_manager.MachineRemodelWidget)
+            self.assertEqual(dlg._view_stack.currentIndex(), rules_manager.RulesManagerDialog.PAGES.index("cleanup"))
+            self.assertTrue(dlg._view_stack.currentWidget().isAncestorOf(dlg._remodel_widget))
+            self.assertTrue(dlg._nav_btn_cleanup.isChecked())
         finally:
             dlg.close()
             dlg.deleteLater()

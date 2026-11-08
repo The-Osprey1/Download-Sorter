@@ -421,8 +421,8 @@ def test_home_dashboard_hero_card_and_status(qapp, monkeypatch):
         assert hasattr(widget, "_status_card") or hasattr(widget, "_hero_card"), "Widget missing status hero card"
         assert hasattr(widget, "_status_badge"), "Widget missing status badge"
         badge_text = widget._status_badge.text().lower()
-        assert any(status in badge_text for status in ["active", "protect", "monitor", "running"]), (
-            f"Status badge text '{widget._status_badge.text()}' does not indicate active protection"
+        assert badge_text == "sorting is on", (
+            f"Status badge text '{widget._status_badge.text()}' does not say sorting is on"
         )
 
         # Counter / Metric
@@ -553,7 +553,7 @@ def test_home_dashboard_maker_features_visibility(qapp, tmp_path, monkeypatch):
 
 
 def test_rules_manager_top_level_segmented_switcher(qapp, tmp_path, monkeypatch):
-    """Verify top-level segmented view switcher toggles views while strictly preserving _tabs.count() == 3."""
+    """The sidebar switches between the four pages; the Rules page keeps its two rule tabs."""
     import rules_manager
     import config_manager
 
@@ -566,20 +566,21 @@ def test_rules_manager_top_level_segmented_switcher(qapp, tmp_path, monkeypatch)
         dlg.show()
         qapp.processEvents()
 
-        # STRICT CONTRACT: _tabs.count() must remain exactly 3 (Keyword, Extension, Remodel)
-        assert hasattr(dlg, "_tabs"), "RulesManagerDialog must retain self._tabs"
-        assert dlg._tabs.count() == 3, f"Expected exactly 3 tabs in RulesManagerDialog._tabs, got {dlg._tabs.count()}"
+        assert dlg._tabs.count() == 2, f"Expected name rules and file types tabs, got {dlg._tabs.count()}"
+        assert [dlg._tabs.tabText(i) for i in range(2)] == ["Name rules", "File types"]
 
-        # Segmented view switcher verification
-        assert hasattr(dlg, "_view_switcher") or hasattr(dlg, "_seg_btn_home"), "RulesManagerDialog missing top-level segmented view switcher"
-        if hasattr(dlg, "switch_view"):
-            dlg.switch_view("customize")
+        expected = {"home": 0, "customize": 1, "rules": 1, "remodel": 2, "cleanup": 2, "settings": 3}
+        for name, index in expected.items():
+            dlg.switch_view(name)
             qapp.processEvents()
-            assert dlg._tabs.count() == 3
+            assert dlg._view_stack.currentIndex() == index, name
+            assert dlg._view_btn_group.checkedId() == index, name
+            assert dlg._tabs.count() == 2
 
-            dlg.switch_view("home")
-            qapp.processEvents()
-            assert dlg._tabs.count() == 3
+        # Clicking a sidebar button switches page too
+        dlg._nav_btn_settings.click()
+        qapp.processEvents()
+        assert dlg._view_stack.currentIndex() == 3
     finally:
         dlg.close()
         dlg.deleteLater()

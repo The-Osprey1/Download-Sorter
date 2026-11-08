@@ -23,8 +23,10 @@ from sorter import (
     DEFAULT_CONFIG,
     DEFAULT_CONFIG_PATH,
     LOG_DIR,
+    MAKER_DOCUMENT_SOURCES,
     USER_CONFIG_PATH,
     apply_v2_defaults,
+    matches_keyword as _matches_keyword,
 )
 
 CAD_EXTENSIONS: list[str] = sorted(list(SORTER_CAD_EXTENSIONS))
@@ -629,9 +631,9 @@ def reset_sorter_config_to_defaults(config_path: Path | str | None = None) -> di
 PERSONA_PROFILES: list[dict[str, Any]] = [
     {
         "id": "everyday_home",
-        "name": "Everyday & Home PC",
-        "icon": "🏠",
-        "description": "Keep Downloads tidy by automatically filing PDFs, photos, videos, music, installers, and zip files into clear folders.",
+        "name": "Everyday",
+        "icon": "profile_home",
+        "description": "Documents, photos, videos, music, installers and zip files each go into their own folder.",
         "presets": ["office_admin"],
         "show_maker_features": False,
         "default_rules": [
@@ -660,9 +662,9 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
     },
     {
         "id": "academic_student",
-        "name": "Student & Schoolwork",
-        "icon": "🎓",
-        "description": "Organize syllabi, homework assignments, lecture notes, study guides, and research papers alongside everyday downloads.",
+        "name": "Student",
+        "icon": "profile_school",
+        "description": "Everything in Everyday, plus folders for syllabi, notes, assignments, exams and research papers.",
         "presets": ["academic_student", "office_admin"],
         "show_maker_features": False,
         "default_rules": [
@@ -710,9 +712,9 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
     },
     {
         "id": "office_admin",
-        "name": "Office, Invoices & Work",
-        "icon": "💼",
-        "description": "Automatically sort invoices, receipts, tax forms, spreadsheets, resumes, and travel documents.",
+        "name": "Office and work",
+        "icon": "profile_office",
+        "description": "Everything in Everyday, plus folders for invoices, receipts, tax forms, résumés and travel bookings.",
         "presets": ["office_admin"],
         "show_maker_features": False,
         "default_rules": [
@@ -770,9 +772,9 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
     },
     {
         "id": "maker_3d",
-        "name": "3D Printing, CAD & CNC Maker",
-        "icon": "🛠️",
-        "description": "Full engineering suite: MakerWorld 3MF grace-period holds, Bambu/Orca slicer awareness, CAD assemblies, and Haas CNC toolpaths.",
+        "name": "3D printing, CAD and CNC",
+        "icon": "profile_maker",
+        "description": "Everything in Everyday, plus 3D models, slicer projects and G-code. Also moves stray CAD and 3D files out of Documents.",
         "presets": ["maker_3d", "office_admin"],
         "show_maker_features": True,
         "default_rules": [
@@ -829,6 +831,13 @@ def apply_persona_profile(config: dict[str, Any], persona_id: str) -> dict[str, 
     updated["onboarding_completed"] = True
     if "show_maker_features" in profile:
         updated["show_maker_features"] = profile["show_maker_features"]
+        # Pulling 3D/CAD files out of Documents only makes sense for makers; for
+        # everyone else it would break projects (Blender, SolidWorks) kept there.
+        if profile["show_maker_features"]:
+            if not updated.get("document_sources"):
+                updated["document_sources"] = list(MAKER_DOCUMENT_SOURCES)
+        else:
+            updated["document_sources"] = []
 
     # Populate default rules for the persona
     new_rules: list[dict[str, Any]] = copy.deepcopy(profile.get("default_rules", []))
@@ -865,13 +874,22 @@ _MAKER_RECOMMEND_EXTENSIONS: frozenset[str] = frozenset({
     ".nc", ".tap", ".ngc", ".gcode", ".bgcode", ".gco", ".g",
 })
 
+# Names of 3D-printing sites, slicers and printers: a signal on any file type.
 _MAKER_RECOMMEND_KEYWORDS: tuple[str, ...] = (
-    "bambu", "orca", "prusa", "plate", "multicolor", "ams",
-    "slic", "gcode", "haas", "toolpath", "contour", "bracket",
-    "mount", "enclosure", "adapter", "gear", "spacer", "chassis",
-    "flange", "bushing", "3dprint", "voron", "ender", "cad",
-    "creality", "makerworld", "thingiverse", "printables",
+    "bambu", "bambulab", "orcaslicer", "prusa", "prusaslicer", "multicolor",
+    "slicer", "sliced", "gcode", "haas", "toolpath", "3dprint", "3d_print",
+    "3d print", "voron", "creality", "makerworld", "thingiverse", "printables", "cad",
 )
+
+# Part-shape words ("bracket", "gear", ...) are common in everyday filenames too
+# (a USB adapter driver, a gear list), so they only count for downloaded archives,
+# which is how model packs usually arrive.
+_MAKER_PART_KEYWORDS: tuple[str, ...] = (
+    "bracket", "mount", "enclosure", "adapter", "gear", "spacer",
+    "chassis", "flange", "bushing",
+)
+
+_MAKER_ARCHIVE_EXTENSIONS: frozenset[str] = frozenset({".zip", ".7z", ".rar"})
 
 _ACADEMIC_RECOMMEND_KEYWORDS: tuple[str, ...] = (
     "syllabus", "homework", "assignment", "lecture", "exam",
@@ -881,13 +899,19 @@ _ACADEMIC_RECOMMEND_KEYWORDS: tuple[str, ...] = (
     "curriculum", "rubric", "worksheet",
 )
 
-_ACADEMIC_COURSE_CODE_RE = re.compile(r"\b[a-zA-Z]{2,4}\s*[-_]?\s*\d{3,4}[a-zA-Z]?\b")
+_ACADEMIC_COURSE_CODE_RE = re.compile(r"(?:^|[^a-z0-9])[a-z]{2,4}\s*[-_]?\s*\d{3,4}[a-z]?(?:[^a-z0-9]|$)")
+
+# Course codes ("ME 3210", "CS101") only count on document files: camera and
+# screenshot names such as IMG_1234.jpg or DSC_0042.jpg have the same shape.
+_ACADEMIC_COURSE_CODE_EXTENSIONS: frozenset[str] = frozenset({
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".odt", ".odp", ".rtf", ".txt", ".md",
+})
 
 _OFFICE_RECOMMEND_KEYWORDS: tuple[str, ...] = (
     "invoice", "receipt", "billing", "statement", "tax", "w2",
     "w-2", "1099", "1040", "paystub", "pay_stub", "resume",
     "curriculum_vitae", "cv", "itinerary", "boarding_pass",
-    "purchase_order", "po_", "remittance", "dividend", "financial",
+    "purchase_order", "remittance", "dividend", "financial",
     "expense", "budget", "balance_sheet", "flight", "hotel_reservation",
     "offer_letter", "cover_letter",
 )
@@ -895,6 +919,10 @@ _OFFICE_RECOMMEND_KEYWORDS: tuple[str, ...] = (
 _OFFICE_SPREADSHEET_EXTS: frozenset[str] = frozenset({
     ".xlsx", ".xls", ".csv", ".xlsm",
 })
+
+
+def _has_word(name: str, keywords: tuple[str, ...]) -> bool:
+    return any(_matches_keyword(name, kw) for kw in keywords)
 
 
 def recommend_persona_profile(
@@ -963,28 +991,37 @@ def recommend_persona_profile(
                 if ext_lower in {".tmp", ".crdownload", ".part", ".partial", ".download"}:
                     continue
 
+                # Match whole words only ("tax" must not fire on "syntax", "mount"
+                # on "amount", "cad" on "decade").
+                stem_lower = entry.stem.lower()
+
                 maker_hit = False
                 if ext_lower in _MAKER_RECOMMEND_EXTENSIONS:
                     scores["maker_3d"] += 3
                     maker_hit = True
-                elif any(kw in name_lower for kw in _MAKER_RECOMMEND_KEYWORDS):
+                elif _has_word(stem_lower, _MAKER_RECOMMEND_KEYWORDS) or (
+                    ext_lower in _MAKER_ARCHIVE_EXTENSIONS and _has_word(stem_lower, _MAKER_PART_KEYWORDS)
+                ):
                     scores["maker_3d"] += 2
                     maker_hit = True
                 if maker_hit:
                     match_counts["maker_3d"] += 1
 
                 academic_hit = False
-                if any(kw in name_lower for kw in _ACADEMIC_RECOMMEND_KEYWORDS):
+                if _has_word(stem_lower, _ACADEMIC_RECOMMEND_KEYWORDS):
                     scores["academic_student"] += 3
                     academic_hit = True
-                elif _ACADEMIC_COURSE_CODE_RE.search(name_lower):
+                elif (
+                    ext_lower in _ACADEMIC_COURSE_CODE_EXTENSIONS
+                    and _ACADEMIC_COURSE_CODE_RE.search(stem_lower)
+                ):
                     scores["academic_student"] += 3
                     academic_hit = True
                 if academic_hit:
                     match_counts["academic_student"] += 1
 
                 office_hit = False
-                if any(kw in name_lower for kw in _OFFICE_RECOMMEND_KEYWORDS):
+                if _has_word(stem_lower, _OFFICE_RECOMMEND_KEYWORDS):
                     scores["office_admin"] += 3
                     office_hit = True
                 elif ext_lower in _OFFICE_SPREADSHEET_EXTS:
@@ -1001,24 +1038,24 @@ def recommend_persona_profile(
 
     if max_score <= 0 or files_scanned == 0:
         recommended_id = "everyday_home"
-        reason = "Everyday & Home PC is recommended to keep your photos, music, documents, and downloads tidy!"
+        reason = "Everyday is a good fit for most PCs."
     else:
         # Highest score wins; ties broken by specialized order
         recommended_id = max(specialized, key=lambda k: scores[k])
         if recommended_id == "maker_3d":
             count = match_counts["maker_3d"]
             file_word = "file" if count == 1 else "files"
-            reason = f"We spotted {count} 3D/CAD or Maker {file_word} in your Downloads — 3D Printing, CAD & CNC Maker is recommended for your PC!"
+            reason = f"I found {count} 3D or CAD {file_word} in your Downloads, so I'd suggest the 3D printing profile."
         elif recommended_id == "academic_student":
             count = match_counts["academic_student"]
             file_word = "file" if count == 1 else "files"
-            reason = f"We spotted {count} coursework or study {file_word} in your Downloads — Student & Schoolwork is recommended for your PC!"
+            reason = f"I found {count} coursework {file_word} in your Downloads, so I'd suggest the Student profile."
         elif recommended_id == "office_admin":
             count = match_counts["office_admin"]
             file_word = "file" if count == 1 else "files"
-            reason = f"We spotted {count} invoices, receipts, or work documents in your Downloads — Office, Invoices & Work is recommended for your PC!"
+            reason = f"I found {count} invoices, receipts or work {file_word} in your Downloads, so I'd suggest the Office profile."
         else:
-            reason = "Everyday & Home PC is recommended to keep your photos, music, documents, and downloads tidy!"
+            reason = "Everyday is a good fit for most PCs."
 
     return {
         "recommended_id": recommended_id,

@@ -48,6 +48,7 @@ import sorter
 import sort_undo
 import suite_theme
 from onboarding import HomeDashboardWidget, WelcomeWizardDialog
+from onboarding import SettingsWidget
 from rules_manager import RulesManagerDialog
 
 
@@ -247,28 +248,28 @@ class TestDashboardQuickActions:
             widget.show()
             qapp.processEvents()
 
-            # Initial State: Active
-            assert "Active" in widget._status_badge.text()
-            assert suite_theme.COLORS["success"] in widget._status_badge.styleSheet()
-            assert "Pause Sorter" in widget._btn_pause_resume.text()
+            # Initial State: on (the colored dot next to the status carries the color)
+            assert widget._status_badge.text() == "Sorting is on"
+            assert suite_theme.COLORS["success"] in widget._status_dot.styleSheet()
+            assert widget._btn_pause_resume.text() == "Pause sorting"
 
             # Click -> Transition to Paused
             widget._btn_pause_resume.click()
             qapp.processEvents()
 
             assert paused_state[0] is True
-            assert "Paused" in widget._status_badge.text()
-            assert suite_theme.COLORS["warning"] in widget._status_badge.styleSheet()
-            assert "Resume Sorter" in widget._btn_pause_resume.text()
+            assert widget._status_badge.text() == "Sorting is paused"
+            assert suite_theme.COLORS["warning"] in widget._status_dot.styleSheet()
+            assert widget._btn_pause_resume.text() == "Resume sorting"
 
             # Click again -> Transition back to Active
             widget._btn_pause_resume.click()
             qapp.processEvents()
 
             assert paused_state[0] is False
-            assert "Active" in widget._status_badge.text()
-            assert suite_theme.COLORS["success"] in widget._status_badge.styleSheet()
-            assert "Pause Sorter" in widget._btn_pause_resume.text()
+            assert widget._status_badge.text() == "Sorting is on"
+            assert suite_theme.COLORS["success"] in widget._status_dot.styleSheet()
+            assert widget._btn_pause_resume.text() == "Pause sorting"
 
             # Resilience check: set_paused raises exception
             def faulty_set_paused(_):
@@ -285,7 +286,7 @@ class TestDashboardQuickActions:
             qapp.processEvents()
 
     def test_status_badge_when_sorter_stopped(self, qapp, monkeypatch, mock_config):
-        """When sorter daemon is not running, badge indicates Idle and button says Start."""
+        """When the background sorter isn't running, the status says so and the button offers to start it."""
         monkeypatch.setattr(sorter, "is_paused", lambda: False)
         monkeypatch.setattr(suite_data, "is_sorter_running", lambda: False)
 
@@ -294,9 +295,10 @@ class TestDashboardQuickActions:
             widget.show()
             qapp.processEvents()
 
-            assert "Idle — Sorter Stopped" in widget._status_badge.text()
-            assert suite_theme.COLORS["textMuted"] in widget._status_badge.styleSheet()
-            assert "Start Sorter" in widget._btn_pause_resume.text()
+            assert widget._status_badge.text() == "Sorting is off"
+            assert "isn't running" in widget._status_desc_lbl.text()
+            assert suite_theme.COLORS["textFaint"] in widget._status_dot.styleSheet()
+            assert widget._btn_pause_resume.text() == "Start sorting"
         finally:
             widget.close()
             widget.deleteLater()
@@ -376,7 +378,7 @@ class TestDashboardQuickActions:
             qapp.processEvents()
 
     def test_quick_preferences_startup_and_context_toggles(self, qapp, monkeypatch, mock_config):
-        """Toggling preferences checkboxes safely calls config_manager helpers."""
+        """Toggling the Settings page checkboxes safely calls config_manager helpers."""
         calls = {"startup": [], "context": [], "saved": []}
 
         monkeypatch.setattr(suite_data, "is_startup_enabled", lambda: False)
@@ -385,7 +387,7 @@ class TestDashboardQuickActions:
         monkeypatch.setattr(suite_data, "set_context_menu_enabled", lambda val: calls["context"].append(val))
         monkeypatch.setattr(suite_data, "save_sorter_config", lambda cfg: calls["saved"].append(copy.deepcopy(cfg)))
 
-        widget = HomeDashboardWidget(config=mock_config)
+        widget = SettingsWidget(config=mock_config)
         try:
             widget.show()
             qapp.processEvents()
@@ -396,8 +398,12 @@ class TestDashboardQuickActions:
             widget._chk_context.setChecked(True)
             assert calls["context"] == [True]
 
-            widget._chk_unpack.setChecked(True)
-            assert widget._config["auto_unpack_zips"] is True
+            # Flip the switch to the opposite of its current state and check the
+            # setting the sorter actually reads (watch.auto_unzip) follows it.
+            target = not widget._chk_unpack.isChecked()
+            widget._chk_unpack.setChecked(target)
+            assert widget._config["watch"]["auto_unzip"] is target
+            assert widget._config["auto_unzip"] is target
             assert len(calls["saved"]) > 0
         finally:
             widget.close()
@@ -405,10 +411,10 @@ class TestDashboardQuickActions:
             qapp.processEvents()
 
     def test_persona_combo_switch_updates_config_and_signals_parent(self, qapp, monkeypatch, mock_config):
-        """Switching persona dropdown updates config and emits persona_changed."""
+        """Switching the profile on the Settings page updates config and emits persona_changed."""
         received_persona = []
 
-        widget = HomeDashboardWidget(config=mock_config)
+        widget = SettingsWidget(config=mock_config)
         widget.persona_changed.connect(lambda pid: received_persona.append(pid))
         try:
             widget.show()
@@ -445,7 +451,7 @@ class TestRecentActivityFeedAndExplorerReveal:
 
             assert widget._empty_state_lbl.isVisible() is True
             assert widget._activity_table.isVisible() is False
-            assert "No files organized yet" in widget._empty_state_lbl.text()
+            assert widget._empty_state_lbl.text() == "Nothing sorted yet"
         finally:
             widget.close()
             widget.deleteLater()
@@ -493,7 +499,7 @@ class TestRecentActivityFeedAndExplorerReveal:
                 widget._activity_table.horizontalHeaderItem(col).text()
                 for col in range(4)
             ]
-            assert headers == ["Filename", "Folder", "Timestamp", "Action"]
+            assert headers == ["File", "Moved to", "When", ""]
 
             # Verify first and last row content
             row0_file = widget._activity_table.item(0, 0).text()
@@ -505,7 +511,7 @@ class TestRecentActivityFeedAndExplorerReveal:
             # Verify action button in column 3
             btn_action = widget._activity_table.cellWidget(0, 3)
             assert isinstance(btn_action, QPushButton)
-            assert "Show in Folder" in btn_action.text()
+            assert btn_action.toolTip() == "Show in folder"
         finally:
             widget.close()
             widget.deleteLater()

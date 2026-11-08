@@ -84,7 +84,7 @@ if %errorlevel% equ 0 (
 where winget >nul 2>nul
 if %errorlevel% equ 0 (
     echo [NOTICE] Python 3.10+ is required but was not found on your system.
-    echo Windows Package Manager (winget) was detected.
+    echo Windows Package Manager [winget] was detected.
     echo.
     if "%SILENT%"=="1" (
         set "WINGET_INSTALL=y"
@@ -113,7 +113,7 @@ echo [OK] Python interpreter detected: !PY_CMD!
 if not exist ".venv\Scripts\python.exe" (
     echo [*] Creating virtual environment [.venv]...
     !PY_CMD! -m venv .venv
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo [ERROR] Failed to create virtual environment.
         if "%SILENT%"=="0" pause
         exit /b 1

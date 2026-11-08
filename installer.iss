@@ -42,3 +42,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--welcome"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Stop the tray app and remove the startup entries and Explorer right-click menus
+; before the files are deleted. Personal rules in %LOCALAPPDATA%\download-sorter are kept.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\uninstall.ps1"" -Silent -KeepUserData"; Flags: runhidden waituntilterminated; RunOnceId: "DownloadSorterCleanup"

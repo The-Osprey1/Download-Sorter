@@ -1,6 +1,6 @@
 # Download Sorter
 
-> **Made by Devyn Fidel (2026)** · v2.0.0 · [MIT License](LICENSE)
+> **Made by Devyn Fidel (2026)** · v2.0.2 · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
@@ -8,7 +8,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
 [![Author: Devyn Fidel](https://img.shields.io/badge/author-Devyn%20Fidel-69E6AD.svg)](https://github.com/The-Osprey1/Download-Sorter)
-[![Tests Passing](https://img.shields.io/badge/tests-1064%20passed-69E6AD.svg?style=flat)](tests/)
 
 A lightweight, local-first automated file organizer for Windows that keeps your **Downloads** and **Documents** folders organized without sending your data to any cloud service.
 
@@ -28,7 +27,7 @@ For everyday users on Windows 10 & 11 (zero Python installation or terminal comm
    - Automatically creates Desktop and Start Menu shortcuts.
    - Registers in Windows Installed Apps for seamless 1-click uninstallation.
 3. **Enjoy Automated Organization**:
-   The interactive 3-step Welcome Wizard launches automatically on completion so you can choose your persona profile and set your filing preferences.
+   The interactive 3-step Welcome Wizard launches automatically on completion so you can choose your persona profile and set your filing preferences. Nothing is moved until you finish the wizard, and if you untick **"Organize existing files"**, the files already in your Downloads folder are left where they are.
 
 *Unattended / Silent deployment:* Run `DownloadSorter-Setup-v2.0.2-windows-x64.exe /S` (supports optional `/D=C:\Custom\Path`).
 
@@ -64,27 +63,25 @@ Downloads/
   └── Other/ (Uncategorized fallback)
 ```
 
-Targeted CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`) found in Windows Documents are safely organized into the Downloads 3D tree, while application folders (like `OneDrive`, `Steam`, `My Games`, `SOLIDCast`, `Adobe`) and OneDrive cloud placeholders are automatically protected and skipped.
+With the **3D Printing, CAD & CNC Maker** profile, stray CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`) found in Windows Documents are also organized into the Downloads 3D tree. Other profiles never touch your Documents folder. Application folders (like `OneDrive`, `Steam`, `My Games`, `SOLIDCast`, `Adobe`) and OneDrive cloud placeholders are always protected and skipped.
 
 ---
 
 ## Key Features in Version 2.0
 
-### 1. Visual Rules Manager & Remodel Wizard (`rules_manager.py`)
-A sleek dark-mode desktop GUI built with **PySide6** and styled to the **Devyn Personal Suite** (`suite_theme.py`) design tokens:
-* **3 Dedicated Tabs**:
-  1. **Keyword Rules**: Reorder, add, edit, or disable keyword-based routing with drag-and-drop precedence.
-  2. **Extension Rules**: Organize file extensions into category folders.
-  3. **Machine Remodel**: Interactive folder cards to scan and remodel messy machine architectures with **Organize**, **Keep intact**, and **Skip** actions.
-* **Live Sandbox & Real-time Simulator**: Type any hypothetical filename (e.g. `ME3210_Exam_Review.pdf`, `bracket_op1.nc`, `vase_multicolor.3mf`) to watch the rule engine evaluate the match chain in real time, showing the winning rule, matched trigger, destination path, and classification badge.
-* **Curated Rule Presets Library**: Browse and 1-click import preset packs for School, Office, CAD/CAM, and Dev setups.
-* **Temporary "Active Project" Catch-All**: Route all incoming CAD, 3D models, and CNC programs directly to your active project directory with optional auto-expiry.
-* **Safe Atomic Persistence**: Changes are verified with schema validation, written with `fsync`, backed up to `config.json.bak`, and replaced atomically.
+### 1. The Download Sorter window (`rules_manager.py`, `onboarding.py`)
+A dark-mode window built with **PySide6**. A sidebar switches between four pages:
+* **Home**: whether sorting is on, **Sort Downloads now**, **Undo last sort**, pause and resume, and the files sorted most recently.
+* **Rules**: **Name rules** (words in a file's name, checked top to bottom) and **File types** (by extension). Add ready-made rules from the **rule library**, import or export them, and use **Try a filename** to see where a file would go before you save. With the 3D printing profile, **Project mode** sends all CAD, 3D and CNC downloads to one project folder for a while.
+* **Clean up a folder**: preview how a messy folder would be organized, choose **Organize by file type**, **Keep intact** or **Skip for now** for each folder inside it, then apply. Everything can be undone.
+* **Settings**: your profile, starting with Windows, the right-click menu, zip handling, and version information.
+
+Changes to rules are saved with schema checks, a `config.json.bak` backup and an atomic file replace.
 
 ```powershell
-# Launch the Visual Rules Manager GUI
+# Open the window
 download-sorter-gui
-# Or open directly to the Remodel tab
+# Or open a page directly: home, rules, remodel (Clean up a folder) or settings
 download-sorter-gui --tab remodel
 ```
 
@@ -135,7 +132,7 @@ download-sorter-remodel --undo
 ```
 
 ### 5. Low-Resource Background Daemon & System Tray (`tray.py`)
-* **Background Watchdog**: Watches Downloads and Documents using low-CPU native event hooks.
+* **Background Watchdog**: Watches Downloads (and Documents, with the Maker profile) using low-CPU native event hooks.
 * **Single-Instance Mutex**: Prevents multiple daemon instances from colliding.
 * **Instant Tray Control**: Right-click the tray icon to pause/resume sorting, trigger manual sorts, undo recent moves, remodel messy folders, or open rules.
 * **Live Daily Counter**: Displays files sorted today and active held 3MF models.
@@ -185,7 +182,7 @@ unzip-archive "path\to\archive.zip"
 ## Installation & Setup
 
 ### Option 1: Standalone Windows App (No Python Required)
-1. Download the latest **`DownloadSorter-v2.0.0-windows-x64.zip`** from [GitHub Releases](https://github.com/The-Osprey1/Download-Sorter/releases).
+1. Download the latest **`DownloadSorter-v<version>-windows-x64.zip`** from [GitHub Releases](https://github.com/The-Osprey1/Download-Sorter/releases).
 2. Extract the ZIP anywhere on your system (e.g. `C:\Users\<user>\Download-Sorter` or Program Files).
 3. Double-click **`setup.bat`** (or run `.\setup.bat`). It will:
    - Configure optional automatic startup at login.
@@ -272,8 +269,8 @@ Download Sorter installs dedicated CLI console scripts on PATH:
 | `download-sorter --target <dir>` | Sort a specific directory once |
 | `download-sorter-watch` | Run foreground directory watcher daemon |
 | `download-sorter-tray` | Launch system tray monitor with background daemon |
-| `download-sorter-gui` | Launch visual Rules Manager & Live Simulator GUI |
-| `download-sorter-gui --tab remodel` | Open Rules Manager directly to Machine Remodel tab |
+| `download-sorter-gui` | Open the Download Sorter window |
+| `download-sorter-gui --tab remodel` | Open the window on the "Clean up a folder" page |
 | `download-sorter-remodel --scan` | Scan folder and preview candidate remodel cards |
 | `download-sorter-remodel --dry-run` | Simulate machine remodel actions and output summary |
 | `download-sorter-remodel --apply` | Execute safe machine remodel with HTML receipt |
@@ -295,7 +292,10 @@ Download Sorter installs dedicated CLI console scripts on PATH:
 This repository includes a comprehensive 4-Tier test suite covering feature tests, boundary cases, cross-feature interactions, visual design consistency, and real-world stress scenarios:
 
 ```powershell
-# Run the complete test suite (1,064 tests)
+# Install the test tools (not needed to use the app)
+.\.venv\Scripts\pip.exe install -e .[dev]
+
+# Run the complete test suite
 .\.venv\Scripts\pytest.exe
 
 # Run visual design consistency tests only
@@ -354,7 +354,7 @@ Yes! Download Sorter automatically checks Windows Shell Known Folders (`FOLDERID
 **Download Sorter** was created by **Devyn Fidel** (2026).  
 Repository: https://github.com/The-Osprey1/Download-Sorter
 
-Every surface that shows credit (tray tooltip and menu, `status`, the Rules Manager footer and *About* dialog, every CLI's `--version`, `setup.bat`, `update.bat`, `install_context_menu.ps1`, `install_startup.ps1`) reads it from the single `about.py` module, so the credit line is always identical.
+Every surface that shows credit (tray tooltip and menu, `status`, the window's sidebar and Settings page, every CLI's `--version`, `setup.bat`, `update.bat`, `install_context_menu.ps1`, `install_startup.ps1`) reads it from the single `about.py` module, so the credit line is always identical.
 
 ---
 

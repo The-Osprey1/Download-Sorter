@@ -36,7 +36,7 @@ echo.
 if exist ".venv\Scripts\pip.exe" (
     echo [*] Checking and updating Python dependencies...
     ".venv\Scripts\pip.exe" install -r requirements.txt --quiet
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo [WARNING] Dependency update encountered issues. Continuing...
     ) else (
         echo [OK] Dependencies are up to date.

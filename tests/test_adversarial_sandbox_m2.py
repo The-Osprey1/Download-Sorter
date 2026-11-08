@@ -112,7 +112,7 @@ class TestKeystrokeAndEdgeFilenames:
             assert sandbox._dest_lbl.text() is not None
 
         # Fully typed: matches IME 3311 Coursework
-        assert sandbox._badge_lbl.text() == "[KEYWORD RULE]"
+        assert sandbox._badge_lbl.text() == "Name rule"
         assert "IME 3311" in sandbox._rule_lbl.text()
         assert sandbox._dest_lbl.text() == "Documents\\School\\IME 3311"
 
@@ -123,7 +123,7 @@ class TestKeystrokeAndEdgeFilenames:
 
         # Completely erased
         assert sandbox._input.text() == ""
-        assert sandbox._badge_lbl.text() == "[WAITING]"
+        assert sandbox._badge_lbl.text() == "Waiting"
         assert sandbox._dest_lbl.text() == "—"
 
     def test_empty_and_whitespace_variants(self, qapp, base_config):
@@ -135,11 +135,11 @@ class TestKeystrokeAndEdgeFilenames:
         for ws in whitespaces:
             sandbox._input.setText(ws)
             if not ws.strip():
-                assert sandbox._badge_lbl.text() == "[WAITING]"
+                assert sandbox._badge_lbl.text() == "Waiting"
                 assert sandbox._dest_lbl.text() == "—"
             else:
                 # E.g. "   .pdf" stripped becomes ".pdf"
-                assert sandbox._badge_lbl.text() in ["[EXTENSION RULE]", "[WAITING]", "[DEFAULT FALLBACK]"]
+                assert sandbox._badge_lbl.text() in ["File type", "Waiting", "No rule matched"]
 
     def test_path_traversal_and_absolute_paths(self, qapp, base_config):
         """Ensure path traversal sequences and absolute paths evaluate without filesystem side effects."""
@@ -248,7 +248,7 @@ class TestKeystrokeAndEdgeFilenames:
             res = sandbox.evaluate(fname)
             assert res is not None
             assert res["match_type"] == "ignored"
-            assert sandbox._badge_lbl.text() == "[IGNORED]"
+            assert sandbox._badge_lbl.text() == "Skipped"
             assert sandbox._dest_lbl.text() == "None"
 
 
@@ -289,7 +289,7 @@ class TestDraftRuleModifications:
         assert res2["match_type"] == "extension"
         assert res2["winning_rule"] == "PDFs"
         assert res2["destination"] == "Documents\\PDFs"
-        assert sandbox._badge_lbl.text() == "[EXTENSION RULE]"
+        assert sandbox._badge_lbl.text() == "File type"
 
         # 4. CRITICAL: Disk file must STILL HAVE enabled = True (unsaved draft!)
         on_disk = json.loads(cfg_file.read_text(encoding="utf-8"))
@@ -412,7 +412,7 @@ class TestDraftRuleModifications:
         res_on = sandbox.evaluate("gearbox_housing.stl")
         assert res_on["match_type"] == "active_project"
         assert res_on["destination"] == "C:\\Projects\\ActiveGearbox"
-        assert sandbox._badge_lbl.text() == "[ACTIVE PROJECT]"
+        assert sandbox._badge_lbl.text() == "Project mode"
 
         # 4. Modify target directory live
         card._dir_edit.setText("D:\\Workspaces\\CustomBuild")
@@ -525,7 +525,7 @@ class TestEngineSimulationParity:
 
         assert ui_res["match_type"] == daemon_res["match_type"] == "fallback"
         assert ui_res["destination"] == daemon_res["destination"] == "FallbackFolder"
-        assert sandbox._badge_lbl.text() == "[DEFAULT FALLBACK]"
+        assert sandbox._badge_lbl.text() == "No rule matched"
 
 
 # =====================================================================
@@ -541,11 +541,11 @@ class TestPresetChipsAndStateSync:
         sandbox.set_config_and_project(base_config, None)
 
         expected_presets = [
-            ("bracket_op1.nc", "[GCODE SNIFFER]", "Code\\Haas"),
-            ("vase_multicolor.gcode", "[GCODE SNIFFER]", "Code\\Gcode"),
-            ("ME3210_Exam_Review.pdf", "[KEYWORD RULE]", "Documents\\School"),
-            ("turbine_bracket.3mf", "[EXTENSION RULE]", "3D Models\\3MF"),
-            ("hardware_pack.zip", "[EXTENSION RULE]", "Archives"),
+            ("bracket_op1.nc", "G-code check", "Code\\Haas"),
+            ("vase_multicolor.gcode", "G-code check", "Code\\Gcode"),
+            ("ME3210_Exam_Review.pdf", "Name rule", "Documents\\School"),
+            ("turbine_bracket.3mf", "File type", "3D Models\\3MF"),
+            ("hardware_pack.zip", "File type", "Archives"),
         ]
 
         for fname, expected_badge, expected_dest in expected_presets:
@@ -571,18 +571,18 @@ class TestPresetChipsAndStateSync:
             for fname in fnames:
                 sandbox._set_input(fname)
                 assert sandbox._input.text() == fname
-                assert sandbox._badge_lbl.text() != "[WAITING]"
+                assert sandbox._badge_lbl.text() != "Waiting"
 
     def test_state_sync_active_project_toggle_with_chip_loaded(self, qapp, base_config):
         """Load 3MF preset chip, then toggle active project on and off.
-        The simulator must instantly flip from [EXTENSION RULE] to [ACTIVE PROJECT] and back.
+        The simulator must instantly flip from File type to Project mode and back.
         """
         sandbox = LiveSandboxWidget()
         sandbox.set_config_and_project(base_config, None)
 
         # 1. Select 3MF chip
         sandbox._set_input("turbine_bracket.3mf")
-        assert sandbox._badge_lbl.text() == "[EXTENSION RULE]"
+        assert sandbox._badge_lbl.text() == "File type"
         assert sandbox._dest_lbl.text() == "3D Models\\3MF"
 
         # 2. Toggle Active Project ON
@@ -594,13 +594,13 @@ class TestPresetChipsAndStateSync:
         }
         sandbox.set_config_and_project(base_config, proj)
         # Without re-typing, sandbox re-evaluates input!
-        assert sandbox._badge_lbl.text() == "[ACTIVE PROJECT]"
+        assert sandbox._badge_lbl.text() == "Project mode"
         assert sandbox._dest_lbl.text() == "C:\\Fixture_Vise"
         assert sandbox._rule_lbl.text() == "Fixture Vise"
 
         # 3. Toggle Active Project OFF
         sandbox.set_config_and_project(base_config, None)
-        assert sandbox._badge_lbl.text() == "[EXTENSION RULE]"
+        assert sandbox._badge_lbl.text() == "File type"
         assert sandbox._dest_lbl.text() == "3D Models\\3MF"
 
     def test_collapsible_rule_chain_trace(self, qapp, base_config):
@@ -616,13 +616,13 @@ class TestPresetChipsAndStateSync:
         sandbox._toggle_trace()
         assert sandbox._trace_expanded
         assert not sandbox._trace_list.isHidden()
-        assert "▼" in sandbox._trace_btn.text()
+        assert sandbox._trace_btn.text() == "Hide rules checked"
 
         # Evaluate and check trace entries
         sandbox._set_input("ME3210_Exam_Review.pdf")
         assert sandbox._trace_list.count() > 0
         trace_texts = [sandbox._trace_list.item(i).text() for i in range(sandbox._trace_list.count())]
-        assert any("MATCHED" in t for t in trace_texts)
+        assert any(t.startswith("\u2713") for t in trace_texts), trace_texts  # the matching rule is ticked
 
         # Collapse trace
         sandbox._toggle_trace()
@@ -650,7 +650,7 @@ class TestBadgeRenderingAndMemoryIntegrity:
         # 1. Test Active Project badge
         sandbox.set_config_and_project(base_config, active_proj)
         sandbox.evaluate("model.stl")
-        assert sandbox._badge_lbl.text() == "[ACTIVE PROJECT]"
+        assert sandbox._badge_lbl.text() == "Project mode"
         style = sandbox._badge_lbl.styleSheet()
         assert "background:" in style
         assert "border-radius:" in style
@@ -658,12 +658,12 @@ class TestBadgeRenderingAndMemoryIntegrity:
         # 2. Test Remaining 6 Badges with Active Project Disabled
         sandbox.set_config_and_project(base_config, None)
         badge_test_cases = [
-            ("", "[WAITING]"),
-            ("IME3311_Doc.pdf", "[KEYWORD RULE]"),
-            ("bracket_op1.nc", "[GCODE SNIFFER]"),
-            ("unrelated.zip", "[EXTENSION RULE]"),
-            ("unknown_file.bin", "[DEFAULT FALLBACK]"),
-            ("document.docx.crdownload", "[IGNORED]"),
+            ("", "Waiting"),
+            ("IME3311_Doc.pdf", "Name rule"),
+            ("bracket_op1.nc", "G-code check"),
+            ("unrelated.zip", "File type"),
+            ("unknown_file.bin", "No rule matched"),
+            ("document.docx.crdownload", "Skipped"),
         ]
 
         for fname, expected_badge in badge_test_cases:

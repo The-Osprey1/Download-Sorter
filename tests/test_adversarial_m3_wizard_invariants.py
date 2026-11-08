@@ -9,7 +9,7 @@ Adversarially verifies:
    - Atomic 5-stage config persistence upon completion without corrupting arbitrary pre-existing user keys.
 2. RulesManagerDialog View Switcher & Invariants:
    - Repeated switching between 'home' and 'customize' views (50 iterations loop).
-   - Strict structural invariant: dlg._tabs.count() == 3 on every single iteration!
+   - Strict structural invariant: the Rules page keeps its two tabs on every single iteration!
    - Strict widget invariant: dlg._tabs.widget(2) remains a MachineRemodelWidget on every iteration.
    - Header action button visibility synchronization (hidden on home, visible on customize).
    - Dynamic persona switching via dlg.set_active_persona(p):
@@ -48,7 +48,7 @@ from PySide6.QtWidgets import QApplication, QPushButton, QLabel
 
 import about
 import config_manager
-from onboarding import HomeDashboardWidget, PersonaCard, WelcomeWizardDialog
+from onboarding import HomeDashboardWidget, PersonaCard, SettingsWidget, WelcomeWizardDialog
 import rules_manager
 from rules_manager import MachineRemodelWidget, RulesManagerDialog
 import sorter
@@ -86,7 +86,7 @@ class TestWelcomeWizardNavigationTransitions:
             assert dlg._stack.currentIndex() == 0
             assert not dlg._btn_back.isVisible(), "Back button must be hidden on Step 0"
             assert dlg._btn_next.isVisible(), "Next button must be visible on Step 0"
-            assert dlg._btn_next.text() == "Next →"
+            assert dlg._btn_next.text() == "Next"
             assert not dlg._btn_finish.isVisible(), "Finish button must be hidden on Step 0"
 
             # Boundary Stress: Calling back on step 0 must NOT underflow
@@ -118,17 +118,17 @@ class TestWelcomeWizardNavigationTransitions:
                 # Step-specific invariants
                 if target_step == 0:
                     assert not dlg._btn_back.isVisible()
-                    assert dlg._btn_next.text() == "Next →"
+                    assert dlg._btn_next.text() == "Next"
                     assert not dlg._btn_finish.isVisible()
                 elif target_step == 1:
                     assert dlg._btn_back.isVisible()
                     assert dlg._btn_back.isEnabled()
-                    assert dlg._btn_next.text() == "Next →"
+                    assert dlg._btn_next.text() == "Next"
                     assert not dlg._btn_finish.isVisible()
                 elif target_step == 2:
                     assert dlg._btn_back.isVisible()
                     assert dlg._btn_back.isEnabled()
-                    assert dlg._btn_next.text() == "Get Started ✓"
+                    assert dlg._btn_next.text() == "Finish setup"
                     assert dlg._btn_finish.isVisible()
 
                 # Pill styling sync check
@@ -186,7 +186,7 @@ class TestWelcomeWizardNavigationTransitions:
                 assert card._indicator.text() == "●"
                 assert mint_accent in card.styleSheet().lower()
                 assert mint_accent in card._indicator.styleSheet().lower()
-                assert mint_accent in card._title_lbl.styleSheet().lower()
+                assert COLORS["successSubtle"].lower() in card._icon_lbl.styleSheet().lower()
 
                 # Verify all other 3 cards are mutually excluded
                 for other_pid, other_card in dlg._persona_cards.items():
@@ -259,14 +259,14 @@ class TestWizardCheckboxesAndPersistence:
             qapp.processEvents()
 
     def test_home_dashboard_checkboxes_reflect_live_system_settings(self, qapp, monkeypatch):
-        """Verify HomeDashboardWidget checkboxes query and strictly reflect system settings."""
+        """Verify the Settings page checkboxes query and strictly reflect system settings."""
         cfg = copy.deepcopy(sorter.DEFAULT_CONFIG)
 
         # Case A: Both disabled in Windows registry
         monkeypatch.setattr(config_manager, "is_startup_enabled", lambda: False)
         monkeypatch.setattr(config_manager, "is_context_menu_enabled", lambda: False)
 
-        w1 = HomeDashboardWidget(config=cfg)
+        w1 = SettingsWidget(config=cfg)
         try:
             w1.show()
             qapp.processEvents()
@@ -281,7 +281,7 @@ class TestWizardCheckboxesAndPersistence:
         monkeypatch.setattr(config_manager, "is_startup_enabled", lambda: True)
         monkeypatch.setattr(config_manager, "is_context_menu_enabled", lambda: True)
 
-        w2 = HomeDashboardWidget(config=cfg)
+        w2 = SettingsWidget(config=cfg)
         try:
             w2.show()
             qapp.processEvents()
@@ -381,11 +381,13 @@ class TestRulesManagerViewSwitcherInvariants:
     """Stress-test RulesManagerDialog view switching and assert strict structural invariants."""
 
     def test_view_switcher_stress_tabs_count_invariant(self, qapp, tmp_path, monkeypatch):
-        """Repeated switching between 'home' and 'customize' views (50 iterations loop).
+        """Repeated switching between all four pages (50 iterations).
 
-        STRICT INVARIANT:
-        dlg._tabs.count() == 3 must strictly hold on EVERY single iteration!
-        dlg._tabs.widget(2) must remain a MachineRemodelWidget on EVERY single iteration!
+        STRICT INVARIANTS on every iteration:
+        - the Rules page keeps exactly two tabs (name rules, file types);
+        - the clean-up page is always the same MachineRemodelWidget;
+        - exactly one sidebar button is checked and it matches the page shown;
+        - the Rules page actions are only visible on the Rules page.
         """
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps(sorter.DEFAULT_CONFIG), encoding="utf-8")
@@ -398,58 +400,41 @@ class TestRulesManagerViewSwitcherInvariants:
 
             assert hasattr(dlg, "_tabs"), "RulesManagerDialog missing self._tabs"
             assert hasattr(dlg, "_view_stack"), "RulesManagerDialog missing self._view_stack"
+            assert dlg._view_stack.count() == 4
 
-            # Strict Invariant Baseline
-            assert dlg._tabs.count() == 3
-            assert isinstance(dlg._tabs.widget(2), MachineRemodelWidget)
-            assert dlg._tabs.tabText(0) == "Keyword Rules (Priority Order)"
-            assert dlg._tabs.tabText(1) == "Extension Rules (Fallback Categories)"
-            assert dlg._tabs.tabText(2) == "Machine Remodel"
+            assert dlg._tabs.count() == 2
+            assert dlg._tabs.tabText(0) == "Name rules"
+            assert dlg._tabs.tabText(1) == "File types"
+            remodel_widget = dlg._remodel_widget
+            assert isinstance(remodel_widget, MachineRemodelWidget)
 
-            # Stress Loop: 50 Iterations
+            rules_actions = [dlg._more_btn, dlg._save_btn, dlg._preset_lib_btn]
+            pages = list(RulesManagerDialog.PAGES)
             for i in range(50):
-                # 1. Switch to Home
-                dlg.switch_view("home")
-                qapp.processEvents()
+                for index, page in enumerate(pages):
+                    dlg.switch_view(page)
+                    qapp.processEvents()
 
-                assert dlg._tabs.count() == 3, f"Iteration {i}: _tabs.count() != 3 on home view"
-                assert isinstance(dlg._tabs.widget(2), MachineRemodelWidget), (
-                    f"Iteration {i}: Tab 2 was replaced or corrupted on home view"
-                )
-                assert dlg._view_stack.currentIndex() == 0, f"Iteration {i}: view stack index != 0"
-                assert dlg._seg_btn_home.isChecked() is True, f"Iteration {i}: home button not checked"
-                assert dlg._seg_btn_rules.isChecked() is False, f"Iteration {i}: rules button checked"
+                    assert dlg._view_stack.currentIndex() == index, f"Iteration {i}: {page} not shown"
+                    checked = [b for b in dlg._view_btn_group.buttons() if b.isChecked()]
+                    assert checked == [dlg._nav_buttons[page]], f"Iteration {i}: sidebar out of sync on {page}"
+                    assert dlg._tabs.count() == 2, f"Iteration {i}: rule tabs changed on {page}"
+                    assert dlg._remodel_widget is remodel_widget, f"Iteration {i}: clean-up page replaced"
+                    for btn in rules_actions:
+                        assert btn.isVisible() == (page == "rules"), (
+                            f"Iteration {i}: {btn.toolTip() or btn.text()} visibility wrong on {page}"
+                        )
 
-                # Header action buttons must be hidden in Home view
-                for btn in [dlg._export_btn, dlg._import_btn, dlg._reset_btn, dlg._save_btn, dlg._preset_lib_btn]:
-                    assert not btn.isVisible(), f"Iteration {i}: {btn.text()} should be hidden on Home view"
-
-                # 2. Switch to Customize
-                dlg.switch_view("customize")
-                qapp.processEvents()
-
-                assert dlg._tabs.count() == 3, f"Iteration {i}: _tabs.count() != 3 on customize view"
-                assert isinstance(dlg._tabs.widget(2), MachineRemodelWidget), (
-                    f"Iteration {i}: Tab 2 was replaced or corrupted on customize view"
-                )
-                assert dlg._view_stack.currentIndex() == 1, f"Iteration {i}: view stack index != 1"
-                assert dlg._seg_btn_home.isChecked() is False, f"Iteration {i}: home button checked"
-                assert dlg._seg_btn_rules.isChecked() is True, f"Iteration {i}: rules button not checked"
-
-                # Header action buttons must be visible in Customize view
-                for btn in [dlg._export_btn, dlg._import_btn, dlg._reset_btn, dlg._save_btn, dlg._preset_lib_btn]:
-                    assert btn.isVisible(), f"Iteration {i}: {btn.text()} should be visible on Customize view"
-
-            # Verify clicking segmented buttons triggers view changes
+            # Clicking the sidebar buttons switches pages too
             dlg._seg_btn_home.click()
             qapp.processEvents()
             assert dlg._view_stack.currentIndex() == 0
-            assert dlg._tabs.count() == 3
-
             dlg._seg_btn_rules.click()
             qapp.processEvents()
             assert dlg._view_stack.currentIndex() == 1
-            assert dlg._tabs.count() == 3
+            dlg._nav_btn_cleanup.click()
+            qapp.processEvents()
+            assert dlg._view_stack.currentIndex() == 2
         finally:
             dlg.close()
             dlg.deleteLater()
@@ -486,7 +471,7 @@ class TestRulesManagerViewSwitcherInvariants:
                 dlg.set_active_persona(persona_id)
                 qapp.processEvents()
 
-                assert dlg._tabs.count() == 3, f"Tab count corrupted after switching to {persona_id}"
+                assert dlg._tabs.count() == 2, f"Tab count corrupted after switching to {persona_id}"
                 assert dlg._active_project_card.isVisible() == expected_visible, (
                     f"For persona {persona_id}, expected isVisible() == {expected_visible}, "
                     f"got {dlg._active_project_card.isVisible()}"
@@ -635,7 +620,7 @@ class TestIntegrationAndFaultTolerance:
     """Stress-test cross-widget integration, CLI routing, and error resilience."""
 
     def test_home_dashboard_combo_persona_change_synchronization(self, qapp, tmp_path, monkeypatch):
-        """Verify changing persona combo in HomeDashboardWidget synchronizes RulesManagerDialog."""
+        """Changing the profile on the Settings page synchronizes the rest of RulesManagerDialog."""
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps(sorter.DEFAULT_CONFIG), encoding="utf-8")
         monkeypatch.setattr(config_manager, "SORTER_CONFIG_FILE", cfg_file)
@@ -645,7 +630,7 @@ class TestIntegrationAndFaultTolerance:
             dlg.show()
             qapp.processEvents()
 
-            combo = dlg._home_widget._persona_combo
+            combo = dlg._settings_widget._persona_combo
 
             # Switch combo to 'academic_student'
             idx_academic = combo.findData("academic_student")
@@ -654,13 +639,13 @@ class TestIntegrationAndFaultTolerance:
             qapp.processEvents()
 
             assert dlg._current_persona == "academic_student"
-            assert dlg._tabs.count() == 3
+            assert dlg._tabs.count() == 2
 
             # Switch to customize view to check card visibility
             dlg.switch_view("customize")
             qapp.processEvents()
             assert not dlg._active_project_card.isVisible()
-            assert dlg._tabs.count() == 3
+            assert dlg._tabs.count() == 2
 
             # Switch combo to 'maker_3d' while in customize view
             idx_maker = combo.findData("maker_3d")
@@ -670,7 +655,7 @@ class TestIntegrationAndFaultTolerance:
 
             assert dlg._current_persona == "maker_3d"
             assert dlg._active_project_card.isVisible()
-            assert dlg._tabs.count() == 3
+            assert dlg._tabs.count() == 2
         finally:
             dlg.close()
             dlg.deleteLater()
@@ -702,7 +687,7 @@ class TestIntegrationAndFaultTolerance:
             qapp.processEvents()
 
     def test_rules_manager_tab_switching_under_view_transitions(self, qapp, tmp_path, monkeypatch):
-        """Verify active tab index inside _tabs is preserved across view transitions while _tabs.count() == 3."""
+        """The selected rules tab is kept while moving between pages, and the tab count never changes."""
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps(sorter.DEFAULT_CONFIG), encoding="utf-8")
         monkeypatch.setattr(config_manager, "SORTER_CONFIG_FILE", cfg_file)
@@ -712,27 +697,26 @@ class TestIntegrationAndFaultTolerance:
             dlg.show()
             qapp.processEvents()
 
-            # Test each of the 3 tabs
             for tab_idx, expected_widget in [
                 (0, dlg._keyword_table),
                 (1, dlg._extension_table),
-                (2, dlg._remodel_widget),
             ]:
                 dlg._tabs.setCurrentIndex(tab_idx)
                 qapp.processEvents()
                 assert dlg._tabs.currentIndex() == tab_idx
                 assert dlg._tabs.currentWidget() is expected_widget
-                assert dlg._tabs.count() == 3
+                assert dlg._tabs.count() == 2
 
-                # Switch to Home view
-                dlg.switch_view("home")
-                qapp.processEvents()
-                assert dlg._tabs.count() == 3
+                # Visit the other pages
+                for page in ("home", "cleanup", "settings"):
+                    dlg.switch_view(page)
+                    qapp.processEvents()
+                    assert dlg._tabs.count() == 2
 
-                # Switch back to Customize view
+                # Back to the Rules page
                 dlg.switch_view("customize")
                 qapp.processEvents()
-                assert dlg._tabs.count() == 3
+                assert dlg._tabs.count() == 2
                 assert dlg._tabs.currentIndex() == tab_idx, (
                     f"Active tab index {dlg._tabs.currentIndex()} reset or lost after view switch"
                 )

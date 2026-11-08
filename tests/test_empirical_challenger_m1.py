@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from sorter import evaluate_routing, load_config, CAD_EXTENSIONS
+
+from tests.sample_rules import with_school_rules
 from gcode_peek import sniff_machine_type
 
 HAAS_SAMPLE = """%
@@ -70,7 +72,7 @@ FILENAMES = [
 
 @pytest.fixture
 def config():
-    return load_config()
+    return with_school_rules(load_config())
 
 
 def is_active_valid(expires_at, target_dir, cad_exts, ext):

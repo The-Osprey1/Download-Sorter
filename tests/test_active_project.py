@@ -10,6 +10,8 @@ if str(root) not in sys.path:
 
 from sorter import CAD_EXTENSIONS, evaluate_routing, load_active_project, load_config
 
+from tests.sample_rules import with_school_rules
+
 ALL_27_EXTENSIONS = [
     ".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs",
     ".f3d", ".f3z", ".sldprt", ".sldasm", ".ipt", ".iam",
@@ -19,7 +21,7 @@ ALL_27_EXTENSIONS = [
 
 @pytest.fixture
 def config():
-    return load_config()
+    return with_school_rules(load_config())
 
 @pytest.fixture
 def active_project_dict(tmp_path):

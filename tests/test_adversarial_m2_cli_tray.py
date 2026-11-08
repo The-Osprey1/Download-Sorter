@@ -164,13 +164,25 @@ def test_tray_menu_hierarchy_and_default_action():
     assert item_0.text == "Open Download Sorter"
     assert getattr(item_0, "default", False) is True, "Open Download Sorter must be the default menu item"
 
-    # Pause action: must NOT be default
-    pause_item = items[7]
-    assert "pause" in str(pause_item.text).lower() or "resume" in str(pause_item.text).lower()
+    # Pause action: must NOT be default (found by label, so menu additions don't break this)
+    pause_item = next(
+        i for i in items
+        if "pause" in str(i.text).lower() or "resume" in str(i.text).lower()
+    )
     assert getattr(pause_item, "default", False) is False, "Pause action must not have default=True"
 
+    # "Finish setup..." is only shown while the watcher waits for the welcome wizard
+    finish_item = next(i for i in items if str(i.text) == "Finish setup...")
+    tray.watch.SETUP_PENDING.clear()
+    assert finish_item.visible is False
+    tray.watch.SETUP_PENDING.set()
+    try:
+        assert finish_item.visible is True
+    finally:
+        tray.watch.SETUP_PENDING.clear()
+
     # Attribution item
-    credit_item = items[16]
+    credit_item = next(i for i in items if str(i.text) == about.CREDIT)
     assert credit_item.text == about.CREDIT
     assert getattr(credit_item, "enabled", True) is False, "Attribution item should be disabled"
 
@@ -183,7 +195,7 @@ def test_tray_pause_sorting_toggle_behavior(monkeypatch):
 
     st = tray.SorterTray()
     menu = st.build_menu()
-    pause_item = menu.items[7]
+    pause_item = next(i for i in menu.items if str(i.text) in ("Pause sorting", "Resume sorting"))
 
     assert pause_item.text == "Pause sorting"
 

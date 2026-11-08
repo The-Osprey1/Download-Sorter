@@ -228,9 +228,9 @@ def test_rule_table_widget_operations(qapp):
         assert table_widget._table.rowCount() == 3
 
         # Check precedence numbers
-        assert table_widget._table.item(0, 0).text() == "#1"
-        assert table_widget._table.item(1, 0).text() == "#2"
-        assert table_widget._table.item(2, 0).text() == "#3"
+        assert table_widget._table.item(0, 0).text() == "1"
+        assert table_widget._table.item(1, 0).text() == "2"
+        assert table_widget._table.item(2, 0).text() == "3"
 
         # Toggle active checkbox
         item = table_widget._table.item(1, 5)
@@ -282,7 +282,7 @@ def test_active_project_card_toggle_and_expiry(qapp, tmp_path):
         card._dir_edit.setText(custom_dir)
 
         # Select 4 Hours expiry
-        card._expiry_combo.setCurrentText("4 Hours")
+        card._expiry_combo.setCurrentIndex(card._expiry_combo.findData(4.0))
 
         active_data = card.get_state()
         assert active_data["enabled"] is True
@@ -303,7 +303,7 @@ def test_live_sandbox_evaluation(qapp):
         # Empty filename
         res_empty = sandbox.evaluate("")
         assert res_empty is None
-        assert sandbox._badge_lbl.text() == "[WAITING]"
+        assert sandbox._badge_lbl.text() == "Waiting"
 
         # Keyword rule test
         cfg = {
@@ -323,7 +323,7 @@ def test_live_sandbox_evaluation(qapp):
         assert res_exam["match_type"] == "keyword"
         assert res_exam["winning_rule"] == "University Exam"
         assert res_exam["destination"] == "School/Exams"
-        assert "[KEYWORD RULE]" in sandbox._badge_lbl.text()
+        assert "Name rule" in sandbox._badge_lbl.text()
 
         # Test Active Project mode
         active_proj = {
@@ -340,7 +340,7 @@ def test_live_sandbox_evaluation(qapp):
         assert res_model is not None
         assert res_model["match_type"] == "active_project"
         assert res_model["destination"] == "C:/Projects/Extruder"
-        assert "[ACTIVE PROJECT]" in sandbox._badge_lbl.text()
+        assert "Project mode" in sandbox._badge_lbl.text()
 
         # School document still takes precedence over active project catch-all
         res_exam_ap = sandbox.evaluate("ME3210_Homework.pdf")
@@ -392,7 +392,7 @@ def test_rules_manager_dialog_draft_and_persistence(qapp, tmp_path, monkeypatch)
 
     dlg = RulesManagerDialog()
     try:
-        assert dlg._tabs.count() == 3
+        assert dlg._tabs.count() == 2  # name rules and file types; the clean-up is its own page
         assert dlg._keyword_table._table.rowCount() == 1
         assert dlg._extension_table._table.rowCount() == 1
 
@@ -417,7 +417,7 @@ def test_rules_manager_dialog_draft_and_persistence(qapp, tmp_path, monkeypatch)
 
 
 def test_live_sandbox_makerworld_badge_and_routing(qapp):
-    """Verify LiveSandboxWidget accurately displays [MAKERWORLD] badge for MakerWorld results."""
+    """Verify LiveSandboxWidget accurately displays MakerWorld badge for MakerWorld results."""
     sandbox = LiveSandboxWidget()
     try:
         res = {
@@ -430,7 +430,7 @@ def test_live_sandbox_makerworld_badge_and_routing(qapp):
             "rule_trace": [],
         }
         sandbox._update_display(res)
-        assert sandbox._badge_lbl.text() == "[MAKERWORLD]"
+        assert sandbox._badge_lbl.text() == "MakerWorld"
         assert "MakerWorld" in sandbox._rule_lbl.text()
     finally:
         sandbox.close()
@@ -446,9 +446,13 @@ def test_machine_remodel_widget_styling_and_tables(qapp, tmp_path):
     widget = MachineRemodelWidget()
     widget._engine.config = {"downloads_dir": str(tmp_path)}
     try:
-        # Verify table stylesheets match suite_theme
-        assert "background-color: #0B0D12" in widget._prot_table.styleSheet() or "COLORS['canvas']" in widget._prot_table.styleSheet() or "#0B0D12" in widget._prot_table.styleSheet()
-        assert "background-color: #0B0D12" in widget._dupe_table.styleSheet() or "COLORS['canvas']" in widget._dupe_table.styleSheet() or "#0B0D12" in widget._dupe_table.styleSheet()
+        # Tables take their look from the shared ui_style sheet (applied by the window),
+        # not from inline styles, and that sheet uses suite_theme colors.
+        import ui_style
+        from suite_theme import COLORS as THEME
+        assert widget._prot_table.styleSheet() == ""
+        assert widget._dupe_table.styleSheet() == ""
+        assert THEME["surface"] in ui_style.stylesheet()
 
         # Populate a mock plan to inspect folder review card styles
         test_dir = tmp_path / "SubProject"

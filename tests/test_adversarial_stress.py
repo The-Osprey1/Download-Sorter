@@ -9,11 +9,13 @@ if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 
 from sorter import evaluate_routing, load_config, CAD_EXTENSIONS, GCODE_SNIFFER_EXTENSIONS
+
+from tests.sample_rules import with_school_rules
 from gcode_peek import sniff_machine_type
 
 @pytest.fixture
 def base_config():
-    return load_config()
+    return with_school_rules(load_config())
 
 # ============================================================================
 # 1. Ambiguous G-Code Headers (Haas vs 3D printer mixes)

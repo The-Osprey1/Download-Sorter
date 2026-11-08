@@ -144,7 +144,8 @@ def spawn_window(*args: str) -> None:
 
 
 class SorterTray:
-    def __init__(self) -> None:
+    def __init__(self, wait_for_setup: bool = False) -> None:
+        self.wait_for_setup = wait_for_setup
         self.config = load_config()
         self.downloads = watch_root(self.config)
         self.stop_event = threading.Event()
@@ -166,7 +167,10 @@ class SorterTray:
             return 0
 
     def tooltip(self) -> str:
-        state = "Paused" if is_paused() else "Watching Downloads"
+        if watch.SETUP_PENDING.is_set():
+            state = "Waiting for you to finish setup"
+        else:
+            state = "Paused" if is_paused() else "Watching Downloads"
         held = self._held_count()
         held_line = f"\n{held} 3MF(s) held in Downloads" if held > 0 else ""
         return f"{about.APP_NAME} - {state}\n{moves_today()} file(s) filed today{held_line}\n{about.CREDIT}"
@@ -179,6 +183,11 @@ class SorterTray:
     def build_menu(self) -> pystray.Menu:
         return pystray.Menu(
             pystray.MenuItem("Open Download Sorter", self.on_open_home, default=True),
+            pystray.MenuItem(
+                "Finish setup...",
+                self.on_finish_setup,
+                visible=lambda _i: watch.SETUP_PENDING.is_set(),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(lambda _i: f"{moves_today()} file(s) filed today", None, enabled=False),
             pystray.MenuItem(lambda _i: f"{self._held_count()} 3MF(s) held in Downloads", None, enabled=False),
@@ -212,6 +221,9 @@ class SorterTray:
 
     def on_open_home(self, _icon=None, _item=None) -> None:
         threading.Thread(target=lambda: spawn_window("--home"), daemon=True).start()
+
+    def on_finish_setup(self, _icon=None, _item=None) -> None:
+        threading.Thread(target=lambda: spawn_window("--welcome"), daemon=True).start()
 
     def on_toggle_pause(self, _icon=None, _item=None) -> None:
         paused = not is_paused()
@@ -276,7 +288,11 @@ class SorterTray:
     def start_watcher(self) -> None:
         def work() -> None:
             try:
-                watch.run(stop=self.stop_event, on_sorted=self.on_sorted)
+                watch.run(
+                    stop=self.stop_event,
+                    on_sorted=self.on_sorted,
+                    wait_for_setup=self.wait_for_setup,
+                )
                 if not self.stop_event.is_set():
                     raise RuntimeError("Watcher returned without a shutdown request")
             except Exception as exc:
@@ -305,8 +321,11 @@ def main() -> int:
         spawn_window("--home")
         return 0
     config = load_config()
-    if not config.get("onboarding_completed", False):
-        logging.info("First run detected: spawning Welcome Wizard.")
+    first_run = not config.get("onboarding_completed", False)
+    if first_run:
+        # Nothing is sorted until the wizard is finished, so the user's profile
+        # and "organize existing files" choice apply from the very first move.
+        logging.info("First run detected: spawning Welcome Wizard; sorting waits for it.")
         spawn_window("--welcome")
     try:
         import safe_ops
@@ -317,7 +336,7 @@ def main() -> int:
     logging.info("Download Sorter tray starting (PID %s)", os.getpid())
     write_runtime_state("starting", "tray initializing")
     try:
-        result = SorterTray().run()
+        result = SorterTray(wait_for_setup=first_run).run()
     except BaseException as exc:
         logging.exception("Download Sorter tray crashed")
         write_runtime_state("crashed", f"{type(exc).__name__}: {exc}")

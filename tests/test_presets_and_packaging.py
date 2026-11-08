@@ -137,7 +137,8 @@ def test_reset_sorter_config_to_defaults(tmp_path):
 
     res = suite_data.reset_sorter_config_to_defaults(config_path=cfg_file)
     assert isinstance(res, dict)
-    assert len(res["keyword_rules"]) > 0
+    # Keyword rules are personal (the welcome wizard adds them); defaults have none.
+    assert res["keyword_rules"] == []
     assert len(res["extension_rules"]) > 0
 
     reloaded = suite_data.load_sorter_config(cfg_file)
@@ -245,7 +246,7 @@ def test_verify_release_checks():
 
 def test_preset_library_dialog(qapp):
     dlg = PresetLibraryDialog()
-    assert dlg.windowTitle() == "📚 Rule Preset Library"
+    assert dlg.windowTitle() == "Rule library"
     assert len(dlg._checkboxes) >= 5
 
     # Test select all

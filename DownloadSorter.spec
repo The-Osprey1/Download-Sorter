@@ -27,6 +27,7 @@ hidden_imports = [
     'PySide6.QtCore',
     'PySide6.QtGui',
     'PySide6.QtWidgets',
+    'PySide6.QtSvg',
     'sorter',
     'config_manager',
     'rules_manager',
@@ -49,6 +50,8 @@ hidden_imports = [
     'safe_ops',
     'defusedxml',
     'onboarding',
+    'ui_icons',
+    'ui_style',
     'installer_builder',
 ]
 

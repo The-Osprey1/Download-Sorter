@@ -9,9 +9,11 @@ if str(root) not in sys.path:
 
 from sorter import evaluate_routing, matches_keyword, explain_classification, load_config
 
+from tests.sample_rules import with_school_rules
+
 @pytest.fixture
 def base_config():
-    return load_config()
+    return with_school_rules(load_config())
 
 def test_keyword_boundary_matching():
     assert matches_keyword('IME3311_Exam.pdf', 'ime3311') is True
