@@ -18,7 +18,6 @@ import json
 import os
 import sys
 import time
-import tomllib
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -339,6 +338,7 @@ def test_retarget_moves_watches_when_folders_change(tmp_path, downloads, config)
 # ---------------------------------------------------------------------------
 
 def test_every_console_script_module_is_packaged():
+    tomllib = pytest.importorskip("tomllib")  # Python 3.11+; the app supports 3.10
     meta = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     modules = set(meta["tool"]["setuptools"]["py-modules"])
     for name, target in meta["project"]["scripts"].items():
