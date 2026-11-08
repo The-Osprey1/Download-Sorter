@@ -9,7 +9,7 @@ Features:
   and choose the recently downloaded file in the active file dialog.
 - Zero Friction, Non-Intrusive: Never hijacks or navigates without user consent.
   If the user wants another file, they simply ignore the pill and it auto-dismisses.
-- Category-Aware Theming: Integrates with Devyn Personal Suite tokens and vector icons.
+- Category-Aware Theming: Integrates with the shared design tokens and vector icons.
 - Robust Win32 Dialog Discovery: Accurately identifies Common Item Dialogs (#32770)
   across Chrome, Edge, Discord, Slack, CAD, and native desktop applications.
 - Process-Isolated: Runs as a lightweight ephemeral process, preventing UI hangs.

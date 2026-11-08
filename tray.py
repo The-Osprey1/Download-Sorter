@@ -47,7 +47,7 @@ if not PYTHON.exists():
             PYTHON = sibling
 _HISTORY_READER = IncrementalHistoryReader(HISTORY_FILE)
 
-# Align with Devyn Personal Suite design tokens: ACCENTS['downloadSorter'] = #69E6AD
+# Align with the shared design tokens (suite_theme.py): ACCENTS['downloadSorter'] = #69E6AD
 ACCENT = (23, 27, 36)            # dark surface body
 ACCENT_LIGHT = (105, 230, 173)   # suite mint tab & arrow
 PAUSED_GREY = (101, 112, 132)    # textFaint

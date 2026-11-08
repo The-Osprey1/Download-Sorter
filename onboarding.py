@@ -90,7 +90,18 @@ def _auto_unzip_enabled(config: dict[str, Any]) -> bool:
     watch_block = config.get("watch")
     if isinstance(watch_block, dict) and "auto_unzip" in watch_block:
         return bool(watch_block["auto_unzip"])
-    return bool(config.get("auto_unzip", True))
+    return bool(config.get("auto_unzip", False))
+
+
+def _set_auto_unzip(config: dict[str, Any], enabled: bool) -> None:
+    """Turn unzipping on or off. The sorter reads watch.auto_unzip first and the
+    top-level key as a fallback, so keep both in step."""
+    watch_block = config.get("watch")
+    if not isinstance(watch_block, dict):
+        watch_block = {}
+        config["watch"] = watch_block
+    watch_block["auto_unzip"] = bool(enabled)
+    config["auto_unzip"] = bool(enabled)
 
 
 try:
@@ -726,9 +737,9 @@ class WelcomeWizardDialog(QDialog):
 
         pref_card, prefs = ui_style.card(spacing=4)
 
-        def option(text: str, hint: str) -> QCheckBox:
+        def option(text: str, hint: str, checked: bool = True) -> QCheckBox:
             chk = QCheckBox(text)
-            chk.setChecked(True)
+            chk.setChecked(checked)
             prefs.addWidget(chk)
             note = ui_style.label(hint, "muted", wrap=True)
             note.setContentsMargins(26, 0, 0, 10)
@@ -744,6 +755,11 @@ class WelcomeWizardDialog(QDialog):
         self._chk_sort_now = option(
             "Sort the files already in my Downloads folder",
             "Untick this to sort only new downloads. The first sort can be undone in one click.")
+        self._chk_unzip = option(
+            "Unzip downloaded .zip files",
+            "Puts what's inside a zip into the Extracted folder and files the zip in Archives. "
+            "Leave this off to keep zips as they are.",
+            checked=False)
         layout.addWidget(pref_card)
         layout.addStretch()
         return page
@@ -834,6 +850,9 @@ class WelcomeWizardDialog(QDialog):
                 # "Leave my existing files alone": automatic sweeps (now and after
                 # every restart) skip anything already in Downloads at this moment.
                 self._config["skip_files_before"] = time.time()
+
+            if hasattr(self, "_chk_unzip"):
+                _set_auto_unzip(self._config, self._chk_unzip.isChecked())
 
             # Saving with onboarding_completed=True is what lets a waiting
             # background sorter start; it then does the initial sort itself.
@@ -1635,14 +1654,7 @@ class SettingsWidget(QWidget):
                 pass
 
     def _on_unpack_toggled(self, checked: bool) -> None:
-        # The sorter reads watch.auto_unzip first and the top-level key as a
-        # fallback, so keep both in step.
-        watch_block = self._config.get("watch")
-        if not isinstance(watch_block, dict):
-            watch_block = {}
-            self._config["watch"] = watch_block
-        watch_block["auto_unzip"] = checked
-        self._config["auto_unzip"] = checked
+        _set_auto_unzip(self._config, checked)
         if hasattr(suite_data, "save_sorter_config"):
             try:
                 suite_data.save_sorter_config(self._config)

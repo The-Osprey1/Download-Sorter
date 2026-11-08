@@ -1,7 +1,7 @@
 """Single-file Windows setup executable builder and icon generator for Download Sorter.
 
 Provides:
-- generate_app_icon: Generates multi-layer Windows .ico via Pillow matching Devyn Personal Suite theme.
+- generate_app_icon: Generates multi-layer Windows .ico via Pillow matching the app's theme.
 - find_csc_compiler: Locates the native Windows C# compiler csc.exe.
 - find_iscc_compiler: Locates Inno Setup ISCC.exe if installed.
 - build_csharp_installer: Compiles a standalone dark-themed WinForms setup executable embedding payload.zip.

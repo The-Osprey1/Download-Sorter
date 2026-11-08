@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Smoother window (`rules_manager.py`, `ui_motion.py`)**: pages fade in when you switch between them, and messages slide in and fade out. All motion is skipped when Windows' "Show animations in Windows" setting is off.
 * **Tray messages (`tray.py`)**: pausing and resuming from the tray now say what happens next.
 
+* **Zip files are kept as they are unless you choose otherwise (`sorter.py`, `onboarding.py`, `config.json`)**: the welcome steps now ask "Unzip downloaded .zip files" (off by default), and the shipped default is off. Before, every zip was unpacked into Extracted automatically. The switch is still in Settings.
+* **No personal paths in the app (`rules_manager.py`)**: the "Try a filename" box no longer looks for sample programs in a folder on the developer's PC.
+
 ### Added
 * `sorter.preview_existing`: lists what "Sort Downloads now" would move, without moving anything or writing to the log.
 

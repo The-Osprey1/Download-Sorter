@@ -266,7 +266,11 @@ def is_sorter_running() -> bool:
 
 
 def get_maker_projects(db_path: Path | str | None = None) -> list[dict[str, Any]]:
-    """Query Maker / 3D projects from local database or project directory."""
+    """Maker / 3D projects for the Active Project picker.
+
+    Optional: reads the Print Library app's database when that app is
+    installed, otherwise folders in Documents\\3D Projects, otherwise nothing.
+    """
     if db_path:
         target = Path(db_path)
     else:

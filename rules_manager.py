@@ -80,13 +80,11 @@ try:
 except ImportError:
     sorter = None
 
-# Reference Haas samples for realistic sandbox evaluation if available
-HAAS_STUDIO_DIR = Path("C:/Users/devyn/Projects/haas-gcode-studio")
+# Sample Haas programs for the "Try a filename" box, when the repository's test
+# samples are present (running from source). The installed app uses a short
+# built-in sample instead.
 LOCAL_SAMPLES_DIR = ROOT / "tests" / "samples"
-if HAAS_STUDIO_DIR.exists():
-    HAAS_CONTOUR_SAMPLE = HAAS_STUDIO_DIR / "samples" / "sample1_contour.nc"
-    HAAS_BOLT_SAMPLE = HAAS_STUDIO_DIR / "samples" / "sample2_bolt_circle.nc"
-elif LOCAL_SAMPLES_DIR.exists():
+if LOCAL_SAMPLES_DIR.exists():
     HAAS_CONTOUR_SAMPLE = LOCAL_SAMPLES_DIR / "sample1_contour.nc"
     HAAS_BOLT_SAMPLE = LOCAL_SAMPLES_DIR / "sample2_bolt_circle.nc"
 else:
