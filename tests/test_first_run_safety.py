@@ -278,7 +278,7 @@ def test_watcher_without_wizard_sorts_at_startup(config, downloads):
 def test_auto_unzip_lookup_matches_the_sorter():
     import onboarding
 
-    assert onboarding._auto_unzip_enabled({}) is True
+    assert onboarding._auto_unzip_enabled({}) is False, "zips are kept as they are unless the user opts in"
     assert onboarding._auto_unzip_enabled({"auto_unzip": False}) is False
     assert onboarding._auto_unzip_enabled({"auto_unzip": True, "watch": {"auto_unzip": False}}) is False
 
@@ -306,7 +306,8 @@ def test_auto_unpack_switch_changes_what_the_sorter_reads(qapp, monkeypatch):
 # 1b. The wizard's "Organize existing files" choice
 # ---------------------------------------------------------------------------
 
-def _finish_wizard(qapp, monkeypatch, sort_now: bool, sorter_status: str | None) -> tuple[list[dict], list[dict]]:
+def _finish_wizard(qapp, monkeypatch, sort_now: bool, sorter_status: str | None,
+                   unzip: bool | None = None) -> tuple[list[dict], list[dict]]:
     """Finish the wizard; sorter_status None means no background sorter is running."""
     import onboarding
 
@@ -324,6 +325,8 @@ def _finish_wizard(qapp, monkeypatch, sort_now: bool, sorter_status: str | None)
     try:
         dlg._on_persona_selected("everyday_home")
         dlg._chk_sort_now.setChecked(sort_now)
+        if unzip is not None:
+            dlg._chk_unzip.setChecked(unzip)
         dlg.accept()
     finally:
         dlg.close()
@@ -351,3 +354,30 @@ def test_wizard_sort_now_leaves_it_to_the_waiting_sorter(qapp, monkeypatch):
     saved, sorted_calls = _finish_wizard(qapp, monkeypatch, sort_now=True, sorter_status="waiting_for_setup")
     assert saved[-1]["onboarding_completed"] is True
     assert sorted_calls == [], "the waiting background sorter does the initial sort"
+
+
+# ---------------------------------------------------------------------------
+# 1c. The wizard asks whether to unzip downloads (off unless chosen)
+# ---------------------------------------------------------------------------
+
+def test_shipped_default_keeps_zips_as_they_are():
+    cfg = sorter.get_default_config()
+    assert cfg["auto_unzip"] is False
+    assert cfg["watch"]["auto_unzip"] is False
+
+
+def test_wizard_unzip_choice_starts_off(qapp):
+    import onboarding
+
+    dlg = onboarding.WelcomeWizardDialog(config=sorter.get_default_config())
+    try:
+        assert dlg._chk_unzip.isChecked() is False
+    finally:
+        dlg.close()
+
+
+@pytest.mark.parametrize("choice", [True, False])
+def test_wizard_saves_the_unzip_choice(qapp, monkeypatch, choice):
+    saved, _ = _finish_wizard(qapp, monkeypatch, sort_now=False, sorter_status=None, unzip=choice)
+    assert saved[-1]["watch"]["auto_unzip"] is choice
+    assert saved[-1]["auto_unzip"] is choice

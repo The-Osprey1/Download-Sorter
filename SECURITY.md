@@ -1,10 +1,10 @@
 # Security Policy
 
-## 🔒 100% Offline & Local-First Commitment
+## 🔒 Local-First Commitment
 
-Download Sorter is built from the ground up on the principle of **strict data privacy**:
+Download Sorter is built on the principle of **strict data privacy**:
 * **Zero Telemetry**: No analytics, phone-home beacons, or usage tracking.
-* **Zero Network Requests**: The background daemon, rules manager, and utilities perform zero outbound HTTP/HTTPS connections. All classification, extraction, and inspection logic executes strictly on your local machine.
+* **One optional network request**: once a day at most, `update_check.py` asks GitHub's public "latest release" address (`api.github.com/repos/The-Osprey1/Download-Sorter/releases/latest`) which version is newest. The request carries only the app name and version (as its User-Agent). Nothing about the user, the computer or any file is sent. Turn it off in Settings ("Check for new versions once a day") or with `"update_check": {"enabled": false}` in the config. All classification, extraction, and inspection logic runs strictly on your local machine.
 * **Non-Destructive File Movement**: Files are never permanently erased. Reversible moves are indexed in `%LOCALAPPDATA%\download-sorter\history.jsonl`, and aged cleanup is delegated strictly to the Windows Recycle Bin (`SHFileOperationW` with `FOF_ALLOWUNDO`).
 * **Zip Slip Defense**: Archive extraction explicitly sanitizes archive members to prevent path traversal (`../`) attacks.
 
@@ -14,8 +14,8 @@ Download Sorter is built from the ground up on the principle of **strict data pr
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
-| < 1.0   | :x:                |
+| 2.1.x   | :white_check_mark: |
+| < 2.1   | :x:                |
 
 ---
 

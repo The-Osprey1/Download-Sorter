@@ -5,11 +5,11 @@
     "settle_seconds": 3.0,
     "min_age_minutes": 0,
     "auto_unpack_3d_zips": false,
-    "auto_unzip": true,
+    "auto_unzip": false,
     "extracted_destination": "Extracted"
   },
   "auto_unpack_3d_zips": false,
-  "auto_unzip": true,
+  "auto_unzip": false,
   "extracted_destination": "Extracted",
   "gcode_sniffer_enabled": true,
   "haas_destination": "Code\\Haas",

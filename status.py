@@ -176,7 +176,7 @@ def main() -> int:
     # Watcher Settings
     min_age = config.get("watch", {}).get("min_age_minutes", 0)
     auto_3d = config.get("watch", {}).get("auto_unpack_3d_zips", True)
-    auto_unzip = config.get("watch", {}).get("auto_unzip", config.get("auto_unzip", True))
+    auto_unzip = config.get("watch", {}).get("auto_unzip", config.get("auto_unzip", False))
     extracted_dest = config.get("extracted_destination", "Extracted")
     print(f"  Grace Period:        {min_age} minute(s)")
     print(f"  3D Zip Auto-Unpack:  {'Enabled' if auto_3d else 'Disabled'}")

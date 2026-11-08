@@ -47,7 +47,7 @@ if not PYTHON.exists():
             PYTHON = sibling
 _HISTORY_READER = IncrementalHistoryReader(HISTORY_FILE)
 
-# Align with Devyn Personal Suite design tokens: ACCENTS['downloadSorter'] = #69E6AD
+# Align with the shared design tokens (suite_theme.py): ACCENTS['downloadSorter'] = #69E6AD
 ACCENT = (23, 27, 36)            # dark surface body
 ACCENT_LIGHT = (105, 230, 173)   # suite mint tab & arrow
 PAUSED_GREY = (101, 112, 132)    # textFaint
@@ -143,6 +143,9 @@ def spawn_window(*args: str) -> None:
         logging.warning("Could not spawn window %s: %s", args, exc)
 
 
+TOOLTIP_MAX = 127
+
+
 class SorterTray:
     def __init__(self, wait_for_setup: bool = False) -> None:
         self.wait_for_setup = wait_for_setup
@@ -173,7 +176,21 @@ class SorterTray:
             state = "Paused" if is_paused() else "Watching Downloads"
         held = self._held_count()
         held_line = f"\n{held} 3MF(s) held in Downloads" if held > 0 else ""
-        return f"{about.APP_NAME} - {state}\n{moves_today()} file(s) filed today{held_line}\n{about.CREDIT}"
+        update_line = ""
+        try:
+            import update_check
+            release = update_check.cached_update()
+            if release:
+                update_line = f"\nVersion {update_check.display_version(release)} is available"
+        except Exception:
+            pass
+        text = f"{about.APP_NAME} - {state}\n{moves_today()} file(s) filed today{held_line}{update_line}"
+        with_credit = f"{text}\n{about.CREDIT}"
+        # Windows tray tooltips hold at most 127 characters (pystray raises on
+        # longer ones), so the credit is the first thing to go.
+        if len(with_credit) <= TOOLTIP_MAX:
+            return with_credit
+        return text[:TOOLTIP_MAX]
 
     def refresh(self) -> None:
         self.icon.icon = make_icon(is_paused(), self._held_count())
@@ -193,14 +210,14 @@ class SorterTray:
             pystray.MenuItem(lambda _i: f"{self._held_count()} 3MF(s) held in Downloads", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sort Downloads now", self.on_sort_now),
-            pystray.MenuItem("Undo last batch", self.on_undo),
+            pystray.MenuItem("Undo last sort", self.on_undo),
             pystray.MenuItem(
                 lambda _i: "Resume sorting" if is_paused() else "Pause sorting",
                 self.on_toggle_pause,
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Configure Rules & Customize...", self.on_open_rules_manager),
-            pystray.MenuItem("Remodel Messy Folders...", self.on_remodel),
+            pystray.MenuItem("Rules...", self.on_open_rules_manager),
+            pystray.MenuItem("Clean up a folder...", self.on_remodel),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open Downloads", self.on_open_downloads),
             pystray.MenuItem("Open log folder", self.on_open_logs),
@@ -307,8 +324,25 @@ class SorterTray:
                 self.icon.stop()
         threading.Thread(target=work, daemon=True, name="sorter-watch").start()
 
+    def check_for_update(self) -> None:
+        """Once a day at most: mention a newer version, once per version."""
+        def work() -> None:
+            try:
+                import update_check
+                release = update_check.check(self.config)
+                if release and update_check.should_notify(release):
+                    self.notify(
+                        f"Version {update_check.display_version(release)} is available. "
+                        "Open Download Sorter to download it."
+                    )
+                    self.refresh()
+            except Exception:
+                logging.debug("Update check failed", exc_info=True)
+        threading.Thread(target=work, daemon=True, name="sorter-update-check").start()
+
     def run(self) -> int:
         self.start_watcher()
+        self.check_for_update()
         self.icon.run()
         self.stop_event.set()
         watch.WAKE_EVENT.set()

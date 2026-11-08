@@ -1,73 +1,107 @@
 # Download Sorter
 
-> **Made by Devyn Fidel (2026)** · v2.0.2 · [MIT License](LICENSE)
+> **Made by Devyn Fidel (2026)** · v2.1.0 · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
-[![Author: Devyn Fidel](https://img.shields.io/badge/author-Devyn%20Fidel-69E6AD.svg)](https://github.com/The-Osprey1/Download-Sorter)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A lightweight, local-first automated file organizer for Windows that keeps your **Downloads** and **Documents** folders organized without sending your data to any cloud service.
+**Download Sorter keeps your Downloads folder tidy.** A few seconds after a download finishes, it moves the file into a folder for its type (PDFs, Images, Installers and so on), right inside Downloads. Everything happens on your PC, and every move can be undone.
 
-Includes a **PySide6 Visual Rules Manager & Machine Remodel Wizard**, **Curated Rule Presets Library**, **3-Path Batch File Handoff Quick Switcher**, **3MF Grace-Period Hold for Bambu Studio**, **Staged Machine Remodel Engine**, **System Tray monitor**, **interactive High-DPI Desktop Ribbon toasts**, **reversible Undo**, and **3D Printing / CNC intelligence**. Available both as a **standalone Windows executable (no Python required)** and as an extensible Python package.
-
----
-
-## 1-Click Download & Setup (Recommended)
-
-For everyday users on Windows 10 & 11 (zero Python installation or terminal commands required):
-
-1. **Download the Setup Executable**:
-   Get the latest single-file installer: [`DownloadSorter-Setup-v2.0.2-windows-x64.exe`](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
-2. **Run the Installer**:
-   Double-click the setup `.exe`.
-   - Installs cleanly into `%LOCALAPPDATA%\Programs\DownloadSorter` (no Administrator privileges required).
-   - Automatically creates Desktop and Start Menu shortcuts.
-   - Registers in Windows Installed Apps for seamless 1-click uninstallation.
-3. **Enjoy Automated Organization**:
-   The interactive 3-step Welcome Wizard launches automatically on completion so you can choose your persona profile and set your filing preferences. Nothing is moved until you finish the wizard, and if you untick **"Organize existing files"**, the files already in your Downloads folder are left where they are.
-
-*Unattended / Silent deployment:* Run `DownloadSorter-Setup-v2.0.2-windows-x64.exe /S` (supports optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
+![The Download Sorter window: sorting is on, and recently sorted files are listed with the folder each one went to](docs/images/home.png)
 
 ---
 
-## Folder Architecture
+## Get it
 
-Newly downloaded files are routed into an organized tree directly inside your Downloads folder:
+1. **Download** the installer, `DownloadSorter-Setup-v2.1.0-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
+2. **Run it.** Windows will probably show a blue "Windows protected your PC" screen the first time. [Here's why, and what to click](#windows-protected-your-pc).
+   - It installs just for you, in `%LOCALAPPDATA%\Programs\DownloadSorter`. No administrator password is needed.
+   - It adds Start menu and desktop shortcuts, and an entry in Installed apps.
+3. **Answer the welcome steps.**
+   - Pick the profile that fits you best: Everyday, Student, Office and work, or 3D printing, CAD and CNC.
+   - Then choose whether to:
+     - start Download Sorter when you sign in
+     - add a right-click menu item
+     - sort the files already in Downloads
+     - unzip downloaded zip files
 
-```text
-Downloads/
-  ├── 3D Models/
-  │     ├── MakerWorld/ (<Author>/<Model>/<Plate>.3mf)
-  │     ├── STL/
-  │     ├── 3MF/
-  │     ├── OBJ/
-  │     ├── STEP/
-  │     ├── CAD/ (F3D, SLDPRT, IPT, DWG, DXF)
-  │     └── Other/
-  ├── Documents/
-  │     ├── School/ (Course-specific keywords, syllabi, homework)
-  │     ├── PDFs/
-  │     ├── Word/
-  │     └── Text/
-  ├── Spreadsheets/ (XLSX, CSV, ODS)
-  ├── Images/ (JPG, PNG, WebP, SVG, HEIC)
-  ├── Videos/ (MP4, MKV, MOV, WebM)
-  ├── Audio/ (MP3, WAV, FLAC, AAC)
-  ├── Archives/ (Original ZIP, 7Z, RAR)
-  ├── Extracted/ (Unpacked landing folders)
-  ├── Installers/ (EXE, MSI, MSIX)
-  ├── Code/ (PY, JS, TS, CPP, JSON, HTML, CSS, Haas/GCode)
-  └── Other/ (Uncategorized fallback)
-```
+You need Windows 10 or 11. Nothing else needs to be installed.
 
-With the **3D Printing, CAD & CNC Maker** profile, stray CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`) found in Windows Documents are also organized into the Downloads 3D tree. Other profiles never touch your Documents folder. Application folders (like `OneDrive`, `Steam`, `My Games`, `SOLIDCast`, `Adobe`) and OneDrive cloud placeholders are always protected and skipped.
+## What happens next
+
+- **Nothing moves until you finish the welcome steps.** If you chose to sort the files already in Downloads, that first sort counts as one batch, so a single **Undo last sort** puts everything back.
+- **New downloads are filed a few seconds after they finish.** Half-finished downloads are left alone.
+- **The Home page shows each file as it's filed**, with where it went and an Undo button:
+
+  ![New files appear on the Home page a few seconds after they're filed](docs/images/home-live.gif)
+
+- **Files land in folders inside Downloads**, for example:
+
+  ```text
+  Downloads/
+    ├── Documents/   (PDFs, Word, Text, plus folders from your profile, like Invoices & Receipts)
+    ├── Images/
+    ├── Videos/
+    ├── Audio/
+    ├── Spreadsheets/
+    ├── Installers/
+    ├── Archives/    (zip, 7z, rar)
+    ├── 3D Models/   (STL, 3MF, STEP, CAD ...)
+    ├── Code/
+    └── Other/       (anything no rule matched)
+  ```
+
+  You can change where things go on the **Rules** page, and test a file name with **Try a filename** before saving.
+- **Files you move yourself stay where you put them.** If you drag a sorted file into your own folder inside Downloads, Download Sorter leaves it there.
+
+## Windows protected your PC
+
+New apps from small developers aren't signed with a paid code-signing certificate yet, so Windows SmartScreen warns about them. To install anyway:
+
+1. Click **More info**.
+2. Click **Run anyway**.
+
+To check that your download is exactly what was published:
+
+1. Download `checksums.txt` from the same release page.
+2. Run this in PowerShell, in the folder where the installer is:
+
+   ```powershell
+   Get-FileHash .\DownloadSorter-Setup-v2.1.0-windows-x64.exe -Algorithm SHA256
+   ```
+
+3. The long code it prints should match the line for the installer in `checksums.txt`.
+
+All the source code is in this repository, and the installer is built from it by GitHub, in the open (see the [release workflow](.github/workflows/release.yml)).
+
+## Privacy
+
+- **Your files never leave your PC.** Sorting, rules, history and logs all stay in `%LOCALAPPDATA%\download-sorter`.
+- **One small network request, once a day:** Download Sorter asks GitHub which version is newest, so it can tell you when there's an update. Only the app's name and version are sent. Turn it off in **Settings**, under "Check for new versions once a day".
+- **Learning is off by default.** If you turn it on, it learns from your own moves, entirely on your PC. **Forget everything** in Settings deletes it.
+- No accounts, no ads, no tracking.
+
+## Undo, updates, uninstalling and help
+
+- **Undo:** click **Undo last sort** on Home, or right-click the tray icon (near the clock) and choose **Undo last sort**.
+- **Pause:** use **Pause sorting** on Home, or the tray icon.
+- **Updates:** when a new version is out, Home shows "Download Sorter X is available". Download it and run the installer. Your rules and settings are kept.
+- **Uninstall:** go to Windows Settings, then Apps, then Installed apps, then Download Sorter, then Uninstall. It asks whether to also delete your rules and history.
+- **Something went wrong?** [Report a bug](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml). The log helps a lot: right-click the tray icon, choose **Open log folder**, and attach `sorter.log`.
+
+*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.1.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
 
 ---
 
-## Key Features in Version 2.0
+# For power users and developers
+
+Everything below describes the features in more depth, the command-line tools, and how to build Download Sorter from source.
+
+With the **3D Printing, CAD & CNC** profile, stray CAD and 3D files (e.g. `.stl`, `.step`, `.3mf`) found in Windows Documents are also organized into the Downloads 3D tree. Other profiles never touch your Documents folder. Application folders (like `OneDrive`, `Steam`, `My Games`, `SOLIDCast`, `Adobe`) and OneDrive cloud placeholders are always protected and skipped.
+
+## Features in detail
 
 ### 1. The Download Sorter window (`rules_manager.py`, `onboarding.py`)
 A dark-mode window built with **PySide6**. A sidebar switches between four pages:
@@ -310,7 +344,7 @@ This repository includes a comprehensive 4-Tier test suite covering feature test
 
 ## Safety & Privacy
 
-* **100% Offline**: Zero external network requests, analytics, or telemetry. All sorting occurs entirely on your local machine.
+* **Local-first**: no analytics or telemetry, and all sorting happens on your PC. The only network request is the optional once-a-day version check described in [Privacy](#privacy).
 * **Non-Destructive Cleanup**: Clean scripts send items strictly to the Windows Recycle Bin using native Windows Shell API (`SHFileOperationW` with `FOF_ALLOWUNDO`).
 * **Path Traversal Protection**: Archive extractors and 3MF parsers reject any archive member with directory traversal markers (`../` or leading root slashes).
 * **Write-Ahead Journaling**: Safe 2-phase move operations with crash recovery prevent data loss during power outages or unexpected interruptions.
@@ -324,7 +358,7 @@ This repository includes a comprehensive 4-Tier test suite covering feature test
 Yes. SmartScreen flags newly released binaries from GitHub that have not yet built up download reputation or are not signed with a paid Extended Validation (EV) code signing certificate. To proceed:
 1. Click **More info**.
 2. Click **Run anyway**.
-The application is 100% open-source, offline, and makes zero network requests. You can inspect the source code and build it locally from scratch at any time.
+The application is open source, and the installer is built from this repository by GitHub. See [Windows protected your PC](#windows-protected-your-pc) for how to check your download.
 
 ### Where are my custom rules saved?
 Your personal rule configurations, custom keywords, and category folders are stored in:
@@ -333,7 +367,7 @@ This keeps your settings strictly isolated from the application directory. Updat
 
 ### How do I undo a sort batch?
 If a batch was sorted into the wrong place, you can immediately revert it:
-* **Via System Tray**: Right-click the Download Sorter icon and click **"Undo last batch"**.
+* **Via System Tray**: Right-click the Download Sorter icon and click **"Undo last sort"**.
 * **Via File Explorer**: Right-click the background of any folder and click **"Undo Last DownloadSorter Batch"**.
 * **Via Command Line**: Run `download-sorter-undo` (or `python sort_undo.py`).
 
@@ -345,7 +379,7 @@ Yes! Download Sorter automatically checks Windows Shell Known Folders (`FOLDERID
 ## Contributing & Security
 
 * **Contributing**: Check out [CONTRIBUTING.md](CONTRIBUTING.md) for local development instructions, test guidelines, and how to submit new rule presets.
-* **Security & Privacy**: Read our [SECURITY.md](SECURITY.md) policy detailing our zero-telemetry and offline security model.
+* **Security & Privacy**: Read our [SECURITY.md](SECURITY.md) policy: no telemetry, local-first, and how to report a problem.
 * **Changelog**: See [CHANGELOG.md](CHANGELOG.md) for version release history.
 
 ---

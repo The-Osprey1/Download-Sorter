@@ -2,7 +2,7 @@
 
 Displays a modern floating banner in the top-right corner when a file is sorted.
 Features:
-- Integrated with Devyn Personal Suite design tokens (`suite_theme.py`).
+- Integrated with the shared design tokens (suite_theme.py) (`suite_theme.py`).
 - Crisp High-DPI rendering on Windows (fixes blurriness on 125%/150%/175%/200% displays).
 - Dynamic category-based accent colors (3D/CAD, CNC, Slicer, PDFs, Code, Media, Installers).
 - Modern anti-aliased vector icon emblems for all major file categories.
@@ -57,7 +57,7 @@ PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 if not PYTHON.exists():
     PYTHON = Path(sys.executable)
 
-# Load Devyn Personal Suite tokens if available, else graceful defaults
+# Load the shared design tokens if available, else graceful defaults
 try:
     from suite_theme import ACCENTS, COLORS, RIBBON, TYPE
     BG_COLOR = COLORS.get("surface", "#12151C")
@@ -110,7 +110,7 @@ SLOTS_FILE = Path(tempfile.gettempdir()) / "download_sorter_ribbon_slots.json"
 SLOTS_LOCK = Path(tempfile.gettempdir()) / "download_sorter_ribbon_slots.lock"
 RIBBON_DISMISS_FILE = Path(tempfile.gettempdir()) / "download_sorter_ribbon_dismiss.json"
 
-# Category color map aligned with Devyn Personal Suite tokens
+# Category color map aligned with the shared design tokens
 CATEGORY_COLORS: dict[str, str] = {
     "step": "#69E6AD",         # 3D / CAD: Suite mint
     "stl": "#69E6AD",

@@ -1009,7 +1009,7 @@ class RemodelEngine:
 # ---------------------------------------------------------------------------
 
 def generate_html_receipt(manifest: dict[str, Any], output_path: Path | str) -> None:
-    """Generate a clean, searchable HTML receipt with Devyn Personal Suite styling."""
+    """Generate a clean, searchable HTML receipt with the app's dark theme styling."""
     moves = manifest.get("executed_moves", [])
     skipped = manifest.get("skipped_items", [])
     remodel_id = manifest.get("remodel_id", "remodel")

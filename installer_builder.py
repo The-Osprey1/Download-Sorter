@@ -1,7 +1,7 @@
 """Single-file Windows setup executable builder and icon generator for Download Sorter.
 
 Provides:
-- generate_app_icon: Generates multi-layer Windows .ico via Pillow matching Devyn Personal Suite theme.
+- generate_app_icon: Generates multi-layer Windows .ico via Pillow matching the app's theme.
 - find_csc_compiler: Locates the native Windows C# compiler csc.exe.
 - find_iscc_compiler: Locates Inno Setup ISCC.exe if installed.
 - build_csharp_installer: Compiles a standalone dark-themed WinForms setup executable embedding payload.zip.
@@ -618,7 +618,7 @@ def build_csharp_installer(
     if not dist.exists():
         raise FileNotFoundError(f"Distribution directory does not exist: {dist}")
 
-    ver = version or getattr(about, "__version__", "2.0.2")
+    ver = version or getattr(about, "__version__", "2.1.0")
     author_str = getattr(about, "AUTHOR", "")
     credit_str = getattr(about, "CREDIT", "")
     repo_url_str = getattr(about, "REPO_URL", "")
@@ -687,7 +687,7 @@ def build_setup_exe(
     setup file (and its documented /S and /D= options) does not depend on
     whether Inno Setup happens to be installed on the build machine.
     """
-    ver = version or getattr(about, "__version__", "2.0.2")
+    ver = version or getattr(about, "__version__", "2.1.0")
     dist = Path(dist_dir) if dist_dir else (REPO_ROOT / "dist" / "DownloadSorter")
     target_out_dir = dist.parent if dist.name == "DownloadSorter" else (REPO_ROOT / "dist")
     out = Path(output_exe) if output_exe else (target_out_dir / f"DownloadSorter-Setup-v{ver}-windows-x64.exe")

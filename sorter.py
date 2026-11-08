@@ -68,6 +68,8 @@ V2_DEFAULTS: dict = {
     "mirror": {"enabled": False},
     # Learning from how the user organizes files (stage 1 only watches and logs).
     "learning": {"enabled": False},
+    # Once a day, ask GitHub which version is newest (see update_check.py).
+    "update_check": {"enabled": True},
     "remodel": {
         "enabled": True,
         "quarantine_days": 30,
@@ -102,12 +104,12 @@ DEFAULT_CONFIG: dict = {
         "settle_seconds": 3.0,
         "min_age_minutes": 0,
         "auto_unpack_3d_zips": False,
-        "auto_unzip": True,
+        "auto_unzip": False,
         "extracted_destination": "Extracted",
     },
     "downloads_dir": "${USERPROFILE}\\Downloads",
     "auto_unpack_3d_zips": False,
-    "auto_unzip": True,
+    "auto_unzip": False,
     "extracted_destination": "Extracted",
     "gcode_sniffer_enabled": True,
     "haas_destination": "Code\\Haas",
@@ -1701,7 +1703,7 @@ def move_file(
         except Exception as exc:
             logging.warning("Auto-unpack check failed for %s: %s", path.name, exc)
 
-    auto_unzip = config.get("watch", {}).get("auto_unzip", config.get("auto_unzip", True))
+    auto_unzip = config.get("watch", {}).get("auto_unzip", config.get("auto_unzip", False))
     if path.suffix.lower() == ".zip" and auto_unzip:
         try:
             from unzip_archive import unpack_archive
