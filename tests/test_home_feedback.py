@@ -50,6 +50,11 @@ def _wait(qapp, condition, timeout: float = 10.0) -> None:
     assert condition(), "timed out waiting for the Home page"
 
 
+@pytest.fixture(autouse=True)
+def _samples_are_finished_downloading(finished_downloads):
+    """These tests are about what Home shows, not about waiting for downloads."""
+
+
 @pytest.fixture
 def downloads(tmp_path) -> Path:
     folder = tmp_path / "Downloads"

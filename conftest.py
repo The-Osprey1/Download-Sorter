@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import sys
 
 if sys.platform == "win32":
@@ -89,6 +90,23 @@ def isolate_sorter_state(tmp_path, monkeypatch):
         watch.PENDING_MISPLACED.clear()
         watch.PENDING_DEADLINES.clear()
     watch.WAKE_EVENT.clear()
+
+
+@pytest.fixture
+def finished_downloads(monkeypatch):
+    """Treat every existing file as finished downloading.
+
+    For tests about where a file goes, not about waiting for a download to
+    finish. On Windows a file written a moment ago can briefly look unfinished:
+    antivirus may still have it open, which fails the exclusive-open check in
+    sorter.is_file_locked (used by the readiness check and again by safe_ops
+    just before moving). The real watcher simply tries again a moment later,
+    but a test that moves the file at once would fail now and then.
+    """
+    import sorter
+
+    monkeypatch.setattr(sorter, "is_file_ready_to_move", lambda path, settle: Path(path).is_file())
+    monkeypatch.setattr(sorter, "is_file_locked", lambda path: False)
 
 
 @pytest.fixture(scope="session")

@@ -21,6 +21,11 @@ def create_zip(path: Path, files: dict[str, bytes | str]) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def _zips_are_finished_downloading(finished_downloads):
+    """These tests are about unpacking, not about waiting for downloads to finish."""
+
+
 @pytest.fixture
 def mock_config(tmp_path):
     downloads = tmp_path / "Downloads"
