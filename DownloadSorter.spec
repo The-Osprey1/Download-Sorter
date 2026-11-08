@@ -50,6 +50,7 @@ hidden_imports = [
     'safe_ops',
     'defusedxml',
     'onboarding',
+    'learning',
     'ui_icons',
     'ui_style',
     'installer_builder',

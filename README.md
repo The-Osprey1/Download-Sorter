@@ -75,6 +75,7 @@ A dark-mode window built with **PySide6**. A sidebar switches between four pages
 * **Rules**: **Name rules** (words in a file's name, checked top to bottom) and **File types** (by extension). Add ready-made rules from the **rule library**, import or export them, and use **Try a filename** to see where a file would go before you save. With the 3D printing profile, **Project mode** sends all CAD, 3D and CNC downloads to one project folder for a while.
 * **Clean up a folder**: preview how a messy folder would be organized, choose **Organize by file type**, **Keep intact** or **Skip for now** for each folder inside it, then apply. Everything can be undone.
 * **Settings**: your profile, starting with Windows, the right-click menu, zip handling, and version information.
+* **Learning (preview, off by default)**: switch it on in Settings and Download Sorter learns from the files you move into your own folders inside Downloads: the words in their names, their type and the website they came from. For now it only keeps a practice log of the folder it would have suggested, so you can check how often it would have been right ("See what it has learned"). Nothing is sent anywhere, and "Forget everything" deletes it.
 
 Changes to rules are saved with schema checks, a `config.json.bak` backup and an atomic file replace.
 

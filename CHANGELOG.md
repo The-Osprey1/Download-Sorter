@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.2] - 2026-11-04
 
+### Added
+* **Learning from how you organize (preview, stage 1, off by default) (`learning.py`, Settings)**: when you move a sorted file into another folder inside Downloads, Download Sorter notes the words in its name, its type and the website it came from (site name only, read from the "downloaded from" note Windows keeps). It only keeps a practice log of what it would have suggested, and shows nothing yet. Settings has "See what it has learned" (how often its guesses were right) and "Forget everything". It learns only from your own moves, never from its own.
+
 ### Fixed
+* **Your moves are respected (`watch.py`, `sorter.py`)**: a file you moved into a folder inside Downloads (for example `Downloads\Banking`) was treated as a misplaced download and moved straight back out, and files you put in a different category folder were moved back by the next startup sweep. Files you move yourself now stay where you put them.
 * **Files reached through another spelling of Downloads are sorted (`sorter.py`)**: `move_file` compared folder paths as written, so a file reached through a short 8.3 name, a linked folder or a mapped drive was treated as "not in Downloads" and skipped: never sorted and never put on a 3MF hold. Folders are now compared by identity (`same_folder`).
 * **Nothing is sorted before the welcome wizard is finished (`tray.py`, `watch.py`, `onboarding.py`)**: on first run the tray used to sort Downloads (and Documents) while the wizard was still open, using the default rules. The watcher now waits until the wizard is saved, then sorts with the chosen profile. New downloads that arrive meanwhile wait too. If the wizard is closed early, the tray shows "Waiting for you to finish setup" and a **Finish setup...** menu item.
 * **"Organize existing files" is honored (`onboarding.py`, `sorter.py`, `watch.py`)**: unticking it records the moment setup finished (`skip_files_before`); automatic sweeps, now and after every restart, leave files that were already there alone. "Sort Downloads now" still sorts everything. When ticked and no background sorter is running, the wizard sorts as one batch so a single Undo puts everything back.
