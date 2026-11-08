@@ -64,6 +64,7 @@ REQUIRED_RELEASE_FILES = [
     "onboarding.py",
     "learning.py",
     "ui_icons.py",
+    "ui_motion.py",
     "ui_style.py",
     "installer_builder.py",
     "installer.iss",
@@ -128,7 +129,8 @@ def check_version_alignment() -> tuple[bool, str, dict[str, str]]:
 
     # 4. CHANGELOG.md
     changelog_text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    m = re.search(r'## \[([^\]]+)\]', changelog_text)
+    # The first released version; an "Unreleased" section above it is allowed.
+    m = re.search(r'## \[(?!Unreleased\])([^\]]+)\]', changelog_text)
     if m:
         versions["CHANGELOG.md"] = m.group(1)
 

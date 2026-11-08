@@ -14,6 +14,7 @@ import re
 import shutil
 import sys
 import time
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
@@ -1871,6 +1872,49 @@ def sort_existing(
             ):
                 moved += 1
     return moved
+
+
+class _DropThisThreadsDryRunLogs(logging.Filter):
+    """Hide "[DRY-RUN]" lines written by one thread, so a preview stays quiet."""
+
+    def __init__(self, thread_id: int) -> None:
+        super().__init__()
+        self.thread_id = thread_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (record.thread == self.thread_id and str(record.msg).startswith("[DRY-RUN]"))
+
+
+def preview_existing(config: dict, limit: int = 1000) -> list[tuple[Path, Path]]:
+    """Files directly in Downloads that "Sort Downloads now" would move, with
+    where each would go. Nothing is moved, held or written to the log."""
+    root = watch_root(config)
+    if not root.exists():
+        return []
+    quiet = _DropThisThreadsDryRunLogs(threading.get_ident())
+    root_logger = logging.getLogger()
+    root_logger.addFilter(quiet)
+    handlers = list(root_logger.handlers)
+    for handler in handlers:
+        handler.addFilter(quiet)
+    found: list[tuple[Path, Path]] = []
+    try:
+        for item in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if len(found) >= limit:
+                break
+            if not item.is_file():
+                continue
+            try:
+                dest = move_file(item, config, dry_run=True, check_age=False, source_root=root)
+            except Exception:
+                dest = None
+            if dest is not None:
+                found.append((item, Path(dest)))
+    finally:
+        root_logger.removeFilter(quiet)
+        for handler in handlers:
+            handler.removeFilter(quiet)
+    return found
 
 
 def sort_existing_documents(

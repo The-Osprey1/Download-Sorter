@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+* **Home shows what the sorter is doing (`onboarding.py`, new `ui_motion.py`)**: turning sorting on used to change one word and nothing else. Now:
+  * The status line says which folder is being watched, and its dot gently pulses while sorting is on.
+  * Files the background sorter files appear in "Recently sorted" within a couple of seconds, without clicking Refresh. New rows glow briefly, the "files organized today" count counts up, and a short message says what was filed ("Filed report.pdf in PDFs.") with an Undo button.
+  * Files that were already in Downloads before sorting started are counted ("7 files are waiting in Downloads"), and the main button becomes "Sort 7 files now".
+  * "Sort Downloads now" runs in the background, so the window no longer freezes. It ends with a summary ("Sorted 7 files into 4 folders: Images (3), PDFs (2), ...") and an Undo button. If there was nothing to do, it says so.
+  * Starting the sorter shows "Starting..." until it is running, then confirms. If it doesn't start within 15 seconds, it says so.
+  * Pausing, resuming and undoing each say what happens next.
+* **Smoother window (`rules_manager.py`, `ui_motion.py`)**: pages fade in when you switch between them, and messages slide in and fade out. All motion is skipped when Windows' "Show animations in Windows" setting is off.
+* **Tray messages (`tray.py`)**: pausing and resuming from the tray now say what happens next.
+
+### Added
+* `sorter.preview_existing`: lists what "Sort Downloads now" would move, without moving anything or writing to the log.
+
 ## [2.0.2] - 2026-11-04
 
 ### Added

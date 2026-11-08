@@ -231,7 +231,11 @@ class SorterTray:
         watch.WAKE_EVENT.set()
         logging.info("Sorting %s from the tray", "paused" if paused else "resumed")
         self.refresh()
-        self.notify("Sorting paused." if paused else "Sorting resumed.")
+        self.notify(
+            "Sorting is paused. New downloads stay in Downloads until you resume."
+            if paused else
+            "Sorting is on. New downloads are filed a few seconds after they finish."
+        )
 
     def on_sort_now(self, _icon=None, _item=None) -> None:
         def work() -> None:

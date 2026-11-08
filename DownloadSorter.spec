@@ -52,6 +52,7 @@ hidden_imports = [
     'onboarding',
     'learning',
     'ui_icons',
+    'ui_motion',
     'ui_style',
     'installer_builder',
 ]

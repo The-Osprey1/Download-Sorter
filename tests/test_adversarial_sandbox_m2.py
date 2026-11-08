@@ -22,7 +22,7 @@ from typing import Any
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QTableWidgetItem
 
@@ -722,6 +722,10 @@ class TestBadgeRenderingAndMemoryIntegrity:
             dlg.close()
             dlg.deleteLater()
             qapp.processEvents()
+            # processEvents() does not run deleteLater(); without this every
+            # dialog stayed alive and the test measured the size of 20 open
+            # windows instead of what leaks once they are gone.
+            qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
 
         gc.collect()
         snap2 = tracemalloc.take_snapshot()

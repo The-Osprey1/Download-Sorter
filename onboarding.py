@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 import uuid
@@ -44,6 +45,7 @@ import about
 from suite_theme import ACCENTS, COLORS, RADII, TYPE
 import learning
 import ui_icons
+import ui_motion
 import ui_style
 
 try:
@@ -896,21 +898,45 @@ def _friendly_time(raw: str) -> str:
 
 
 class HomeDashboardWidget(QWidget):
-    """Home page: whether sorting is on, the main actions, and recently sorted files."""
+    """Home page: whether sorting is on, the main actions, and recently sorted files.
+
+    The page reacts as things happen, so it is clear the sorter is working:
+    the status dot pulses while Downloads is being watched, files appear in
+    "Recently sorted" (briefly highlighted) seconds after they are filed, the
+    count of files organized today counts up, and every action ends with a
+    short message saying what happened ("Sorted 8 files into 3 folders").
+    """
 
     persona_changed = Signal(str)
+    # Results from background work, delivered on the window's thread.
+    _sort_finished = Signal(int, str)
+    _preview_ready = Signal(int, int)
+
+    POLL_MS = 2000
+    START_TIMEOUT_S = 15.0
 
     def __init__(self, config: dict[str, Any] | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = copy.deepcopy(config) if config is not None else (
             suite_data.load_sorter_config() if hasattr(suite_data, "load_sorter_config") else {}
         )
+        self._shown_ids: set[str] | None = None
+        self._history_key: tuple[int, int] | None = None
+        self._moves_today: int | None = None
+        self._last_state: str | None = None
+        self._starting_until = 0.0
+        self._sorting = False
+        self._waiting = 0
+        self._preview_generation = 0
+
+        self._sort_finished.connect(self._finish_sort)
+        self._preview_ready.connect(self._on_preview_ready)
 
         self._init_ui()
 
         self._refresh_timer = QTimer(self)
-        self._refresh_timer.setInterval(5000)
-        self._refresh_timer.timeout.connect(self.refresh_status)
+        self._refresh_timer.setInterval(self.POLL_MS)
+        self._refresh_timer.timeout.connect(self._tick)
         self._refresh_timer.start()
 
         self.refresh_data()
@@ -918,7 +944,7 @@ class HomeDashboardWidget(QWidget):
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(20)
+        layout.setSpacing(16)
 
         header, _ = ui_style.page_header("Home")
         layout.addWidget(header)
@@ -941,13 +967,17 @@ class HomeDashboardWidget(QWidget):
 
         self._status_desc_lbl = ui_style.label("", "muted", wrap=True)
         hero.addWidget(self._status_desc_lbl)
+        self._waiting_lbl = ui_style.label("", wrap=True)
+        self._waiting_lbl.setStyleSheet(f"color: {COLORS['info']};")
+        self._waiting_lbl.setVisible(False)
+        hero.addWidget(self._waiting_lbl)
         hero.addSpacing(10)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self._btn_sort_now = ui_style.button("Sort Downloads now", "primary", "sort",
                                              "Sort the files that are in your Downloads folder right now")
-        self._btn_sort_now.clicked.connect(self.sort_now)
+        self._btn_sort_now.clicked.connect(self.start_sort_now)
         actions.addWidget(self._btn_sort_now)
 
         self._btn_undo_last = ui_style.button("Undo last sort", None, "undo",
@@ -966,6 +996,10 @@ class HomeDashboardWidget(QWidget):
         hero.addLayout(actions)
         layout.addWidget(self._status_card)
 
+        # What just happened ("Sorted 8 files into 3 folders. [Undo]")
+        self._banner = ui_motion.Banner(self)
+        layout.addWidget(self._banner)
+
         # Recently sorted files
         feed_header = QHBoxLayout()
         feed_header.addWidget(ui_style.label("Recently sorted", "section"))
@@ -980,16 +1014,17 @@ class HomeDashboardWidget(QWidget):
 
         self._empty_card, empty = ui_style.card(margins=(24, 32, 24, 32), spacing=8)
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        mascot = SorterMascotWidget(self._empty_card)
-        mascot.set_state("happy")
-        empty.addWidget(mascot, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._mascot = SorterMascotWidget(self._empty_card)
+        self._mascot.set_state("happy")
+        empty.addWidget(self._mascot, 0, Qt.AlignmentFlag.AlignHCenter)
         self._empty_state_lbl = ui_style.label("Nothing sorted yet", "section")
         self._empty_state_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_widget = self._empty_card
         empty.addWidget(self._empty_state_lbl)
-        hint = ui_style.label("Files you download will show up here after they're sorted.", "muted")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty.addWidget(hint)
+        self._empty_hint_lbl = ui_style.label(
+            "Files you download will show up here a few seconds after they're sorted.", "muted")
+        self._empty_hint_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.addWidget(self._empty_hint_lbl)
         self._activity_layout.addWidget(self._empty_card)
 
         self._activity_table = QTableWidget()
@@ -1035,17 +1070,51 @@ class HomeDashboardWidget(QWidget):
                 pass
         return "running" if is_running else "stopped"
 
+    def _watched_folder_text(self) -> str:
+        root = None
+        if sorter and hasattr(sorter, "watch_root"):
+            try:
+                root = Path(sorter.watch_root(self._config))
+            except Exception:
+                root = None
+        if root is None or root == Path.home() / "Downloads":
+            return "your Downloads folder"
+        return str(root)
+
     def refresh_status(self) -> None:
         """Update the status line, the files-today count, and the pause button."""
         state = self._sorter_state()
-        if state == "paused":
+        starting = False
+        if self._starting_until:
+            if state == "running":
+                self._starting_until = 0.0
+                self._banner.show_message(
+                    f"Sorting is on. Download Sorter is now watching {self._watched_folder_text()}, "
+                    "and new downloads are filed a few seconds after they finish.",
+                    "success",
+                )
+                self.refresh_waiting()
+            elif time.monotonic() < self._starting_until:
+                starting = True
+            else:
+                self._starting_until = 0.0
+                self._banner.show_message(
+                    "Download Sorter didn't start. Try again, or open Download Sorter from the Start menu.",
+                    "error", timeout_ms=0,
+                )
+
+        if starting:
+            title, desc, color = ("Starting...", "Opening the background sorter.", COLORS["info"])
+            btn_text, btn_icon = "Starting...", "play"
+        elif state == "paused":
             title, desc, color = ("Sorting is paused",
                                   "New downloads stay where they land until you resume.",
                                   COLORS["warning"])
             btn_text, btn_icon = "Resume sorting", "play"
         elif state == "running":
             title, desc, color = ("Sorting is on",
-                                  "New files in your Downloads folder are filed automatically.",
+                                  f"Watching {self._watched_folder_text()}. New files are filed "
+                                  "automatically a few seconds after they finish downloading.",
                                   COLORS["success"])
             btn_text, btn_icon = "Pause sorting", "pause"
         else:
@@ -1057,8 +1126,12 @@ class HomeDashboardWidget(QWidget):
         self._status_badge.setText(title)
         self._status_desc_lbl.setText(desc)
         ui_style.set_status_dot(self._status_dot, color)
+        # The dot "breathes" while Downloads is being watched (or the sorter is starting).
+        ui_motion.breathe(self._status_dot, (state == "running" or starting) and self.isVisible())
         self._btn_pause_resume.setText(btn_text)
         self._btn_pause_resume.setIcon(ui_icons.icon(btn_icon))
+        self._btn_pause_resume.setEnabled(not starting)
+        self._last_state = "starting" if starting else state
 
         moves_today = 0
         if sorter and hasattr(sorter, "IncrementalHistoryReader") and hasattr(sorter, "HISTORY_FILE"):
@@ -1067,15 +1140,43 @@ class HomeDashboardWidget(QWidget):
                 moves_today = reader.moves_today()
             except Exception:
                 pass
-        noun = "file" if moves_today == 1 else "files"
-        self._files_today_lbl.setText(f"{moves_today} {noun} organized today")
+        previous = self._moves_today if self._moves_today is not None else moves_today
+        self._moves_today = moves_today
+        ui_motion.count_up(self._files_today_lbl, previous, moves_today, self._files_today_text)
 
-    def refresh_data(self) -> None:
-        """Reload settings and the recent activity list."""
+    @staticmethod
+    def _files_today_text(count: int) -> str:
+        noun = "file" if count == 1 else "files"
+        return f"{count} {noun} organized today"
+
+    def _history_signature(self) -> tuple[int, int] | None:
+        path = getattr(sorter, "HISTORY_FILE", None) if sorter else None
+        if path is None:
+            return None
+        try:
+            st = Path(path).stat()
+            return (st.st_size, st.st_mtime_ns)
+        except OSError:
+            return None
+
+    def _tick(self) -> None:
+        """Every couple of seconds: status, and new activity from the background sorter."""
+        self.refresh_status()
+        signature = self._history_signature()
+        if signature != self._history_key and not self._sorting:
+            self.refresh_data(announce=True)
+
+    def refresh_data(self, announce: bool = False) -> None:
+        """Reload settings and the recent activity list.
+
+        With ``announce``, files that were filed since the last look are
+        highlighted and mentioned in a short message.
+        """
         if hasattr(suite_data, "load_sorter_config"):
             self._config = suite_data.load_sorter_config()
 
         self.refresh_status()
+        self._history_key = self._history_signature()
 
         records: list[dict[str, Any]] = []
         if hasattr(suite_data, "get_recent_activity"):
@@ -1084,12 +1185,20 @@ class HomeDashboardWidget(QWidget):
             except Exception:
                 records = []
 
+        previous_ids = self._shown_ids
+        self._shown_ids = {str(r.get("id", "")) for r in records}
+        new_rows = []
+        if previous_ids is not None:
+            new_rows = [i for i, r in enumerate(records) if str(r.get("id", "")) not in previous_ids]
+
         if not records:
             self._empty_card.setVisible(True)
             self._activity_table.setVisible(False)
             self._activity_table.setRowCount(0)
             return
 
+        if not self._activity_table.isVisible() and self.isVisible():
+            ui_motion.fade_in(self._activity_table)
         self._empty_card.setVisible(False)
         self._activity_table.setVisible(True)
         self._activity_table.setRowCount(0)
@@ -1116,6 +1225,70 @@ class HomeDashboardWidget(QWidget):
             show_btn.clicked.connect(lambda _c=False, p=dest: self._show_in_folder(p))
             self._activity_table.setCellWidget(row, 3, show_btn)
 
+        if new_rows:
+            ui_motion.flash_rows(self._activity_table, new_rows)
+            if announce:
+                fresh = [records[i] for i in new_rows]
+                if len(fresh) == 1:
+                    text = f"Filed {fresh[0].get('filename', 'a file')} in {fresh[0].get('folder', 'its folder')}."
+                else:
+                    text = f"Filed {len(fresh)} new files. {self._folder_breakdown(fresh)}"
+                self._banner.show_message(text.strip(), "success", "Undo", self.undo_last)
+                self.refresh_waiting()
+
+    @staticmethod
+    def _folder_breakdown(records: list[dict[str, Any]], shown: int = 3) -> str:
+        counts: dict[str, int] = {}
+        for rec in records:
+            folder = str(rec.get("folder", "")) or "Downloads"
+            counts[folder] = counts.get(folder, 0) + 1
+        ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+        parts = [f"{name} ({n})" for name, n in ordered[:shown]]
+        if len(ordered) > shown:
+            parts.append(f"{len(ordered) - shown} more")
+        return ", ".join(parts) + "." if parts else ""
+
+    # ---- files still waiting in Downloads --------------------------------
+
+    def refresh_waiting(self) -> None:
+        """Count, in the background, the files in Downloads that a sort would file."""
+        if not (sorter and hasattr(sorter, "preview_existing")):
+            return
+        self._preview_generation += 1
+        generation = self._preview_generation
+        config = copy.deepcopy(self._config)
+
+        def work() -> None:
+            try:
+                count = len(sorter.preview_existing(config))
+            except Exception:
+                count = 0
+            try:
+                self._preview_ready.emit(count, generation)
+            except RuntimeError:
+                pass  # the window was closed meanwhile
+
+        threading.Thread(target=work, name="home-preview", daemon=True).start()
+
+    def _on_preview_ready(self, count: int, generation: int) -> None:
+        if generation != self._preview_generation:
+            return
+        self._waiting = count
+        if count > 0:
+            noun = "file is" if count == 1 else "files are"
+            self._waiting_lbl.setText(
+                f"{count} {noun} waiting in Downloads. Files that were there before sorting "
+                "started stay put until you sort them."
+            )
+            if not self._waiting_lbl.isVisible():
+                ui_motion.fade_in(self._waiting_lbl)
+        else:
+            self._waiting_lbl.setVisible(False)
+        if not self._sorting:
+            self._btn_sort_now.setText(
+                f"Sort {count} file{'s' if count != 1 else ''} now" if count > 0 else "Sort Downloads now"
+            )
+
     # ---- actions -------------------------------------------------------
 
     def _show_in_folder(self, target_path: str) -> None:
@@ -1131,17 +1304,80 @@ class HomeDashboardWidget(QWidget):
         except Exception:
             pass
 
+    def _run_sort(self, batch_id: str) -> int:
+        if not (sorter and hasattr(sorter, "sort_existing")):
+            return 0
+        try:
+            cfg = suite_data.load_sorter_config() if hasattr(suite_data, "load_sorter_config") else self._config
+            return int(sorter.sort_existing(cfg, dry_run=False, batch_id=batch_id) or 0)
+        except Exception:
+            return 0
+
+    def _set_sorting(self, busy: bool) -> None:
+        self._sorting = busy
+        self._btn_sort_now.setEnabled(not busy)
+        self._btn_undo_last.setEnabled(not busy)
+        if busy:
+            self._btn_sort_now.setText("Sorting...")
+        else:
+            self._btn_sort_now.setText("Sort Downloads now")
+        ui_motion.breathe(self._btn_sort_now, busy)
+
+    def start_sort_now(self) -> None:
+        """"Sort Downloads now" without freezing the window: sort in the background."""
+        if self._sorting:
+            return
+        batch_id = uuid.uuid4().hex[:8]
+        self._set_sorting(True)
+
+        def work() -> None:
+            count = self._run_sort(batch_id)
+            try:
+                self._sort_finished.emit(count, batch_id)
+            except RuntimeError:
+                pass  # the window was closed meanwhile
+
+        threading.Thread(target=work, name="home-sort-now", daemon=True).start()
+
     def sort_now(self) -> int:
         """Sort Downloads now, as one batch so "Undo last sort" reverses all of it."""
-        count = 0
-        if sorter and hasattr(sorter, "sort_existing"):
-            try:
-                cfg = suite_data.load_sorter_config() if hasattr(suite_data, "load_sorter_config") else self._config
-                count = sorter.sort_existing(cfg, dry_run=False, batch_id=uuid.uuid4().hex[:8])
-            except Exception:
-                pass
-        self.refresh_data()
+        batch_id = uuid.uuid4().hex[:8]
+        self._set_sorting(True)
+        count = self._run_sort(batch_id)
+        self._finish_sort(count, batch_id)
         return count
+
+    def is_sorting(self) -> bool:
+        return self._sorting
+
+    def _finish_sort(self, count: int, batch_id: str) -> None:
+        self._set_sorting(False)
+        self.refresh_data()
+        if count <= 0:
+            self._banner.show_message("Your Downloads folder is already tidy. Nothing needed sorting.", "info")
+        else:
+            batch: list[dict[str, Any]] = []
+            if hasattr(suite_data, "get_recent_activity"):
+                try:
+                    batch = [r for r in suite_data.get_recent_activity(limit=max(count, 25) + 25)
+                             if r.get("batch_id") == batch_id]
+                except Exception:
+                    batch = []
+            noun = "file" if count == 1 else "files"
+            folders = {str(r.get("folder", "")) for r in batch}
+            if len(folders) > 1:
+                text = f"Sorted {count} {noun} into {len(folders)} folders: {self._folder_breakdown(batch)}"
+            elif len(folders) == 1:
+                text = f"Sorted {count} {noun} into {next(iter(folders))}."
+            else:
+                text = f"Sorted {count} {noun}."
+            self._banner.show_message(text, "success", "Undo", self.undo_last, timeout_ms=10000)
+            dests = {str(r.get("dest", "")) for r in batch}
+            rows = [row for row in range(self._activity_table.rowCount())
+                    if self._activity_table.item(row, 0) is not None
+                    and self._activity_table.item(row, 0).toolTip() in dests]
+            ui_motion.flash_rows(self._activity_table, rows)
+        self.refresh_waiting()
 
     def undo_last(self) -> int:
         """Revert the most recent sorting batch."""
@@ -1157,6 +1393,12 @@ class HomeDashboardWidget(QWidget):
             except Exception:
                 pass
         self.refresh_data()
+        if count:
+            where = "1 file back where it was" if count == 1 else f"{count} files back where they were"
+            self._banner.show_message(f"Put {where}.", "info")
+        else:
+            self._banner.show_message("There was nothing to undo.", "info")
+        self.refresh_waiting()
         return count
 
     def open_downloads(self) -> None:
@@ -1179,10 +1421,23 @@ class HomeDashboardWidget(QWidget):
         """Pause or resume sorting; start the background sorter if it isn't running."""
         state = self._sorter_state()
         if state == "stopped":
+            self._starting_until = time.monotonic() + self.START_TIMEOUT_S
             self._start_background_sorter()
         elif sorter and hasattr(sorter, "is_paused") and hasattr(sorter, "set_paused"):
             try:
-                sorter.set_paused(not sorter.is_paused())
+                now_paused = not sorter.is_paused()
+                sorter.set_paused(now_paused)
+                if now_paused:
+                    self._banner.show_message(
+                        "Sorting is paused. New downloads will stay in Downloads until you resume.",
+                        "warning",
+                    )
+                else:
+                    self._banner.show_message(
+                        "Sorting is on again. New downloads are filed a few seconds after they finish.",
+                        "success",
+                    )
+                    self.refresh_waiting()
             except Exception:
                 pass
         self.refresh_status()
@@ -1206,16 +1461,24 @@ class HomeDashboardWidget(QWidget):
         super().showEvent(event)
         if hasattr(self, "_refresh_timer") and not self._refresh_timer.isActive():
             self._refresh_timer.start()
-            self.refresh_status()
+        self.refresh_status()
+        self.refresh_waiting()
+
+    def _stop_live_updates(self) -> None:
+        # While the window is closing, Qt may already have deleted child widgets.
+        try:
+            if hasattr(self, "_refresh_timer") and self._refresh_timer.isActive():
+                self._refresh_timer.stop()
+            ui_motion.breathe(self._status_dot, False)
+        except RuntimeError:
+            pass
 
     def closeEvent(self, event) -> None:
-        if hasattr(self, "_refresh_timer") and self._refresh_timer.isActive():
-            self._refresh_timer.stop()
+        self._stop_live_updates()
         super().closeEvent(event)
 
     def hideEvent(self, event) -> None:
-        if hasattr(self, "_refresh_timer") and self._refresh_timer.isActive():
-            self._refresh_timer.stop()
+        self._stop_live_updates()
         super().hideEvent(event)
 
 
