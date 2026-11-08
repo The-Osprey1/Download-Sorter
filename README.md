@@ -29,7 +29,7 @@ For everyday users on Windows 10 & 11 (zero Python installation or terminal comm
 3. **Enjoy Automated Organization**:
    The interactive 3-step Welcome Wizard launches automatically on completion so you can choose your persona profile and set your filing preferences. Nothing is moved until you finish the wizard, and if you untick **"Organize existing files"**, the files already in your Downloads folder are left where they are.
 
-*Unattended / Silent deployment:* Run `DownloadSorter-Setup-v2.0.2-windows-x64.exe /S` (supports optional `/D=C:\Custom\Path`).
+*Unattended / Silent deployment:* Run `DownloadSorter-Setup-v2.0.2-windows-x64.exe /S` (supports optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
 
 ---
 
