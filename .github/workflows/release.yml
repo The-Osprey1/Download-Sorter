@@ -17,6 +17,11 @@ on:
       - 'pyproject.toml'
       - 'about.py'
       - 'release_notes.py'
+      - 'quit_signal.py'
+      - 'updater.py'
+      - 'update_check.py'
+      - 'tray.py'
+      - 'main.py'
       - 'CHANGELOG.md'
       - '.github/workflows/release.yml'
   workflow_dispatch:
@@ -62,6 +67,45 @@ jobs:
       - name: Build Standalone Executable & Package
         run: |
           python build_release.py
+
+      - name: Check that an update replaces a running copy and opens it again
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist -Filter "DownloadSorter-Setup-v*-windows-x64.exe" | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP "ds-update-check"
+          $exe = Join-Path $dir "DownloadSorter.exe"
+
+          # 1. A normal silent install.
+          $p = Start-Process $setup.FullName -ArgumentList "/S", "/D=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "First install failed with exit code $($p.ExitCode)" }
+          if (-not (Test-Path $exe)) { throw "DownloadSorter.exe is missing after the first install" }
+
+          # 2. Start the app from that folder, so its files are in use.
+          $running = Start-Process $exe -ArgumentList "--home" -PassThru
+          Start-Sleep -Seconds 10
+          if ($running.HasExited) { throw "The installed app did not stay open (exit code $($running.ExitCode))" }
+          $before = (Get-Item $exe).LastWriteTimeUtc
+          Start-Sleep -Seconds 2
+
+          # 3. Update over it, the way the app's own updater does.
+          $p = Start-Process $setup.FullName -ArgumentList "/S", "/D=$dir", "/UPDATE" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Update install failed with exit code $($p.ExitCode)" }
+
+          # 4. The running copy was closed and its files replaced.
+          if (-not $running.HasExited) { throw "The installer did not close the running app" }
+          $after = (Get-Item $exe).LastWriteTimeUtc
+          if ($after -le $before) { throw "DownloadSorter.exe was not replaced" }
+
+          # 5. The app was opened again.
+          Start-Sleep -Seconds 10
+          $again = @(Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) })
+          if ($again.Count -eq 0) { throw "The app was not opened again after the update" }
+          Write-Host "Update check passed: running copy closed, files replaced, app reopened ($($again.Count) process(es))."
+
+          # Clean up.
+          & $exe --quit
+          Start-Sleep -Seconds 5
+          Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue
 
       - name: Write the release notes from the changelog
         run: |

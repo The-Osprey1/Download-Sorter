@@ -340,8 +340,26 @@ class SorterTray:
                 logging.debug("Update check failed", exc_info=True)
         threading.Thread(target=work, daemon=True, name="sorter-update-check").start()
 
+    def on_quit_requested(self) -> None:
+        """``DownloadSorter.exe --quit`` (the installer, before an update): close
+        like the Quit item, but without turning the background sorter off, so it
+        starts again normally afterwards."""
+        logging.info("Quit requested by another process (installer); stopping the watcher")
+        self.stop_event.set()
+        watch.WAKE_EVENT.set()
+        self.icon.stop()
+
+    def listen_for_quit(self) -> None:
+        try:
+            import quit_signal
+            self._quit_listener = quit_signal.QuitListener(reset=True)
+            self._quit_listener.watch(self.on_quit_requested, self.stop_event)
+        except Exception:
+            logging.debug("Quit listener unavailable", exc_info=True)
+
     def run(self) -> int:
         self.start_watcher()
+        self.listen_for_quit()
         self.check_for_update()
         self.icon.run()
         self.stop_event.set()

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -48,6 +49,7 @@ import ui_icons
 import ui_motion
 import ui_style
 import update_check
+import updater
 
 try:
     import config_manager as suite_data
@@ -932,6 +934,8 @@ class HomeDashboardWidget(QWidget):
     _sort_finished = Signal(int, str)
     _preview_ready = Signal(int, int)
     _update_ready = Signal(object)
+    _update_progress = Signal(int, int)
+    _update_finished = Signal(object, str)
 
     POLL_MS = 2000
     START_TIMEOUT_S = 15.0
@@ -951,9 +955,15 @@ class HomeDashboardWidget(QWidget):
         self._preview_generation = 0
 
         self._update_checked = False
+        self._release: dict[str, Any] | None = None
+        self._update_downloading = False
+        self._update_cancel = False
+        self._update_shown_percent = -1
         self._sort_finished.connect(self._finish_sort)
         self._preview_ready.connect(self._on_preview_ready)
         self._update_ready.connect(self._on_update_ready)
+        self._update_progress.connect(self._on_update_progress)
+        self._update_finished.connect(self._on_update_finished)
 
         self._init_ui()
 
@@ -975,6 +985,15 @@ class HomeDashboardWidget(QWidget):
         # "Download Sorter 2.1.0 is available. [Download]"
         self._update_banner = ui_motion.Banner(self)
         layout.addWidget(self._update_banner)
+        self._update_bar = QProgressBar(self)
+        self._update_bar.setTextVisible(False)
+        self._update_bar.setFixedHeight(4)
+        self._update_bar.setStyleSheet(
+            f"QProgressBar {{ background: {COLORS['surfaceHover']}; border: none; border-radius: 2px; }}"
+            f" QProgressBar::chunk {{ background: {COLORS['info']}; border-radius: 2px; }}"
+        )
+        self._update_bar.setVisible(False)
+        layout.addWidget(self._update_bar)
 
         # Status and the main actions
         self._status_card, hero = ui_style.card(spacing=6)
@@ -1286,6 +1305,10 @@ class HomeDashboardWidget(QWidget):
 
         def work() -> None:
             try:
+                updater.clean_old_downloads()
+            except Exception:
+                pass
+            try:
                 release = update_check.check(config)
             except Exception:
                 release = None
@@ -1299,12 +1322,128 @@ class HomeDashboardWidget(QWidget):
     def _on_update_ready(self, release: Any) -> None:
         if not release:
             return
+        self._release = dict(release)
+        self._offer_update()
+
+    def _offer_update(self) -> None:
+        release = self._release or {}
+        version = update_check.display_version(release)
         url = str(release.get("url") or update_check.RELEASES_PAGE)
+        self._update_bar.setVisible(False)
+        if updater.can_self_update() and updater.has_installer(release):
+            self._update_banner.show_message(
+                f"Download Sorter {version} is available. Your rules and settings are kept.",
+                "info", "Download and install", self.start_update_download, timeout_ms=0,
+            )
+        else:
+            self._update_banner.show_message(
+                f"Download Sorter {version} is available. "
+                "Download it, then run the installer; your rules and settings are kept.",
+                "info", "Download", lambda: self._open_url(url), timeout_ms=0,
+            )
+
+    # ---- in-app update ---------------------------------------------------
+
+    def start_update_download(self) -> None:
+        """Download the new installer in the background, with progress."""
+        release = dict(self._release or {})
+        if self._update_downloading or not updater.has_installer(release):
+            return
+        self._update_downloading = True
+        self._update_cancel = False
+        self._update_shown_percent = -1
+        version = update_check.display_version(release)
         self._update_banner.show_message(
-            f"Download Sorter {update_check.display_version(release)} is available. "
-            "Download it, then run the installer; your rules and settings are kept.",
-            "info", "Download", lambda: self._open_url(url), timeout_ms=0,
+            f"Downloading Download Sorter {version}...", "info", "Cancel", self.cancel_update_download,
+            timeout_ms=0,
         )
+        self._update_bar.setRange(0, 0)  # "busy" until the size is known
+        self._update_bar.setVisible(True)
+
+        def work() -> None:
+            path, error = None, ""
+            try:
+                path = updater.download(
+                    release,
+                    progress=lambda done, total: self._update_progress.emit(done, total),
+                    cancelled=lambda: self._update_cancel,
+                )
+            except updater.Cancelled:
+                error = "cancelled"
+            except updater.UpdateError as exc:
+                error = str(exc) or "Couldn't download the update."
+            except Exception:
+                error = "Couldn't download the update."
+            try:
+                self._update_finished.emit(str(path) if path else None, error)
+            except RuntimeError:
+                pass  # the window was closed meanwhile
+
+        threading.Thread(target=work, name="home-update-download", daemon=True).start()
+
+    def cancel_update_download(self) -> None:
+        self._update_cancel = True
+
+    @staticmethod
+    def _megabytes(count: int) -> str:
+        return f"{count / (1024 * 1024):.0f}"
+
+    def _on_update_progress(self, done: int, total: int) -> None:
+        if not self._update_downloading:
+            return
+        if total <= 0:
+            return
+        percent = int(done * 100 / total)
+        if percent == self._update_shown_percent:
+            return
+        self._update_shown_percent = percent
+        self._update_bar.setRange(0, 100)
+        self._update_bar.setValue(percent)
+        version = update_check.display_version(self._release or {})
+        self._update_banner.show_message(
+            f"Downloading Download Sorter {version}: {self._megabytes(done)} of {self._megabytes(total)} MB",
+            "info", "Cancel", self.cancel_update_download, timeout_ms=0,
+        )
+
+    def _on_update_finished(self, path: Any, error: str) -> None:
+        self._update_downloading = False
+        self._update_bar.setVisible(False)
+        release = self._release or {}
+        version = update_check.display_version(release)
+        if path:
+            self._downloaded_installer = str(path)
+            self._update_banner.show_message(
+                f"Download Sorter {version} is ready. Download Sorter will close for a few seconds "
+                "and open again; your rules and settings are kept.",
+                "success", "Restart and install", self.install_update, timeout_ms=0,
+            )
+        elif error == "cancelled":
+            self._offer_update()
+        else:
+            url = str(release.get("url") or update_check.RELEASES_PAGE)
+            self._update_banner.show_message(
+                f"{error} You can download it from the release page instead.",
+                "error", "Open download page", lambda: self._open_url(url), timeout_ms=0,
+            )
+
+    def install_update(self) -> None:
+        """Hand over to the installer, then close; it reopens Download Sorter."""
+        path = getattr(self, "_downloaded_installer", "")
+        try:
+            updater.start_install(Path(path))
+        except Exception as exc:
+            url = str((self._release or {}).get("url") or update_check.RELEASES_PAGE)
+            message = str(exc) if isinstance(exc, updater.UpdateError) else "Couldn't start the installer."
+            self._update_banner.show_message(
+                f"{message} You can download it from the release page instead.",
+                "error", "Open download page", lambda: self._open_url(url), timeout_ms=0,
+            )
+            return
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     @staticmethod
     def _open_url(url: str) -> None:

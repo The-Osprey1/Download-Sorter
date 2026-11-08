@@ -79,7 +79,7 @@ All the source code is in this repository, and the installer is built from it by
 ## Privacy
 
 - **Your files never leave your PC.** Sorting, rules, history and logs all stay in `%LOCALAPPDATA%\download-sorter`.
-- **One small network request, once a day:** Download Sorter asks GitHub which version is newest, so it can tell you when there's an update. Only the app's name and version are sent. Turn it off in **Settings**, under "Check for new versions once a day".
+- **One small network request, once a day:** Download Sorter asks GitHub which version is newest, so it can tell you when there's an update. Only the app's name and version are sent. An update is only downloaded when you click **Download and install**, and only from this project's GitHub release page. Turn it off in **Settings**, under "Check for new versions once a day".
 - **Learning is off by default.** If you turn it on, it learns from your own moves, entirely on your PC. **Forget everything** in Settings deletes it.
 - No accounts, no ads, no tracking.
 
@@ -87,7 +87,7 @@ All the source code is in this repository, and the installer is built from it by
 
 - **Undo:** click **Undo last sort** on Home, or right-click the tray icon (near the clock) and choose **Undo last sort**.
 - **Pause:** use **Pause sorting** on Home, or the tray icon.
-- **Updates:** when a new version is out, Home shows "Download Sorter X is available". Download it and run the installer. Your rules and settings are kept.
+- **Updates:** when a new version is out, Home shows "Download Sorter X is available". Click **Download and install**: it downloads in the app (with progress), checks the file against the release's published checksum, then **Restart and install** closes Download Sorter for a few seconds and opens it again. Your rules and settings are kept. (Versions before 2.2 open the download page instead; download and run the installer once.)
 - **Uninstall:** go to Windows Settings, then Apps, then Installed apps, then Download Sorter, then Uninstall. It asks whether to also delete your rules and history.
 - **Something went wrong?** [Report a bug](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml). The log helps a lot: right-click the tray icon, choose **Open log folder**, and attach `sorter.log`.
 

@@ -324,6 +324,14 @@ class Banner(QFrame):
         self._action_btn.setText(action_text.replace("&", "&&"))
         self._action_btn.setVisible(bool(action_text and action))
 
+        # A new message replaces whatever the bar was doing: stop a fade-out
+        # (from clicking its own button) or an unfinished slide-in, so the new
+        # message stays visible at full height.
+        _keep(self, "_motion_fade", None)
+        self.setMaximumHeight(16777215)
+        if isinstance(self.graphicsEffect(), QGraphicsOpacityEffect):
+            self.graphicsEffect().setOpacity(1.0)
+
         was_visible = self.isVisible()
         self.setVisible(True)
         if not was_visible:

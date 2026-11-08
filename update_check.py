@@ -26,12 +26,16 @@ import about
 REPO = "The-Osprey1/Download-Sorter"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
+# Files are only ever downloaded from this repository's own release files.
+DOWNLOAD_PREFIX = f"https://github.com/{REPO}/releases/download/"
 CHECK_EVERY_SECONDS = 24 * 60 * 60
 TIMEOUT_SECONDS = 5.0
 DISABLE_ENV = "DOWNLOAD_SORTER_NO_UPDATE_CHECK"
 STATE_NAME = "update_check.json"
 
-Release = dict  # {"version": "v2.1.0", "url": "https://github.com/..."}
+# {"version": "v2.2.0", "url": release page, and when the release has them:
+#  "installer_url", "installer_name", "size", "checksums_url"}
+Release = dict
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +128,40 @@ def fetch_latest(timeout: float = TIMEOUT_SECONDS) -> Release | None:
     url = str(data.get("html_url") or RELEASES_PAGE)
     if not url.startswith("https://github.com/"):
         url = RELEASES_PAGE
-    return {"version": version, "url": url}
+    release: Release = {"version": version, "url": url}
+    release.update(_installer_assets(data.get("assets"), version))
+    return release
+
+
+def installer_name(version: str) -> str:
+    return f"DownloadSorter-Setup-v{display_version({'version': version})}-windows-x64.exe"
+
+
+def _installer_assets(assets: Any, version: str) -> dict[str, Any]:
+    """The installer and checksums.txt of a release, when both are there and
+    hosted on this repository's own release downloads."""
+    if not isinstance(assets, list):
+        return {}
+    wanted = installer_name(version)
+    found: dict[str, Any] = {}
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        link = str(asset.get("browser_download_url") or "")
+        if not link.startswith(DOWNLOAD_PREFIX):
+            continue
+        if name == wanted:
+            try:
+                size = int(asset.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            found.update({"installer_url": link, "installer_name": name, "size": size})
+        elif name == "checksums.txt":
+            found["checksums_url"] = link
+    if "installer_url" not in found or "checksums_url" not in found:
+        return {}
+    return found
 
 
 def check(
