@@ -125,3 +125,19 @@ def test_banner_without_motion_hides_immediately(qapp, motion_off):
     banner.dismiss()
     assert not banner.isVisible()
     host.close()
+
+
+def test_new_message_survives_the_previous_fade_out(qapp, motion_on):
+    """Clicking a message's button fades it out; a message shown right after
+    (e.g. "Downloading...") must stay visible."""
+    host = QWidget()
+    banner = ui_motion.Banner(host)
+    host.show()
+    banner.show_message("Update available.", "info", "Download and install",
+                        lambda: banner.show_message("Downloading...", "info", timeout_ms=0), timeout_ms=0)
+    _run_events(qapp, 300)
+    banner._action_btn.click()
+    _run_events(qapp, 400)
+    assert banner.isVisible()
+    assert banner.text() == "Downloading..."
+    host.close()

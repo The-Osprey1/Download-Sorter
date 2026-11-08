@@ -126,6 +126,7 @@ def _generate_csharp_source(version: str, author: str, credit: str, repo_url: st
     """Generate C# WinForms single-file installer source code."""
     # Build C# source using string replacement to avoid f-string escaping conflicts
     source_template = r"""using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -148,6 +149,7 @@ namespace DownloadSorterInstaller
         private static int Main(string[] args)
         {
             bool silent = false;
+            bool update = false;
             string customDir = null;
 
             for (int i = 0; i < args.Length; i++)
@@ -161,6 +163,14 @@ namespace DownloadSorterInstaller
                     string.Equals(a, "/verysilent", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(a, "--silent", StringComparison.OrdinalIgnoreCase))
                 {
+                    silent = true;
+                }
+                else if (string.Equals(a, "/UPDATE", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a, "--update", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Started by the app's own updater: keep the user's shortcuts as
+                    // they are, and open Download Sorter again afterwards.
+                    update = true;
                     silent = true;
                 }
                 else if (a.StartsWith("/D=", StringComparison.OrdinalIgnoreCase) ||
@@ -185,7 +195,16 @@ namespace DownloadSorterInstaller
             {
                 try
                 {
-                    PerformInstall(targetDir, true, true);
+                    StopRunningApp(targetDir);
+                    if (update)
+                    {
+                        PerformInstall(targetDir, false, false);
+                        Relaunch(targetDir);
+                    }
+                    else
+                    {
+                        PerformInstall(targetDir, true, true);
+                    }
                     return 0;
                 }
                 catch (Exception ex)
@@ -200,6 +219,131 @@ namespace DownloadSorterInstaller
             var form = new InstallerForm(targetDir);
             Application.Run(form);
             return form.ExitCode;
+        }
+
+        // ---- Closing a running copy before its files are replaced ----------
+        // Windows will not overwrite a program that is running, and the background
+        // sorter (tray) almost always is. Without this an update failed halfway and
+        // left a mix of old and new files.
+
+        public static void StopRunningApp(string targetDir)
+        {
+            string exe = Path.Combine(targetDir, "DownloadSorter.exe");
+            if (FindRunning(targetDir).Count == 0)
+            {
+                return;
+            }
+
+            // 1. Ask nicely: the app closes the same way as its tray "Quit" item.
+            if (File.Exists(exe))
+            {
+                try
+                {
+                    var psi = new ProcessStartInfo(exe, "--quit");
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    using (Process asker = Process.Start(psi))
+                    {
+                        if (asker != null)
+                        {
+                            asker.WaitForExit(15000);
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // 2. Give it up to 10 seconds to finish what it is doing.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (FindRunning(targetDir).Count == 0)
+                {
+                    return;
+                }
+                System.Threading.Thread.Sleep(250);
+            }
+
+            // 3. Close whatever is still running from this folder.
+            foreach (Process left in FindRunning(targetDir))
+            {
+                try
+                {
+                    left.Kill();
+                    left.WaitForExit(5000);
+                }
+                catch { }
+            }
+        }
+
+        private static List<Process> FindRunning(string targetDir)
+        {
+            var found = new List<Process>();
+            string root = Path.GetFullPath(targetDir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            int self = Process.GetCurrentProcess().Id;
+            foreach (Process proc in Process.GetProcesses())
+            {
+                if (proc.Id == self)
+                {
+                    continue;
+                }
+                try
+                {
+                    if (!proc.ProcessName.StartsWith("DownloadSorter", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    string path = proc.MainModule.FileName;
+                    if (path != null && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    {
+                        found.Add(proc);
+                    }
+                }
+                catch { }
+            }
+            return found;
+        }
+
+        private static FileStream CreateWithRetry(string destPath)
+        {
+            // A file can stay locked for a moment after its program exits
+            // (antivirus scanning it, Windows releasing the image).
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    return new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
+                }
+                catch (IOException)
+                {
+                    if (attempt >= 20)
+                    {
+                        throw new IOException(
+                            "Download Sorter is still running, so its files could not be replaced. " +
+                            "Right-click its icon near the clock, choose Quit, and run this installer again.");
+                    }
+                    System.Threading.Thread.Sleep(500);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    if (attempt >= 20)
+                    {
+                        throw;
+                    }
+                    System.Threading.Thread.Sleep(500);
+                }
+            }
+        }
+
+        private static void Relaunch(string targetDir)
+        {
+            string exe = Path.Combine(targetDir, "DownloadSorter.exe");
+            if (!File.Exists(exe))
+            {
+                return;
+            }
+            try { Process.Start(exe); } catch { }            // the background sorter
+            try { Process.Start(exe, "--home"); } catch { }  // and the window, so the user sees it is back
         }
 
         public static void PerformInstall(string targetDir, bool createDesktop, bool createStartMenu)
@@ -257,7 +401,7 @@ namespace DownloadSorterInstaller
                             Directory.CreateDirectory(destDir);
                         }
                         using (var es = entry.Open())
-                        using (var df = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                        using (var df = CreateWithRetry(destPath))
                         {
                             byte[] b = new byte[65536];
                             int read;
@@ -561,12 +705,15 @@ namespace DownloadSorterInstaller
                 _chkDesktop.Enabled = false;
                 _chkStartMenu.Enabled = false;
                 _chkLaunch.Enabled = false;
-                _lblStatus.Text = "Extracting files and setting up shortcuts...";
                 _progressBar.Visible = true;
+                _lblStatus.Text = "Closing Download Sorter if it is running...";
                 Application.DoEvents();
 
                 try
                 {
+                    StopRunningApp(_targetDir);
+                    _lblStatus.Text = "Extracting files and setting up shortcuts...";
+                    Application.DoEvents();
                     PerformInstall(_targetDir, _chkDesktop.Checked, _chkStartMenu.Checked);
                     _progressBar.Visible = false;
                     _lblStatus.Text = "Installation completed successfully!";

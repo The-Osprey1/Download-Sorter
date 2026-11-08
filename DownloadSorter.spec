@@ -54,7 +54,9 @@ hidden_imports = [
     'ui_icons',
     'ui_motion',
     'ui_style',
+    'quit_signal',
     'update_check',
+    'updater',
     'installer_builder',
 ]
 

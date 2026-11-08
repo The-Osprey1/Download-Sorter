@@ -1944,6 +1944,21 @@ def _start_background_sorter() -> None:
         logging.exception("Could not start the background sorter after setup")
 
 
+def _close_when_installer_asks(app) -> None:
+    """Close this window process when ``DownloadSorter.exe --quit`` is run
+    (the installer does that before replacing the app's files)."""
+    try:
+        import quit_signal
+        listener = quit_signal.QuitListener()
+    except Exception:
+        return
+    timer = QTimer(app)
+    timer.setInterval(500)
+    timer.timeout.connect(lambda: listener.requested() and app.quit())
+    timer.start()
+    app._quit_listener = listener  # keep it alive with the app
+
+
 def main(argv: list[str] | None = None) -> int:
     """Launch the Rules Manager dialog standalone."""
     if about.handle_version_flag():
@@ -1973,6 +1988,7 @@ def main(argv: list[str] | None = None) -> int:
     if app is None:
         app = QApplication(sys.argv)
         owns_app = True
+        _close_when_installer_asks(app)
 
     if args.welcome:
         from onboarding import WelcomeWizardDialog

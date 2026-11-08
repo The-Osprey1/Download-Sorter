@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+* **Updates install from inside the app (new `updater.py`, `update_check.py`, Home)**: when a newer version is out, Home offers **Download and install**. It downloads the installer with a progress bar and Cancel, checks its size and SHA-256 against the release's `checksums.txt` (a mismatch is deleted, never run), then **Restart and install** hands over to the installer, which closes Download Sorter, updates it and opens it again. Only this project's GitHub release downloads are accepted. Running from source, or a release without those files, keeps the "Download" link to the release page.
+* **`DownloadSorter.exe --quit` (new `quit_signal.py`, `main.py`, `tray.py`, `rules_manager.py`)**: asks a running Download Sorter (background sorter and windows) to close cleanly, without switching sorting off.
+
+### Fixed
+* **Installing over a running Download Sorter (`installer_builder.py`)**: the installer never closed the running app, so Windows refused to replace its files and an update stopped halfway, leaving a mix of old and new files. The installer now asks the app to close (`--quit`), waits up to 10 seconds, closes what is left, and retries files that are still locked. If it still can't, it says so instead of leaving a broken install. `/UPDATE` (used by the in-app updater) keeps the install folder and shortcuts and opens the app again afterwards.
+* **Messages replacing each other (`ui_motion.py`)**: a message shown right after clicking another message's button could disappear when the old one finished fading out.
+
 ## [2.1.0] - 2026-11-08
 
 ### Changed

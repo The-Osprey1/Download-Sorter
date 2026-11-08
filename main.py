@@ -35,6 +35,7 @@ Commands:
   --clean               Clean old installers/archives to Windows Recycle Bin
   --remodel             Scan or safely remodel messy PC folder architectures
   --dialog <hwnd>       Spawn floating Quick Switcher pill for active File Dialog
+  --quit                Ask a running Download Sorter (tray and windows) to close
   --version, -v         Display Download Sorter version
   --help, -h            Show this help message
 """
@@ -132,6 +133,12 @@ def main(argv: list[str] | None = None) -> int:
                 sys.stdout.flush()
             except Exception:
                 pass
+        return 0
+
+    if cmd == "--quit":
+        # Used by the installer before it replaces the app's files.
+        import quit_signal
+        quit_signal.request_quit()
         return 0
 
     if cmd in ("--version", "-v"):

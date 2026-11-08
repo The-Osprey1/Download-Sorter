@@ -202,3 +202,151 @@ def test_tray_tooltip_stays_within_the_windows_limit(monkeypatch, checks_on):
     text = tray.SorterTray.tooltip(FakeTray())
     assert len(text) <= tray.TOOLTIP_MAX
     assert "Version 12.34.56 is available" in text
+
+
+# ---------------------------------------------------------------------------
+# In-app update on Home
+# ---------------------------------------------------------------------------
+
+def _home(qapp, monkeypatch, tmp_path):
+    import config_manager
+    import onboarding
+    import sorter
+
+    cfg = sorter.get_default_config()
+    cfg["downloads_dir"] = str(tmp_path)
+    cfg["watch"]["folder"] = str(tmp_path)
+    monkeypatch.setattr(config_manager, "load_sorter_config", lambda *a, **k: cfg)
+    home = onboarding.HomeDashboardWidget(config=cfg)
+    home.show()
+    qapp.processEvents()
+    return home
+
+
+_FULL_RELEASE = {
+    "version": "v99.0.0", "url": "https://github.com/x",
+    "installer_url": update_check.DOWNLOAD_PREFIX + "v99.0.0/DownloadSorter-Setup-v99.0.0-windows-x64.exe",
+    "installer_name": "DownloadSorter-Setup-v99.0.0-windows-x64.exe", "size": 66 * 1024 * 1024,
+    "checksums_url": update_check.DOWNLOAD_PREFIX + "v99.0.0/checksums.txt",
+}
+
+
+@pytest.mark.parametrize("self_update, label", [(True, "Download and install"), (False, "Download")])
+def test_home_offers_the_right_button(qapp, monkeypatch, tmp_path, self_update, label):
+    pytest.importorskip("PySide6")
+    import updater
+
+    monkeypatch.setattr(updater, "can_self_update", lambda: self_update)
+    home = _home(qapp, monkeypatch, tmp_path)
+    try:
+        home._on_update_ready(dict(_FULL_RELEASE))
+        assert home._update_banner.action_text() == label
+    finally:
+        home.close()
+
+
+def test_home_shows_progress_then_ready(qapp, monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    import updater
+
+    monkeypatch.setattr(updater, "can_self_update", lambda: True)
+    home = _home(qapp, monkeypatch, tmp_path)
+    try:
+        home._on_update_ready(dict(_FULL_RELEASE))
+        home._update_downloading = True  # as start_update_download sets it
+        home._on_update_progress(32 * 1024 * 1024, 66 * 1024 * 1024)
+        assert "Downloading Download Sorter 99.0.0: 32 of 66 MB" in home._update_banner.text()
+        assert home._update_banner.action_text() == "Cancel"
+        assert home._update_bar.value() == 48
+
+        home._on_update_finished(str(tmp_path / "setup.exe"), "")
+        assert "99.0.0 is ready" in home._update_banner.text()
+        assert home._update_banner.action_text() == "Restart and install"
+        assert not home._update_bar.isVisible()
+    finally:
+        home.close()
+
+
+def test_home_falls_back_to_the_browser_on_failure(qapp, monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    import updater
+
+    monkeypatch.setattr(updater, "can_self_update", lambda: True)
+    home = _home(qapp, monkeypatch, tmp_path)
+    try:
+        home._on_update_ready(dict(_FULL_RELEASE))
+        home._on_update_finished(None, "The download didn't match the published file.")
+        assert home._update_banner.kind() == "error"
+        assert "didn't match" in home._update_banner.text()
+        assert home._update_banner.action_text() == "Open download page"
+
+        home._on_update_finished(None, "cancelled")
+        assert home._update_banner.action_text() == "Download and install", "cancel goes back to the offer"
+    finally:
+        home.close()
+
+
+def test_restart_and_install_hands_over_and_closes(qapp, monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    import updater
+    from PySide6.QtWidgets import QApplication
+
+    started, quits = [], []
+    monkeypatch.setattr(updater, "start_install", lambda path, folder=None: started.append(path))
+    monkeypatch.setattr(QApplication, "quit", lambda *a: quits.append(1))
+    home = _home(qapp, monkeypatch, tmp_path)
+    try:
+        home._release = dict(_FULL_RELEASE)
+        home._downloaded_installer = str(tmp_path / "setup.exe")
+        home.install_update()
+        assert started == [tmp_path / "setup.exe"]
+        assert quits == [1]
+    finally:
+        home.close()
+
+
+def test_restart_and_install_failure_keeps_the_window_open(qapp, monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    import updater
+    from PySide6.QtWidgets import QApplication
+
+    def broken(path, folder=None):
+        raise updater.UpdateError("Only the installed app can update itself.")
+
+    quits = []
+    monkeypatch.setattr(updater, "start_install", broken)
+    monkeypatch.setattr(QApplication, "quit", lambda *a: quits.append(1))
+    home = _home(qapp, monkeypatch, tmp_path)
+    try:
+        home._release = dict(_FULL_RELEASE)
+        home._downloaded_installer = str(tmp_path / "setup.exe")
+        home.install_update()
+        assert quits == []
+        assert home._update_banner.action_text() == "Open download page"
+    finally:
+        home.close()
+
+
+def test_fetch_includes_the_installer_files(monkeypatch):
+    import urllib.request
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    prefix = update_check.DOWNLOAD_PREFIX + "v9.0.0/"
+    body = {
+        "tag_name": "v9.0.0", "html_url": "https://github.com/The-Osprey1/Download-Sorter/releases/tag/v9.0.0",
+        "assets": [
+            {"name": "DownloadSorter-Setup-v9.0.0-windows-x64.exe", "size": 5,
+             "browser_download_url": prefix + "DownloadSorter-Setup-v9.0.0-windows-x64.exe"},
+            {"name": "checksums.txt", "size": 1, "browser_download_url": prefix + "checksums.txt"},
+        ],
+    }
+    monkeypatch.setattr(urllib.request, "urlopen", lambda r, timeout: Response(json.dumps(body).encode()))
+    release = update_check.fetch_latest()
+    assert release["installer_name"] == "DownloadSorter-Setup-v9.0.0-windows-x64.exe"
+    assert release["checksums_url"] == prefix + "checksums.txt"
