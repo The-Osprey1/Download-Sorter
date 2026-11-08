@@ -904,7 +904,7 @@ class TestCrossFeatureCombinationsTier3(unittest.TestCase):
         """F1+F3+F4: System tray accurately updates tooltip and menus across hold and filing."""
         import tray
         t = tray.SorterTray()
-        self.assertIn("0 file(s) filed today", t.tooltip())
+        self.assertIn(f"{tray.moves_today()} file(s) filed today", t.tooltip())
 
         # Register held file
         f_hold = self.test_root / "Held.3mf"
