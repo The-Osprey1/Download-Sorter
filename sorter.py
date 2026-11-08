@@ -923,10 +923,28 @@ def is_keep_protected(path: Path) -> bool:
     return safe_ops.keep_marker_dir(path) is not None
 
 
+def same_folder(a: Path | str, b: Path | str) -> bool:
+    """True when ``a`` and ``b`` are the same folder, however each is spelled.
+
+    A folder can be reached by more than one spelling: a short 8.3 name
+    (C:\\Users\\RUNNER~1) and its long name, a linked folder, a mapped drive,
+    different letter case on Windows. Comparing the paths as written treats those
+    as different folders.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        pass
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, ValueError):
+        return Path(a) == Path(b)
+
+
 def is_managed_path(path: Path, root: Path, folders: list[str]) -> bool:
     try:
-        relative = path.resolve().relative_to(root)
-    except ValueError:
+        relative = path.resolve().relative_to(Path(root).resolve())
+    except (ValueError, OSError):
         return False
     if not relative.parts:
         return True
@@ -1567,9 +1585,9 @@ def move_file(
         return None
     if is_keep_protected(path):
         return None
-    if is_managed_path(path, from_root, folders) and path.parent != from_root:
-        return None
-    if path.parent != from_root:
+    # Only files directly in the folder being sorted are moved; anything in a
+    # sub-folder (including the category folders) is left where it is.
+    if not same_folder(path.parent, from_root):
         return None
 
     if check_age:
