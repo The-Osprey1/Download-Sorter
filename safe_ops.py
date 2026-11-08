@@ -199,7 +199,7 @@ def preflight(
         age = time.time() - src.stat().st_mtime
     except OSError:
         return "missing"
-    if age < settle:
+    if settle > 0.0 and age < settle:
         return "not-settled"
     if sorter.is_file_locked(src):
         return "locked"
