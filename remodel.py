@@ -816,24 +816,24 @@ class RemodelEngine:
                         dest_dir = sorter.folder_path(plan.target_root, routed.get("destination", "Other"))
                         dest_target = dest_dir / sub.name
 
-                    if dry_run:
-                        executed_moves.append({
-                            "src": str(sub),
-                            "dest": str(dest_target),
-                            "action": "organize_folder_item",
-                            "status": "dry_run",
-                        })
-                    else:
-                        try:
-                            final = safe_ops.move(sub, dest_target, batch_id=plan.remodel_id, settle_seconds=0.0)
+                        if dry_run:
                             executed_moves.append({
                                 "src": str(sub),
-                                "dest": str(final),
+                                "dest": str(dest_target),
                                 "action": "organize_folder_item",
-                                "status": "done",
+                                "status": "dry_run",
                             })
-                        except Exception as exc:
-                            skipped_items.append({"path": str(sub), "reason": f"Move error: {exc}"})
+                        else:
+                            try:
+                                final = safe_ops.move(sub, dest_target, batch_id=plan.remodel_id, settle_seconds=0.0)
+                                executed_moves.append({
+                                    "src": str(sub),
+                                    "dest": str(final),
+                                    "action": "organize_folder_item",
+                                    "status": "done",
+                                })
+                            except Exception as exc:
+                                skipped_items.append({"path": str(sub), "reason": f"Move error: {exc}"})
 
                 # Clean up empty parent directory if empty
                 if not dry_run:
