@@ -16,6 +16,8 @@ on:
       - 'requirements.txt'
       - 'pyproject.toml'
       - 'about.py'
+      - 'release_notes.py'
+      - 'CHANGELOG.md'
       - '.github/workflows/release.yml'
   workflow_dispatch:
 
@@ -61,6 +63,10 @@ jobs:
         run: |
           python build_release.py
 
+      - name: Write the release notes from the changelog
+        run: |
+          python release_notes.py --output dist/release_notes.md
+
       - name: Keep the built files
         uses: actions/upload-artifact@v4
         with:
@@ -69,6 +75,7 @@ jobs:
             dist/DownloadSorter-Setup-v*-windows-x64.exe
             dist/DownloadSorter-v*-windows-x64.zip
             dist/checksums.txt
+            dist/release_notes.md
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -79,6 +86,6 @@ jobs:
             dist/DownloadSorter-Setup-v*-windows-x64.exe
             dist/DownloadSorter-v*-windows-x64.zip
             dist/checksums.txt
+          body_path: dist/release_notes.md
           draft: false
           prerelease: false
-          generate_release_notes: true

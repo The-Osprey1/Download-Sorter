@@ -85,6 +85,6 @@ The output will be placed in `dist/DownloadSorter/` and bundled into `dist/Downl
 
 ## 🛡️ Guidelines & Code of Conduct
 
-* **100% Offline**: All core functionality must remain strictly local-first with zero external network dependencies, analytics, or telemetry.
+* **Local-first**: All core functionality must work offline, with no analytics or telemetry. The only network request is the optional once-a-day version check in `update_check.py`; don't add others.
 * **Non-Destructive Operations**: Never permanently delete user files. Moves must be reversible via the undo journal (`history.jsonl`), and cleanup routines must strictly use the Windows Recycle Bin (`clean_old.py`).
 * **Safe Atomic Persistence**: Configuration writes must continue to use the 5-stage atomic commit (`fsync` + `.bak` backup + atomic rename retry loop).

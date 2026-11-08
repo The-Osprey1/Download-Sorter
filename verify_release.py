@@ -72,6 +72,7 @@ REQUIRED_RELEASE_FILES = [
     "DownloadSorter.ico",
     "DownloadSorter.spec",
     "build_release.py",
+    "release_notes.py",
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
     ".github/ISSUE_TEMPLATE/bug_report.yml",

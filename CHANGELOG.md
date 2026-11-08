@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.1.0] - 2026-11-08
 
 ### Changed
 * **Home shows what the sorter is doing (`onboarding.py`, new `ui_motion.py`)**: turning sorting on used to change one word and nothing else. Now:
@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Smoother window (`rules_manager.py`, `ui_motion.py`)**: pages fade in when you switch between them, and messages slide in and fade out. All motion is skipped when Windows' "Show animations in Windows" setting is off.
 * **Tray messages (`tray.py`)**: pausing and resuming from the tray now say what happens next.
 * **Zip files are kept as they are unless you choose otherwise (`sorter.py`, `onboarding.py`, `config.json`)**: the welcome steps now ask "Unzip downloaded .zip files" (off by default), and the shipped default is off. Before, every zip was unpacked into Extracted automatically. The switch is still in Settings.
+* **A README for regular people (`README.md`, `docs/images/`)**: it now starts with what the app does, a screenshot, how to install, what happens on first run, what to click on the "Windows protected your PC" screen and how to check a download, privacy, undo, updates, uninstalling and how to report a problem. The technical details moved under "For power users and developers". `SECURITY.md` and `CONTRIBUTING.md` now describe the one optional network request instead of promising none.
+* **Tray menu matches the window (`tray.py`)**: "Undo last sort", "Rules..." and "Clean up a folder..." replace "Undo last batch", "Configure Rules & Customize..." and "Remodel Messy Folders...".
+* **Release notes come from this changelog (`release_notes.py`, `.github/workflows/release.yml`)**: each GitHub release starts with short install steps, followed by that version's changelog section, instead of a list of pull request titles.
 * **No personal paths in the app (`rules_manager.py`)**: the "Try a filename" box no longer looks for sample programs in a folder on the developer's PC.
 
 ### Added
