@@ -24,7 +24,7 @@ if about.handle_version_flag():
     sys.exit(0)
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPalette
+from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -439,11 +439,11 @@ class RuleTableWidget(QWidget):
         self._empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_lbl.setMinimumHeight(80)
         self._empty_lbl.setVisible(False)
-        layout.addWidget(self._empty_lbl)
+        layout.addWidget(self._empty_lbl, 1)  # fills the space while the list is empty
 
         self._table.itemChanged.connect(self._on_table_item_changed)
         self._table.cellDoubleClicked.connect(lambda row, col: self.edit_selected_rule())
-        layout.addWidget(self._table)
+        layout.addWidget(self._table, 1)
 
     def load_rules(self, rules: list[dict[str, Any]]) -> None:
         """Populate table from list of rule dictionaries."""
@@ -474,12 +474,14 @@ class RuleTableWidget(QWidget):
 
             # Col 1: Rule Name
             name_item = QTableWidgetItem(rule.get("name", "Unnamed Rule"))
+            name_item.setToolTip(name_item.text())
             name_item.setForeground(QColor(fg))
             name_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self._table.setItem(row_idx, 1, name_item)
 
             # Col 2: Destination Folder
             folder_item = QTableWidgetItem(rule.get("folder", ""))
+            folder_item.setToolTip(folder_item.text())
             folder_item.setForeground(QColor(fg))
             folder_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self._table.setItem(row_idx, 2, folder_item)
@@ -493,6 +495,7 @@ class RuleTableWidget(QWidget):
                     site_str = "downloaded from " + ", ".join(str(x) for x in sites)
                     match_str = f"{match_str} ({site_str})" if match_str else site_str
                 kw_item = QTableWidgetItem(match_str)
+                kw_item.setToolTip(match_str)
                 kw_item.setForeground(QColor(fg))
                 kw_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 self._table.setItem(row_idx, 3, kw_item)
@@ -501,6 +504,7 @@ class RuleTableWidget(QWidget):
                 exts = rule.get("extensions", [])
                 ext_str = ", ".join(exts) if isinstance(exts, list) else str(exts)
                 ext_item = QTableWidgetItem(ext_str)
+                ext_item.setToolTip(ext_str)
                 ext_item.setForeground(QColor(fg))
                 ext_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 self._table.setItem(row_idx, 4, ext_item)
@@ -1543,6 +1547,7 @@ class RulesManagerDialog(QDialog):
         self._init_ui()
         self.load_data()
         self.switch_view(initial_view)
+        self._add_shortcuts()
 
     # ------------------------------------------------------------------
     # layout
@@ -1590,6 +1595,7 @@ class RulesManagerDialog(QDialog):
             ("settings", "Settings", "settings"),
         ):
             btn = ui_style.button(text, "nav", icon_name)
+            btn.setToolTip(f"{text} (Ctrl+{self.PAGES.index(page_id) + 1})")
             btn.setCheckable(True)
             self._view_btn_group.addButton(btn, self.PAGES.index(page_id))
             self._nav_buttons[page_id] = btn
@@ -1684,6 +1690,7 @@ class RulesManagerDialog(QDialog):
         actions.addWidget(self._more_btn, 0, Qt.AlignmentFlag.AlignTop)
 
         self._save_btn = ui_style.button("Save changes", "primary")
+        self._save_btn.setToolTip("Save changes (Ctrl+S)")
         self._save_btn.setEnabled(False)
         self._save_btn.clicked.connect(self.save_changes)
         actions.addWidget(self._save_btn, 0, Qt.AlignmentFlag.AlignTop)
@@ -1712,6 +1719,30 @@ class RulesManagerDialog(QDialog):
     # ------------------------------------------------------------------
     # navigation
     # ------------------------------------------------------------------
+
+    def _add_shortcuts(self) -> None:
+        """Ctrl+1..4 switch pages, Ctrl+S saves rules, Ctrl+Z on Home undoes the last sort, F5 refreshes."""
+        for index, page in enumerate(self.PAGES, start=1):
+            QShortcut(QKeySequence(f"Ctrl+{index}"), self, activated=lambda p=page: self.switch_view(p))
+        QShortcut(QKeySequence.StandardKey.Save, self, activated=self._save_shortcut)
+        QShortcut(QKeySequence.StandardKey.Undo, self, activated=self._undo_shortcut)
+        QShortcut(QKeySequence.StandardKey.Refresh, self, activated=self._refresh_shortcut)
+
+    def current_page(self) -> str:
+        return self.PAGES[self._view_stack.currentIndex()]
+
+    def _save_shortcut(self) -> None:
+        if getattr(self, "_dirty", False):
+            self.save_changes()
+
+    def _undo_shortcut(self) -> None:
+        if self.current_page() == "home" and hasattr(self, "_home_widget"):
+            self._home_widget.undo_last()
+
+    def _refresh_shortcut(self) -> None:
+        if self.current_page() == "home" and hasattr(self, "_home_widget"):
+            self._home_widget.refresh_data()
+            self._home_widget.refresh_waiting()
 
     def switch_view(self, view_name: str) -> None:
         """Show a page: 'home', 'rules' (or 'customize'), 'cleanup' (or 'remodel'), 'settings'."""
@@ -1789,7 +1820,7 @@ class RulesManagerDialog(QDialog):
         active_proj = suite_data.get_active_project()
         self._active_project_card.set_state(active_proj)
 
-        self.set_active_persona(self._config.get("user_persona", "everyday_home"))
+        self.set_active_persona(self._config.get("user_persona", "custom"))
 
         self._on_rules_or_project_changed()
         self._set_dirty(False)
@@ -1921,7 +1952,28 @@ class RulesManagerDialog(QDialog):
             self._on_rules_or_project_changed()
             QMessageBox.information(self, "Rules reset", "Your rules were reset. Click Save changes to keep this.")
 
+    def ask_to_save_changes(self) -> str:
+        """"save", "discard" or "cancel" for unsaved rule changes."""
+        if os.environ.get("DOWNLOAD_SORTER_NO_DIALOGS"):
+            return "discard"  # automated tests
+        box = QMessageBox(self)
+        box.setWindowTitle("Save your rule changes?")
+        box.setText("You changed some rules but didn't save them.")
+        box.setInformativeText("Save them now, or close without saving?")
+        save = box.addButton("Save changes", QMessageBox.ButtonRole.AcceptRole)
+        discard = box.addButton("Don't save", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(save)
+        box.exec()
+        clicked = box.clickedButton()
+        return "save" if clicked is save else "discard" if clicked is discard else "cancel"
+
     def closeEvent(self, event) -> None:
+        if getattr(self, "_dirty", False):
+            answer = self.ask_to_save_changes()
+            if answer == "cancel" or (answer == "save" and not self.save_changes()):
+                event.ignore()
+                return
         if hasattr(self, "_save_timer") and self._save_timer is not None:
             self._save_timer.stop()
         if hasattr(self, "_active_project_card") and hasattr(self._active_project_card, "_countdown_timer"):

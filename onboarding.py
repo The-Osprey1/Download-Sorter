@@ -1142,7 +1142,11 @@ class HomeDashboardWidget(QWidget):
         # The dot "breathes" while Downloads is being watched (or the sorter is starting).
         ui_motion.breathe(self._status_dot, (state == "running" or starting) and self.isVisible())
         self._btn_pause_resume.setText(btn_text)
-        self._btn_pause_resume.setIcon(ui_icons.icon(btn_icon))
+        # The most useful action is the green one: starting or resuming when
+        # sorting is off, otherwise sorting what's waiting.
+        sorting_stopped = not starting and state != "running"
+        ui_style.set_role(self._btn_pause_resume, "primary" if sorting_stopped else None, btn_icon)
+        ui_style.set_role(self._btn_sort_now, None if sorting_stopped else "primary", "sort")
         self._btn_pause_resume.setEnabled(not starting)
         self._last_state = "starting" if starting else state
 
@@ -1844,7 +1848,7 @@ class SettingsWidget(QWidget):
         self._chk_updates.blockSignals(True)
         self._chk_updates.setChecked(bool(block.get("enabled", True)) if isinstance(block, dict) else True)
         self._chk_updates.blockSignals(False)
-        self.set_persona(self._config.get("user_persona", "everyday_home"))
+        self.set_persona(self._config.get("user_persona", "custom"))
 
     def set_persona(self, persona_id: str) -> None:
         idx = self._persona_combo.findData(persona_id)

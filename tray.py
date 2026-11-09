@@ -146,6 +146,13 @@ def spawn_window(*args: str) -> None:
 TOOLTIP_MAX = 127
 
 
+
+def _count_text(count: int, noun: str) -> str:
+    """"1 file", "3 files", "No files"."""
+    if count == 0:
+        return f"No {noun}s"
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
 class SorterTray:
     def __init__(self, wait_for_setup: bool = False) -> None:
         self.wait_for_setup = wait_for_setup
@@ -175,7 +182,7 @@ class SorterTray:
         else:
             state = "Paused" if is_paused() else "Watching Downloads"
         held = self._held_count()
-        held_line = f"\n{held} 3MF(s) held in Downloads" if held > 0 else ""
+        held_line = f"\n{_count_text(held, '3MF file')} held in Downloads" if held > 0 else ""
         update_line = ""
         try:
             import update_check
@@ -184,7 +191,7 @@ class SorterTray:
                 update_line = f"\nVersion {update_check.display_version(release)} is available"
         except Exception:
             pass
-        text = f"{about.APP_NAME} - {state}\n{moves_today()} file(s) filed today{held_line}{update_line}"
+        text = f"{about.APP_NAME} - {state}\n{_count_text(moves_today(), 'file')} filed today{held_line}{update_line}"
         with_credit = f"{text}\n{about.CREDIT}"
         # Windows tray tooltips hold at most 127 characters (pystray raises on
         # longer ones), so the credit is the first thing to go.
@@ -206,8 +213,9 @@ class SorterTray:
                 visible=lambda _i: watch.SETUP_PENDING.is_set(),
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(lambda _i: f"{moves_today()} file(s) filed today", None, enabled=False),
-            pystray.MenuItem(lambda _i: f"{self._held_count()} 3MF(s) held in Downloads", None, enabled=False),
+            pystray.MenuItem(lambda _i: _count_text(moves_today(), "file") + " filed today", None, enabled=False),
+            pystray.MenuItem(lambda _i: _count_text(self._held_count(), "3MF file") + " held in Downloads",
+                             None, enabled=False, visible=lambda _i: self._held_count() > 0),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sort Downloads now", self.on_sort_now),
             pystray.MenuItem("Undo last sort", self.on_undo),
@@ -260,7 +268,7 @@ class SorterTray:
             moved = sort_existing(self.config, batch_id=batch_id)
             moved += sort_existing_documents(self.config, batch_id=batch_id)
             self.refresh()
-            self.notify(f"Filed {moved} file(s)." if moved else "Nothing needed sorting.")
+            self.notify(f"Filed {_count_text(moved, 'file')}." if moved else "Nothing needed sorting.")
         threading.Thread(target=work, daemon=True).start()
 
     def on_undo(self, _icon=None, _item=None) -> None:

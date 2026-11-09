@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Learning is on, and asks before adding a rule (`learning.py`, `ribbon_popup.py`, `watch.py`)**: after you've moved 3 similar files into one folder (same word in the name, or same website), a ribbon asks "Put files like this in Banking?". **Yes** adds a rule, named "Banking (learned)", that you can see and change on the Rules page; **No** means it won't ask about that again. It only asks when the word or website points to that folder at least 4 times out of 5, and never when a rule already files it there. It still never moves a file on its own guess. Learning is switched on for everyone once; you can turn it off in Settings.
 * **Rules can check the website a file came from (`sorter.py`)**: a learned rule like "“statement” files from yourbank.com" only matches statements downloaded from that site. The Rules page shows it as "(downloaded from yourbank.com)".
 
+### Changed
+* **Easier to use (`onboarding.py`, `rules_manager.py`, `tray.py`, `ui_style.py`)**:
+  * When sorting is off or paused, **Start sorting** / **Resume sorting** is the green button on Home, since that's what you most likely want.
+  * Closing the window with rule changes you haven't saved asks **Save changes**, **Don't save** or **Cancel**, instead of losing them.
+  * Keyboard shortcuts: **Ctrl+1** to **Ctrl+4** switch pages, **Ctrl+S** saves rules, **Ctrl+Z** on Home undoes the last sort, **F5** refreshes Home. Buttons show them in their tooltips.
+  * Rules: an empty list no longer leaves a gap under the tabs, and hovering a cut-off cell shows its full text.
+  * Settings shows **Just my folders** for anyone set up from their own folders, instead of "Everyday".
+  * The tray reads "1 file filed today" instead of "1 file(s)", and only mentions held 3MF files when there are some.
+
 ### Fixed
 * **Plural words (`learning.py`)**: "taxes", "boxes" and "classes" were read as "taxe", "boxe" and "classe".
 

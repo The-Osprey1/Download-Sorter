@@ -342,6 +342,10 @@ def polish(widget: QWidget) -> None:
     widget.update()
 
 
-def set_role(widget: QWidget, role: Any) -> None:
+def set_role(widget: QWidget, role: Any, icon_name: str | None = None) -> None:
+    """Change a widget's style (e.g. a button to "primary"); recolor its icon to match if named."""
     widget.setProperty("role", role)
+    if icon_name and isinstance(widget, QPushButton):
+        color = COLORS["canvas"] if role == "primary" else COLORS["textMuted"]
+        widget.setIcon(ui_icons.icon(icon_name, color))
     polish(widget)
