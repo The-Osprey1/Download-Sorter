@@ -1416,6 +1416,8 @@ class HomeDashboardWidget(QWidget):
 
         app = QApplication.instance()
         if app is not None:
+            # Windows with unsaved rules save them instead of asking (see rules_manager).
+            app.setProperty("downloadSorterQuittingForUpdate", True)
             app.quit()
 
     @staticmethod
@@ -1877,51 +1879,47 @@ class SettingsWidget(QWidget):
             except Exception:
                 pass
 
+    def _update_config(self, change) -> None:
+        """Change one setting in the settings as they are now, and save.
+
+        Starting from the file (not this page's earlier copy) keeps changes
+        made meanwhile elsewhere, such as a rule added from a learning ribbon.
+        ``change`` edits the dict in place or returns a new one.
+        """
+        current = self._config
+        if hasattr(suite_data, "current_sorter_config"):
+            current = suite_data.current_sorter_config(self._config)
+        current = copy.deepcopy(current)
+        self._config = change(current) or current
+        if hasattr(suite_data, "save_sorter_config"):
+            try:
+                suite_data.save_sorter_config(self._config)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _set_option(config: dict[str, Any], block_name: str, name: str, value: Any) -> None:
+        block = config.get(block_name)
+        if not isinstance(block, dict):
+            block = {}
+            config[block_name] = block
+        block[name] = value
+
     def _on_option_toggled(self, key: tuple[str, str], checked: bool) -> None:
         block_name, name = key
-        block = self._config.get(block_name)
-        if not isinstance(block, dict):
-            block = {}
-            self._config[block_name] = block
-        block[name] = bool(checked)
-        if hasattr(suite_data, "save_sorter_config"):
-            try:
-                suite_data.save_sorter_config(self._config)
-            except Exception:
-                pass
+        self._update_config(lambda cfg: self._set_option(cfg, block_name, name, bool(checked)))
 
     def _on_unpack_toggled(self, checked: bool) -> None:
-        _set_auto_unzip(self._config, checked)
-        if hasattr(suite_data, "save_sorter_config"):
-            try:
-                suite_data.save_sorter_config(self._config)
-            except Exception:
-                pass
+        self._update_config(lambda cfg: _set_auto_unzip(cfg, checked))
 
     def _on_updates_toggled(self, checked: bool) -> None:
-        block = self._config.get("update_check")
-        if not isinstance(block, dict):
-            block = {}
-            self._config["update_check"] = block
-        block["enabled"] = bool(checked)
-        if hasattr(suite_data, "save_sorter_config"):
-            try:
-                suite_data.save_sorter_config(self._config)
-            except Exception:
-                pass
+        self._update_config(lambda cfg: self._set_option(cfg, "update_check", "enabled", bool(checked)))
 
     def _on_learning_toggled(self, checked: bool) -> None:
-        block = self._config.get("learning")
-        if not isinstance(block, dict):
-            block = {}
-            self._config["learning"] = block
-        block["enabled"] = bool(checked)
-        block.setdefault("suggest", True)  # the user has chosen; don't switch it on again
-        if hasattr(suite_data, "save_sorter_config"):
-            try:
-                suite_data.save_sorter_config(self._config)
-            except Exception:
-                pass
+        def change(cfg: dict[str, Any]) -> None:
+            self._set_option(cfg, "learning", "enabled", bool(checked))
+            cfg["learning"].setdefault("suggest", True)  # the user has chosen; don't switch it on again
+        self._update_config(change)
 
     def learning_report_text(self) -> str:
         rep = learning.report()
@@ -1968,20 +1966,17 @@ class SettingsWidget(QWidget):
 
     def _on_persona_combo_changed(self, index: int) -> None:
         persona_id = str(self._persona_combo.itemData(index))
-        if hasattr(suite_data, "apply_persona_profile"):
-            try:
-                self._config = suite_data.apply_persona_profile(self._config, persona_id)
-            except Exception:
-                self._config["user_persona"] = persona_id
-        else:
-            self._config["user_persona"] = persona_id
 
-        if hasattr(suite_data, "save_sorter_config"):
-            try:
-                suite_data.save_sorter_config(self._config)
-            except Exception:
-                pass
+        def change(cfg: dict[str, Any]) -> dict[str, Any]:
+            if hasattr(suite_data, "apply_persona_profile"):
+                try:
+                    return suite_data.apply_persona_profile(cfg, persona_id)
+                except Exception:
+                    pass
+            cfg["user_persona"] = persona_id
+            return cfg
 
+        self._update_config(change)
         self.persona_changed.emit(persona_id)
 
     def _on_rerun_tour(self) -> None:

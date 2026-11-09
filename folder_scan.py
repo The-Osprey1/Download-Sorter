@@ -77,7 +77,7 @@ SCHOOL_SITES_RULE: dict[str, Any] = {
 
 # Ready-made folders offered when Downloads has no folders yet: (key, label, rule).
 STARTER_FOLDERS: list[tuple[str, str, dict[str, Any]]] = [
-    ("school_sites", "Files from Canvas, Blackboard, Brightspace, Google Classroom and Gradescope", SCHOOL_SITES_RULE),
+    ("school_sites", "Files from Canvas, Blackboard, Brightspace, Gradescope and other course websites", SCHOOL_SITES_RULE),
     ("receipts", "Invoices and receipts", {
         "name": "Invoices & Receipts", "folder": "Documents\\Invoices & Receipts",
         "match": ["invoice", "receipt", "billing", "billing_statement", "payment_confirmation"],

@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import platform
+import re
 import sys
 import threading
 import traceback
@@ -100,6 +101,38 @@ def system_details() -> str:
     return "\n".join(lines)
 
 
+# Paths in error messages and tracebacks, quoted ('C:\\Users\\Jane\\x.pdf') or not.
+_QUOTED_PATH = re.compile(r"""(['"])((?:[A-Za-z]:|%USERPROFILE%)[\\/][^'"\n]*)\1""")
+_BARE_PATH = re.compile(r"""(?:[A-Za-z]:|%USERPROFILE%)[\\/][^\s'"<>|*?,;()\[\]]*""")
+# Program files are useful in a bug report and say nothing about the person.
+_PROGRAM_SUFFIXES = (".py", ".pyc", ".pyd", ".dll", ".exe")
+
+
+def _hide_path(path: str) -> str:
+    name = re.split(r"[\\/]+", path.rstrip("\\/"))[-1]
+    if name.lower().endswith(_PROGRAM_SUFFIXES):
+        return name
+    suffix = Path(name).suffix
+    return f"<file>{suffix}" if suffix and len(suffix) <= 6 else "<folder>"
+
+
+def scrub_private(text: str) -> str:
+    """Hide the user name and file names in text that may be posted publicly.
+
+    The home folder becomes %USERPROFILE%; any other full path keeps only a
+    program file's name ("sorter.py") or the kind of file ("<file>.pdf").
+    Saved crash reports on the PC keep everything.
+    """
+    if not text:
+        return text
+    homes = {str(Path.home()), os.environ.get("USERPROFILE") or "", os.environ.get("HOME") or ""}
+    for home in sorted((h for h in homes if len(h) > 3), key=len, reverse=True):
+        text = re.sub(re.escape(home), "%USERPROFILE%", text, flags=re.IGNORECASE)
+        text = re.sub(re.escape(home.replace("\\", "\\\\")), "%USERPROFILE%", text, flags=re.IGNORECASE)
+    text = _QUOTED_PATH.sub(lambda m: m.group(1) + _hide_path(m.group(2)) + m.group(1), text)
+    return _BARE_PATH.sub(lambda m: _hide_path(m.group(0)), text)
+
+
 def issue_url(title: str = "", description: str = "", logs: str = "") -> str:
     """A GitHub "new bug report" address with the version and system filled in.
 
@@ -107,6 +140,8 @@ def issue_url(title: str = "", description: str = "", logs: str = "") -> str:
     the field ids in ``.github/ISSUE_TEMPLATE/bug_report.yml``.
     """
     base = f"{about.REPO_URL}/issues/new"
+    # A GitHub issue is public: never put the user's name or file names in it.
+    title, description, logs = scrub_private(title), scrub_private(description), scrub_private(logs)
 
     def build(log_text: str) -> str:
         params = {"template": BUG_TEMPLATE, "version": about.__version__, "system": system_details()}
@@ -218,7 +253,8 @@ def _show_crash_dialog(report: Path | None, exc_type, exc, tb, where: str) -> No
         )
         if answer == IDYES:
             open_issue(
-                title=f"Crash: {_short_summary(exc_type, exc)}",
+                # Only the kind of error in the title: messages often hold a file's path.
+                title=f"Crash: {getattr(exc_type, '__name__', 'Error')}",
                 description=f"Download Sorter showed an error ({where or 'unknown part'}).\n\n"
                             "What I was doing just before:\n",
                 logs=format_error(exc_type, exc, tb),
