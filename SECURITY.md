@@ -15,8 +15,10 @@ Download Sorter is built on the principle of **strict data privacy**:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.1.x   | :white_check_mark: |
-| < 2.1   | :x:                |
+| 2.3.x   | :white_check_mark: |
+| < 2.3   | :x:                |
+
+Download Sorter is in beta. Fixes go into the newest version only, and the app offers to update itself (Home → **Download and install**).
 
 ---
 
@@ -25,6 +27,6 @@ Download Sorter is built on the principle of **strict data privacy**:
 If you discover a security vulnerability or potential path traversal flaw:
 
 1. **Do not disclose publicly** in public issues or discussions.
-2. Please open a Private Security Advisory on GitHub or contact the maintainer directly.
+2. Please [open a private security advisory](https://github.com/The-Osprey1/Download-Sorter/security/advisories/new) on GitHub or contact the maintainer directly.
 3. Include clear reproduction steps, sample file names or archive structures, and observed behavior.
 4. We will acknowledge receipt within 48 hours and work on a patch promptly.

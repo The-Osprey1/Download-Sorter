@@ -1,0 +1,82 @@
+name: 🧪 Beta feedback
+description: First impressions, confusing moments, and how Download Sorter fits your day
+labels: ["beta feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying Download Sorter early! Short answers are fine, and every question except the first one is optional. Found a clear bug? A [bug report](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml) is easier to track.
+
+  - type: input
+    id: version
+    attributes:
+      label: Download Sorter version
+      description: Shown in Settings → About.
+      placeholder: e.g. 2.3.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: days_used
+    attributes:
+      label: How long have you used it?
+      options:
+        - Just installed it
+        - A few days
+        - A week or more
+    validations:
+      required: false
+
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How did the welcome steps go?
+      options:
+        - Easy, no questions
+        - Mostly fine, one or two things were unclear
+        - Confusing
+        - I skipped them
+    validations:
+      required: false
+
+  - type: textarea
+    id: wrong_places
+    attributes:
+      label: Did any file go somewhere you didn't expect?
+      description: The kind of file and where it went is enough, for example "a bank statement PDF went to Documents, I wanted Banking".
+    validations:
+      required: false
+
+  - type: textarea
+    id: confusing
+    attributes:
+      label: What was confusing or annoying?
+      description: Wording, ribbons that showed up too often, buttons you couldn't find, anything.
+    validations:
+      required: false
+
+  - type: textarea
+    id: liked
+    attributes:
+      label: What did you like?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: keep_using
+    attributes:
+      label: Will you keep it running?
+      options:
+        - "Yes"
+        - Probably
+        - Not sure yet
+        - "No"
+    validations:
+      required: false
+
+  - type: textarea
+    id: why_not
+    attributes:
+      label: If not, what would change your mind?
+    validations:
+      required: false

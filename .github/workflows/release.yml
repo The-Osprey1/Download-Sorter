@@ -18,6 +18,7 @@ on:
       - 'about.py'
       - 'release_notes.py'
       - 'quit_signal.py'
+      - 'problem_report.py'
       - 'consolidate.py'
       - 'updater.py'
       - 'update_check.py'

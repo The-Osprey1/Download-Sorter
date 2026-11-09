@@ -7,6 +7,8 @@
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+> 🧪 **Download Sorter is in beta.** Trying it out? The [beta testing guide](BETA_TESTING.md) lists what to try, known issues, and how to send feedback.
+
 **Download Sorter keeps your Downloads folder tidy.** A few seconds after a download finishes, it moves the file into a folder for its type (PDFs, Images, Installers and so on), right inside Downloads. Everything happens on your PC, and every move can be undone.
 
 ![The Download Sorter window: sorting is on, and recently sorted files are listed with the folder each one went to](docs/images/home.png)
@@ -140,7 +142,8 @@ All the source code is in this repository, and the installer is built from it by
 
 - **Your files never leave your PC.** Sorting, rules, history and logs all stay in `%LOCALAPPDATA%\download-sorter`.
 - **One small network request, once a day:** Download Sorter asks GitHub which version is newest, so it can tell you when there's an update. Only the app's name and version are sent. An update is only downloaded when you click **Download and install**, and only from this project's GitHub release page. Turn it off in **Settings**, under "Check for new versions once a day".
-- **Learning is off by default.** If you turn it on, it learns from your own moves, entirely on your PC. **Forget everything** in Settings deletes it.
+- **Learning happens entirely on your PC.** It only looks at files you move yourself, and asks before adding a rule. Turn it off, or delete what it learned with **Forget everything**, in Settings.
+- **Crash reports stay on your PC too.** If something goes wrong, the details are saved in `%LOCALAPPDATA%\download-sorter\crash-reports`. Nothing is sent: **Report a problem** only opens a bug report in your browser, which you read before posting.
 - No accounts, no ads, no tracking.
 
 ## Undo, updates, uninstalling and help
@@ -149,7 +152,7 @@ All the source code is in this repository, and the installer is built from it by
 - **Pause:** use **Pause sorting** on Home, or the tray icon.
 - **Updates:** when a new version is out, Home shows "Download Sorter X is available". Click **Download and install**: it downloads in the app (with progress), checks the file against the release's published checksum, then **Restart and install** closes Download Sorter for a few seconds and opens it again. Your rules and settings are kept. (Versions before 2.2 open the download page instead; download and run the installer once.)
 - **Uninstall:** go to Windows Settings, then Apps, then Installed apps, then Download Sorter, then Uninstall. It asks whether to also delete your rules and history.
-- **Something went wrong?** [Report a bug](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml). The log helps a lot: right-click the tray icon, choose **Open log folder**, and attach `sorter.log`.
+- **Something went wrong?** Right-click the tray icon and choose **Report a problem...** (also in Settings → About). It opens a [bug report](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml) with your version and Windows version filled in. If you can, attach `sorter.log` from **Open log folder** (look it over first: it contains file names).
 
 *Unattended install, for IT folks:* `DownloadSorter-Setup-v2.3.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
 
@@ -169,7 +172,7 @@ A dark-mode window built with **PySide6**. A sidebar switches between four pages
 * **Rules**: **Name rules** (words in a file's name, checked top to bottom) and **File types** (by extension). Add ready-made rules from the **rule library**, import or export them, and use **Try a filename** to see where a file would go before you save. With the 3D printing profile, **Project mode** sends all CAD, 3D and CNC downloads to one project folder for a while.
 * **Clean up a folder**: preview how a messy folder would be organized, choose **Organize by file type**, **Keep intact** or **Skip for now** for each folder inside it, then apply. Everything can be undone.
 * **Settings**: your profile, starting with Windows, the right-click menu, zip handling, and version information.
-* **Learning (preview, off by default)**: switch it on in Settings and Download Sorter learns from the files you move into your own folders inside Downloads: the words in their names, their type and the website they came from. For now it only keeps a practice log of the folder it would have suggested, so you can check how often it would have been right ("See what it has learned"). Nothing is sent anywhere, and "Forget everything" deletes it.
+* **Learning (on, turn it off in Settings)**: Download Sorter learns from the files you move into your own folders inside Downloads: the words in their names, their type and the website they came from. After 3 similar moves it asks before adding a rule, and never moves a file on a guess. "See what it has learned" shows how often its guesses would have been right. Nothing is sent anywhere, and "Forget everything" deletes it.
 
 Changes to rules are saved with schema checks, a `config.json.bak` backup and an atomic file replace.
 

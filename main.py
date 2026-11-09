@@ -116,10 +116,29 @@ def init_stdio() -> None:
             pass
 
 
+# Commands that open a window or the tray. An unexpected error in these is
+# shown to the person (installed app only); in the others it is only saved.
+_WINDOW_COMMANDS = {"", "--tray", "-t", "--home", "--welcome", "--gui", "-g", "--rules"}
+
+
+def _install_crash_handler(cmd: str) -> None:
+    try:
+        import problem_report
+        frozen = bool(getattr(sys, "frozen", False))
+        problem_report.install_crash_handler(
+            where=f"command {cmd}" if cmd else "tray",
+            show_dialog=frozen and cmd in _WINDOW_COMMANDS,
+        )
+    except Exception:
+        pass  # reporting problems must never be one
+
+
 def main(argv: list[str] | None = None) -> int:
     init_stdio()
 
     args = list(argv) if argv is not None else list(sys.argv[1:])
+    if argv is None:
+        _install_crash_handler(args[0].lower() if args else "")
 
     if not args:
         import tray

@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw
 import pystray
 
 import about
+import problem_report
 import watch
 from sorter import (
     HISTORY_FILE,
@@ -229,6 +230,7 @@ class SorterTray:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open Downloads", self.on_open_downloads),
             pystray.MenuItem("Open log folder", self.on_open_logs),
+            pystray.MenuItem("Report a problem...", self.on_report_problem),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(f"About {about.APP_NAME}", self.on_about),
             pystray.MenuItem(about.CREDIT, None, enabled=False),
@@ -297,6 +299,11 @@ class SorterTray:
 
     def on_open_logs(self, _icon=None, _item=None) -> None:
         open_in_explorer(LOG_DIR if LOG_DIR.exists() else LOG_FILE.parent)
+
+    def on_report_problem(self, _icon=None, _item=None) -> None:
+        if not problem_report.open_issue():
+            self.notify("Couldn't open your browser. Report problems at "
+                        f"{about.REPO_URL}/issues")
 
     def on_about(self, _icon=None, _item=None) -> None:
         self.notify(f"{about.__version__} - {about.CREDIT}\n{about.REPO_URL}", f"About {about.APP_NAME}")
@@ -379,6 +386,7 @@ def main() -> int:
     if about.handle_version_flag():
         return 0
     setup_logging()
+    problem_report.install_crash_handler("tray")
     lock = watch.acquire_single_instance_lock()
     if not lock:
         logging.info("Download Sorter is already running. Opening Home Dashboard.")
