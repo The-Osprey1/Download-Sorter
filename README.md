@@ -41,14 +41,14 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
   ```text
   Downloads/
-    ├── Documents/   (PDFs, Word, Text, plus folders from your profile, like Invoices & Receipts)
+    ├── Documents/   (PDF, Word, text, spreadsheets, presentations, e-books,
+    │                 plus folders from your profile, like Invoices & Receipts)
     ├── Images/
     ├── Videos/
     ├── Audio/
-    ├── Spreadsheets/
-    ├── Installers/
-    ├── Archives/    (zip, 7z, rar)
-    ├── 3D Models/   (STL, 3MF, STEP, CAD ...)
+    ├── Archives/    (zip, 7z, rar ...)
+    ├── Installers/  (exe, msi, msix)
+    ├── 3D Models/   (STL, 3MF, STEP, CAD, G-code ...)
     ├── Code/
     └── Other/       (anything no rule matched)
   ```
