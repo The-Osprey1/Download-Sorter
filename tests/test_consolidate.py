@@ -224,3 +224,39 @@ def test_consolidate_reconciles_interrupted_planned_moves(tmp_path: Path, monkey
     # The move should now be in history as completed and undoable
     active = sort_undo.get_active_moves(sort_undo.load_history())
     assert any(rec.get("dest") == str(dest_file) for rec in active)
+
+
+def test_consolidate_leaves_your_own_top_level_folders_alone(mock_downloads: Path):
+    """Only folders older versions of Download Sorter made are emptied."""
+    for name in ("Finance", "XYZFiles", "DownloadSorter-v2.1.0-artifacts"):
+        (mock_downloads / name).mkdir()
+        (mock_downloads / name / "keep.pdf").write_text(name, encoding="utf-8")
+    config = sorter.DEFAULT_CONFIG.copy()
+    config["watch"] = {"folder": str(mock_downloads)}
+
+    consolidate.consolidate_downloads(target_root=mock_downloads, config=config)
+
+    for name in ("Finance", "XYZFiles", "DownloadSorter-v2.1.0-artifacts"):
+        assert (mock_downloads / name / "keep.pdf").exists()
+
+
+def test_legacy_lists_only_name_folders_the_app_made():
+    """Personal folder names must not ship in the public app."""
+    assert consolidate.LEGACY_FOLDERS_TO_CONSOLIDATE == {"spreadsheets"}
+    assert consolidate.LEGACY_SUBFOLDERS_TO_CONSOLIDATE == [("code", "gcode"), ("code", "haas")]
+
+
+def test_old_folders_are_found_whatever_their_capitals(tmp_path: Path):
+    downloads = tmp_path / "Downloads"
+    (downloads / "SPREADSHEETS").mkdir(parents=True)
+    (downloads / "SPREADSHEETS" / "budget.xlsx").write_text("XLSX", encoding="utf-8")
+    (downloads / "code" / "HAAS").mkdir(parents=True)
+    (downloads / "code" / "HAAS" / "O1234.nc").write_text("%\nO1234\nG0 X0\nM30\n%", encoding="utf-8")
+    config = sorter.DEFAULT_CONFIG.copy()
+    config["watch"] = {"folder": str(downloads)}
+
+    consolidate.consolidate_downloads(target_root=downloads, config=config)
+
+    assert (downloads / "Documents" / "budget.xlsx").exists()
+    assert not (downloads / "SPREADSHEETS").exists()
+    assert not (downloads / "code" / "HAAS").exists()

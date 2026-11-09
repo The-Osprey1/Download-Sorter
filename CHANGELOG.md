@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.2.1] - 2026-11-09
+
+### Fixed
+* **Consolidate only empties Download Sorter's own old folders (`consolidate.py`)**: `--consolidate` no longer empties top-level folders named `Finance`, `XYZFiles` or `DownloadSorter-v2...` in Downloads. Those names were left over from testing. It now only touches folders older versions of Download Sorter made (`Spreadsheets`, `Code\Gcode` and `Code\Haas`), whatever their capitals are. To have it empty one of your own old folders too, add the folder's name to `LEGACY_FOLDERS_TO_CONSOLIDATE`.
+
 ## [2.2.0] - 2026-11-08
 
 ### Changed

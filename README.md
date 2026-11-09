@@ -1,6 +1,6 @@
 # Download Sorter
 
-> **Made by Devyn Fidel (2026)** · v2.2.0 · [MIT License](LICENSE)
+> **Made by Devyn Fidel (2026)** · v2.2.1 · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
@@ -15,7 +15,7 @@
 
 ## Get it
 
-1. **Download** the installer, `DownloadSorter-Setup-v2.2.0-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
+1. **Download** the installer, `DownloadSorter-Setup-v2.2.1-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
 2. **Run it.** Windows will probably show a blue "Windows protected your PC" screen the first time. [Here's why, and what to click](#windows-protected-your-pc).
    - It installs just for you, in `%LOCALAPPDATA%\Programs\DownloadSorter`. No administrator password is needed.
    - It adds Start menu and desktop shortcuts, and an entry in Installed apps.
@@ -69,7 +69,7 @@ To check that your download is exactly what was published:
 2. Run this in PowerShell, in the folder where the installer is:
 
    ```powershell
-   Get-FileHash .\DownloadSorter-Setup-v2.2.0-windows-x64.exe -Algorithm SHA256
+   Get-FileHash .\DownloadSorter-Setup-v2.2.1-windows-x64.exe -Algorithm SHA256
    ```
 
 3. The long code it prints should match the line for the installer in `checksums.txt`.
@@ -91,7 +91,7 @@ All the source code is in this repository, and the installer is built from it by
 - **Uninstall:** go to Windows Settings, then Apps, then Installed apps, then Download Sorter, then Uninstall. It asks whether to also delete your rules and history.
 - **Something went wrong?** [Report a bug](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml). The log helps a lot: right-click the tray icon, choose **Open log folder**, and attach `sorter.log`.
 
-*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.2.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
+*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.2.1-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
 
 ---
 
