@@ -9,11 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.2.0] - 2026-11-08
 
+### Changed
+* **Simpler folders (`sorter.py`, `config.json`)**: new installs file downloads into one flat folder per kind of file, covering 121 file types (up from 75):
+  * `Documents`: PDFs, Word, text, spreadsheets, presentations, e-books and more (before: `Documents\PDFs`, `Documents\Word`, `Documents\Text` and a separate `Spreadsheets`).
+  * `3D Models`: STL, 3MF, OBJ, STEP, CAD and G-code files, including Haas CNC and 3D printer programs found by the detectors (before: sub-folders such as `3D Models\STL`, plus `Code\Gcode` and `Code\Haas`).
+  * `Images`, `Videos`, `Audio`, `Archives`, `Installers` and `Code` cover more file types, and anything else still goes to `Other`.
+  * **Already using Download Sorter?** Your saved rules are kept, so files keep going where they went before. To switch to the new layout, open **Rules**, then **More**, then **Reset to defaults** and **Save changes**. This replaces all your rules, so pick your profile again in **Settings** afterwards to get its name rules back.
+
 ### Added
 * **Updates install from inside the app (new `updater.py`, `update_check.py`, Home)**: when a newer version is out, Home offers **Download and install**. It downloads the installer with a progress bar and Cancel, checks its size and SHA-256 against the release's `checksums.txt` (a mismatch is deleted, never run), then **Restart and install** hands over to the installer, which closes Download Sorter, updates it and opens it again. Only this project's GitHub release downloads are accepted. Running from source, or a release without those files, keeps the "Download" link to the release page.
 * **`DownloadSorter.exe --quit` (new `quit_signal.py`, `main.py`, `tray.py`, `rules_manager.py`)**: asks a running Download Sorter (background sorter and windows) to close cleanly, without switching sorting off.
 
 ### Fixed
+* **Shortcuts during an update (`installer_builder.py`)**: an in-app update now keeps the Desktop and Start menu shortcuts you have (and refreshes them), and doesn't add ones you deleted. A new `/NO-SHORTCUTS` option installs without any shortcuts (used by the automated install tests).
+* **Files written a moment ago (`safe_ops.py`)**: with no settle time set, a file whose timestamp was a fraction of a millisecond ahead of the clock was refused as "not settled". A settle time of 0 now means "don't wait".
 * **Installing over a running Download Sorter (`installer_builder.py`)**: the installer never closed the running app, so Windows refused to replace its files and an update stopped halfway, leaving a mix of old and new files. The installer now asks the app to close (`--quit`), waits up to 10 seconds, closes what is left, and retries files that are still locked. If it still can't, it says so instead of leaving a broken install. `/UPDATE` (used by the in-app updater) keeps the install folder and shortcuts and opens the app again afterwards.
 * **Messages replacing each other (`ui_motion.py`)**: a message shown right after clicking another message's button could disappear when the old one finished fading out.
 
