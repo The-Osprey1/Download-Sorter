@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.3.0] - 2026-11-09
 
 ### Added
+* **Setup starts from your own folders (new `folder_scan.py`, `onboarding.py`)**: the first welcome step no longer asks which of 4 profiles you are. It looks at the folders already in your Downloads folder and offers to keep filing into them, with a tick box each:
+  * a folder like `Music` or `Pictures` takes over that kind of file;
+  * a folder like `Invoices`, `Banking` or `IME 4030` gets a rule from its name and from words that keep coming back in its files' names ("chase", "lecture"). Words that also show up elsewhere in Downloads are left out, so "statement" won't pull in your personal statement;
+  * folders with no clear pattern are shown but can't be ticked; Download Sorter learns them from your moves.
+  When Downloads has no folders of its own, the step shows a box for each kind of file plus optional extra folders (receipts, school, career, taxes and bank). The files already in your folders also teach the learner where things go. In Settings, the profile list is now "Your folders and starter rules", with **Just my folders** first and **Look at my folders again**.
+* **Learning is on, and asks before adding a rule (`learning.py`, `ribbon_popup.py`, `watch.py`)**: after you've moved 3 similar files into one folder (same word in the name, or same website), a ribbon asks "Put files like this in Banking?". **Yes** adds a rule, named "Banking (learned)", that you can see and change on the Rules page; **No** means it won't ask about that again. It only asks when the word or website points to that folder at least 4 times out of 5, and never when a rule already files it there. It still never moves a file on its own guess. Learning is switched on for everyone once; you can turn it off in Settings.
+* **Rules can check the website a file came from (`sorter.py`)**: a learned rule like "“statement” files from yourbank.com" only matches statements downloaded from that site. The Rules page shows it as "(downloaded from yourbank.com)".
+
 * **Ideas from similar tools, rebuilt for Download Sorter** (Hazel, File Juggler, organize, AI File Sorter, a browser add-on that sorts by website):
   * **Course websites (`folder_scan.py`)**: an optional starter folder files anything downloaded from Canvas, Blackboard, Brightspace, Google Classroom, Gradescope, Piazza, Schoology or MoodleCloud into `Documents\School`, whatever the file is called. Offered in the welcome steps.
   * **Storage Sense warning (`config_manager.py`, Settings)**: if Windows Storage Sense is set to delete files in Downloads after a number of days, Settings says so and links to the setting, since that would delete sorted files too.
@@ -18,13 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * **Pictures by month (`sorter.py`, Settings)**: optionally, pictures go into `Images\2026-11`-style folders by the date the photo was taken (or the file's date). Clean-up keeps those folders.
   * **Words at the top of a PDF (`sorter.py`, Settings; new dependency `pypdf`)**: optionally, a rule's words are also looked for at the top of a PDF's first page, so `document (3).pdf` that says "INVOICE" still goes to Invoices. Large (over 10 MB), locked or unreadable PDFs are skipped.
   * **Tidy names and dates (`sorter.py`, Settings)**: optionally, `My_File (1).pdf` is filed as `My File.pdf`, and/or the date goes in front (`2026-11-09 Invoice.pdf`). Code, CAD, 3D and installer files keep their names. Undo puts the old name back.
-* **Setup starts from your own folders (new `folder_scan.py`, `onboarding.py`)**: the first welcome step no longer asks which of 4 profiles you are. It looks at the folders already in your Downloads folder and offers to keep filing into them, with a tick box each:
-  * a folder like `Music` or `Pictures` takes over that kind of file;
-  * a folder like `Invoices`, `Banking` or `IME 4030` gets a rule from its name and from words that keep coming back in its files' names ("chase", "lecture"). Words that also show up elsewhere in Downloads are left out, so "statement" won't pull in your personal statement;
-  * folders with no clear pattern are shown but can't be ticked; Download Sorter learns them from your moves.
-  When Downloads has no folders of its own, the step shows a box for each kind of file plus optional extra folders (receipts, school, career, taxes and bank). The files already in your folders also teach the learner where things go. In Settings, the profile list is now "Your folders and starter rules", with **Just my folders** first and **Look at my folders again**.
-* **Learning is on, and asks before adding a rule (`learning.py`, `ribbon_popup.py`, `watch.py`)**: after you've moved 3 similar files into one folder (same word in the name, or same website), a ribbon asks "Put files like this in Banking?". **Yes** adds a rule, named "Banking (learned)", that you can see and change on the Rules page; **No** means it won't ask about that again. It only asks when the word or website points to that folder at least 4 times out of 5, and never when a rule already files it there. It still never moves a file on its own guess. Learning is switched on for everyone once; you can turn it off in Settings.
-* **Rules can check the website a file came from (`sorter.py`)**: a learned rule like "“statement” files from yourbank.com" only matches statements downloaded from that site. The Rules page shows it as "(downloaded from yourbank.com)".
 
 ### Changed
 * **Easier to use (`onboarding.py`, `rules_manager.py`, `tray.py`, `ui_style.py`)**:
