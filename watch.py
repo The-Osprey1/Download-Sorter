@@ -704,6 +704,26 @@ class FolderWatches:
         return True
 
 
+def _run_daily_cleanup(config: dict) -> None:
+    """Old installers and zips to the Recycle Bin, if turned on (clean_old.auto_cleanup)."""
+    try:
+        import clean_old
+        result = clean_old.auto_cleanup(config)
+    except Exception:
+        logging.exception("Daily clean-up failed")
+        return
+    if result and result["count"] and config.get("notifications", True):
+        try:
+            import ribbon_popup
+            noun = "file" if result["count"] == 1 else "files"
+            ribbon_popup.notify_summary(
+                "Cleaned up old downloads",
+                f"Moved {result['count']} old {noun} ({clean_old.format_size(result['bytes'])}) to the Recycle Bin.",
+            )
+        except Exception as err:
+            logging.debug("Clean-up ribbon skipped: %s", err)
+
+
 def _startup_sweep(config: dict, routing_context: RoutingContext | None, root: Path) -> None:
     """Sort what is already in the watched folders, as a restart would.
 
@@ -801,6 +821,8 @@ def run(
             if time.monotonic() - last_heartbeat >= 300.0:
                 write_runtime_state("waiting_for_setup" if setup_pending else "running", "heartbeat")
                 last_heartbeat = time.monotonic()
+                if not setup_pending and not is_paused():
+                    _run_daily_cleanup(config)
             if changed:
                 config = new_config
                 routing_context = reloader.routing_context

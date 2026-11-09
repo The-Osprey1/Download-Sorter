@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+* **Ideas from similar tools, rebuilt for Download Sorter** (Hazel, File Juggler, organize, AI File Sorter, a browser add-on that sorts by website):
+  * **Course websites (`folder_scan.py`)**: an optional starter folder files anything downloaded from Canvas, Blackboard, Brightspace, Google Classroom, Gradescope, Piazza, Schoology or MoodleCloud into `Documents\School`, whatever the file is called. Offered in the welcome steps.
+  * **Storage Sense warning (`config_manager.py`, Settings)**: if Windows Storage Sense is set to delete files in Downloads after a number of days, Settings says so and links to the setting, since that would delete sorted files too.
+  * **Old installers and zips to the Recycle Bin (`clean_old.py`, `watch.py`, Settings)**: once a day, if turned on, files older than 30 days in Installers and Archives go to the Recycle Bin, with a ribbon saying how much space it freed.
+  * **A preview before the first sort (`onboarding.py`)**: finishing the welcome steps with "Sort the files already in my Downloads folder" first shows how many files would go to which folder, with **Sort them** or **Not now**.
+  * **Pictures by month (`sorter.py`, Settings)**: optionally, pictures go into `Images\2026-11`-style folders by the date the photo was taken (or the file's date). Clean-up keeps those folders.
+  * **Words at the top of a PDF (`sorter.py`, Settings; new dependency `pypdf`)**: optionally, a rule's words are also looked for at the top of a PDF's first page, so `document (3).pdf` that says "INVOICE" still goes to Invoices. Large (over 10 MB), locked or unreadable PDFs are skipped.
+  * **Tidy names and dates (`sorter.py`, Settings)**: optionally, `My_File (1).pdf` is filed as `My File.pdf`, and/or the date goes in front (`2026-11-09 Invoice.pdf`). Code, CAD, 3D and installer files keep their names. Undo puts the old name back.
 * **Setup starts from your own folders (new `folder_scan.py`, `onboarding.py`)**: the first welcome step no longer asks which of 4 profiles you are. It looks at the folders already in your Downloads folder and offers to keep filing into them, with a tick box each:
   * a folder like `Music` or `Pictures` takes over that kind of file;
   * a folder like `Invoices`, `Banking` or `IME 4030` gets a rule from its name and from words that keep coming back in its files' names ("chase", "lecture"). Words that also show up elsewhere in Downloads are left out, so "statement" won't pull in your personal statement;

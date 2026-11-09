@@ -1348,3 +1348,40 @@ def set_context_menu_enabled(enabled: bool) -> bool:
     except OSError:
         return False
 
+
+
+# =====================================================================
+# WINDOWS STORAGE SENSE
+# =====================================================================
+
+def storage_sense_downloads_days() -> int | None:
+    """Days after which Windows Storage Sense deletes files in Downloads, or None.
+
+    Storage Sense can be set to "Delete files in my Downloads folder if they
+    haven't been opened for more than N days". The folders Download Sorter
+    files into are inside Downloads, so that would delete sorted files too.
+    Read-only: a school or company policy wins over the user's own setting.
+    """
+    if sys.platform != "win32":
+        return None
+    import winreg
+
+    def read(root: Any, subkey: str, name: str) -> int | None:
+        try:
+            with winreg.OpenKey(root, subkey, 0, winreg.KEY_READ) as key:
+                value, _ = winreg.QueryValueEx(key, name)
+                return int(value)
+        except (OSError, ValueError, TypeError):
+            return None
+
+    policy = r"SOFTWARE\Policies\Microsoft\Windows\StorageSense"
+    if read(winreg.HKEY_LOCAL_MACHINE, policy, "AllowStorageSenseGlobal") == 0:
+        return None
+    days = read(winreg.HKEY_LOCAL_MACHINE, policy, "ConfigStorageSenseDownloadsCleanupThreshold")
+    if days is not None:
+        return days or None
+    user = r"Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy"
+    if read(winreg.HKEY_CURRENT_USER, user, "01") != 1:
+        return None  # Storage Sense is off
+    days = read(winreg.HKEY_CURRENT_USER, user, "512")
+    return days or None
