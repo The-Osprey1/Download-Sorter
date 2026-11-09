@@ -69,34 +69,36 @@ Every file goes through the same steps. The first step that gives an answer wins
 flowchart TD
     A(["A file appears in Downloads"]) --> B{"Finished downloading?<br/>Not .crdownload / .part,<br/>not locked, unchanged for 3 s"}
     B -- "Not yet" --> B2["Wait and check again"]
-    B2 --> B
-    B -- "Yes" --> C{"Should it be left alone?<br/>Sorting paused · you put it there ·<br/>you just undid it · a 'keep' folder ·<br/>OneDrive placeholder · temp file"}
+    B -- "Yes" --> C{"Should it be left alone?<br/>Sorting paused • user-placed in folder<br/>restored by Undo • .download-sorter-keep<br/>OneDrive placeholder • temporary file"}
     C -- "Yes" --> Z1(["Left where it is"])
-    C -- "No" --> R
+    C -- "No" --> R1
 
     subgraph R ["Pick the folder: first match wins"]
         direction TB
         R1{"1. Active project on,<br/>and a CAD / 3D file?"} -- "Yes" --> D1["The project's folder"]
-        R1 -- "No" --> R2{"2. Name matches a word rule?<br/>e.g. 'invoice', a course code,<br/>or a learned rule like 'statement'<br/>from yourbank.com<br/>(also the top of a PDF, if turned on)"}
-        R2 -- "Yes" --> D2["That rule's folder,<br/>e.g. Documents\Invoices & Receipts"]
+        R1 -- "No" --> R2{"2. Name matches a word rule?<br/>e.g. 'invoice', a course code, site,<br/>or top of PDF if enabled"}
+        R2 -- "Yes" --> D2["That rule's folder<br/>(e.g. Documents/Invoices & Receipts)"]
         R2 -- "No" --> R3{"3. G-code? Look inside:<br/>Haas CNC or 3D printer"}
-        R3 -- "Yes" --> D3["3D Models"]
+        R3 -- "Yes" --> D3["3D Models or Code/Haas"]
         R3 -- "No" --> R4{"4. 3MF from MakerWorld?"}
-        R4 -- "Yes" --> D4["3D Models\MakerWorld\Designer\Model"]
+        R4 -- "Yes" --> D4["3D Models/MakerWorld/<br/>Designer/Model"]
         R4 -- "No" --> R5{"5. Known file type?<br/>121 types: .pdf, .jpg, .stl ..."}
-        R5 -- "Yes" --> D5["Its folder: Documents, Images,<br/>Videos, Audio, Archives,<br/>Installers, 3D Models, CAD, Code<br/>(pictures by month, if turned on)"]
+        R5 -- "Yes" --> D5["Its folder: Documents, Images,<br/>Videos, Audio, Archives,<br/>Installers, 3D Models, CAD, Code<br/>(pictures by month, if on)"]
         R5 -- "No" --> D6["Other"]
     end
 
     D1 & D2 & D3 & D4 & D5 & D6 --> H{"A 3MF your slicer may<br/>still have open?"}
-    H -- "Yes" --> H2(["Held in Downloads for up to 7 days,<br/>then filed (or File now / Keep here)"])
+    H -- "Yes" --> H2(["Held in Downloads for up to 7 days<br/>(File now / Keep here ribbon options)"])
     H -- "No" --> E{"Same name already there,<br/>and exactly the same file?"}
-    E -- "Yes" --> E2["Moved to _Duplicates"]
+    E -- "Yes" --> E2["Route to _Duplicates<br/>(quarantined, not deleted)"]
     E -- "No" --> Q{"A zip, and unzipping<br/>turned on?"}
-    Q -- "Yes" --> Q2["Unpack it, file the zip in Archives"]
-    Q -- "No" --> M["Move it (tidier name or date in front,<br/>if turned on). Same name there already?<br/>Becomes 'name (2).pdf'"]
-    E2 & Q2 & M --> J["Write it to the undo history<br/>(written before the move, so a crash<br/>can't lose track of a file)"]
-    J --> N(["Show it: ribbon, Home page.<br/>Many files at once: one ribbon that counts"])
+    Q -- "Yes" --> Q2["Unpack archive, file .zip in Archives<br/>(3D models or Extracted folder)"]
+    Q -- "No" --> M["Move to folder (tidy name / date if on)"]
+
+    E2 & Q2 & M --> J[("Write to undo history<br/>(written before the move, so a crash<br/>can't lose track of a file)")]
+    J --> Exec["Execute safe atomic move / extract<br/>(Collisions become 'name (2).pdf')"]
+    Exec --> N(["Show it: ribbon, Home page.<br/>Many files at once: one ribbon that counts<br/>(1-click Undo puts files back)"])
+    H2 --> N
 ```
 
 **In words:**
