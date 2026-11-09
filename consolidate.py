@@ -69,17 +69,20 @@ FLAT_CATEGORIES_TO_CONSOLIDATE = {
     "Archives",
 }
 
-# Legacy top-level folders whose contents should be routed to official categories
+# Old top-level folders in Downloads that older versions of Download Sorter
+# made. Consolidate files everything in them by your current rules, then removes
+# the emptied folder. Names are matched whatever their capitals are.
+#
+# To have consolidate empty one of your own old folders as well, add its name
+# here in lowercase, for example "old stuff". Only add folders you want emptied:
+# every file in them is moved.
 LEGACY_FOLDERS_TO_CONSOLIDATE = {
     "spreadsheets",
-    "finance",
-    "xyzfiles",
-    "downloadsorter-v2.0.2-artifacts",
-    "downloadsorter-v2.0.2-public",
-    "downloadsorter-v2.1.0-artifacts",
 }
 
-# Specific legacy subfolders in otherwise protected directories (e.g. Code)
+# Old sub-folders (parent, child) that older versions of Download Sorter made
+# inside a folder consolidate otherwise leaves alone, such as Code. Add your own
+# the same way, in lowercase.
 LEGACY_SUBFOLDERS_TO_CONSOLIDATE = [
     ("code", "gcode"),
     ("code", "haas"),
@@ -96,6 +99,14 @@ def resolve_category_dir(root: Path, cat_name: str) -> Path:
     except OSError:
         pass
     return folder_path(root, cat_name)
+
+
+def resolve_nested_dir(root: Path, *parts: str) -> Path:
+    """Find root/part/part... matching each part whatever its capitals are."""
+    path = root
+    for part in parts:
+        path = resolve_category_dir(path, part)
+    return path
 
 
 def is_protected_directory(path: Path) -> bool:
@@ -155,7 +166,7 @@ def consolidate_downloads(
             for f in files:
                 candidates.append(sub_path / f)
 
-    # 3. Known legacy folders (e.g. Spreadsheets, Finance, etc.)
+    # 3. Old top-level folders (see LEGACY_FOLDERS_TO_CONSOLIDATE, e.g. Spreadsheets)
     for entry in root.iterdir():
         if not entry.is_dir():
             continue
@@ -166,9 +177,9 @@ def consolidate_downloads(
                 for f in files:
                     candidates.append(sub_path / f)
 
-    # 4. Known legacy subfolders (e.g. Code\Gcode, Code\Haas)
+    # 4. Old sub-folders (see LEGACY_SUBFOLDERS_TO_CONSOLIDATE, e.g. Code\Gcode)
     for parent_sub, child_sub in LEGACY_SUBFOLDERS_TO_CONSOLIDATE:
-        leg_dir = root / parent_sub / child_sub
+        leg_dir = resolve_nested_dir(root, parent_sub, child_sub)
         if leg_dir.exists() and leg_dir.is_dir():
             for sub_root, dirs, files in os.walk(leg_dir):
                 sub_path = Path(sub_root)
@@ -301,8 +312,10 @@ def consolidate_downloads(
                     pass
 
         # 2. Clean legacy folders and legacy subfolders
-        legacy_paths_to_clean = [root / name for name in LEGACY_FOLDERS_TO_CONSOLIDATE]
-        legacy_paths_to_clean.extend([root / p / c for p, c in LEGACY_SUBFOLDERS_TO_CONSOLIDATE])
+        legacy_paths_to_clean = [resolve_category_dir(root, name) for name in LEGACY_FOLDERS_TO_CONSOLIDATE]
+        legacy_paths_to_clean.extend(
+            resolve_nested_dir(root, p, c) for p, c in LEGACY_SUBFOLDERS_TO_CONSOLIDATE
+        )
 
         for leg_path in legacy_paths_to_clean:
             if not leg_path.exists() or not leg_path.is_dir():
