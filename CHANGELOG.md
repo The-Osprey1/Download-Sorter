@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Report a problem in Settings (`onboarding.py`)**: Added a direct link in the Settings About section to report an issue or suggest rules on GitHub.
 
 ### Changed
-* **Differentiate 3D Print Meshes and CAD models (`sorter.py`)**: 3D print mesh formats (`.stl`, `.3mf`, `.obj`, `.blend`, `.3ds`, `.fbx`, `.glb`, `.gltf`) sort to `3D Models`, while mechanical/engineering CAD files (`.step`, `.stp`, `.iges`, `.igs`, `.f3d`, `.f3z`, `.ipt`, `.iam`, `.sldprt`, `.sldasm`, `.slddrw`, `.dwg`, `.dxf`) sort to `CAD`, and CNC toolpaths (`.nc`, `.tap`, `.ngc`, `.gcode`, `.bgcode`, `.gco`, `.g`) route to `CAD\CAM & CNC Toolpaths`.
+* **Differentiate 3D Print Meshes and CAD models (`sorter.py`)**: 3D print mesh and printer formats (`.stl`, `.3mf`, `.obj`, `.blend`, `.3ds`, `.fbx`, `.glb`, `.gltf`, `.gcode`) sort to `3D Models`, while mechanical/engineering CAD files (`.step`, `.stp`, `.iges`, `.igs`, `.f3d`, `.f3z`, `.ipt`, `.iam`, `.sldprt`, `.sldasm`, `.slddrw`, `.dwg`, `.dxf`) sort to `CAD`.
 
 ### Removed
 * **Old one-off scripts**: `restore_from_log.py` (rebuilt moves from logs written before undo history existed, before 2.0) and `clean_test_history.py` (removed test records from history, no longer needed since tests use their own folders), plus `sorter.record_history`, which only the first one used.

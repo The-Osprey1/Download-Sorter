@@ -159,6 +159,7 @@ DEFAULT_CONFIG: dict = {
             "extensions": [
                 ".stl", ".3mf", ".obj",
                 ".3ds", ".fbx", ".blend", ".glb", ".gltf",
+                ".gcode", ".bgcode", ".nc", ".tap", ".ngc", ".gco", ".g",
             ],
             "enabled": True,
         },
@@ -168,14 +169,6 @@ DEFAULT_CONFIG: dict = {
             "extensions": [
                 ".step", ".stp", ".iges", ".igs",
                 ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf",
-            ],
-            "enabled": True,
-        },
-        {
-            "name": "CNC & Toolpaths",
-            "folder": "CAD\\CAM & CNC Toolpaths",
-            "extensions": [
-                ".gcode", ".bgcode", ".nc", ".tap", ".ngc", ".gco", ".g",
             ],
             "enabled": True,
         },
