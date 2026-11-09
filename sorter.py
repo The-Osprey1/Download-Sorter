@@ -376,22 +376,6 @@ def set_paused(paused: bool) -> None:
             pass
 
 
-def record_history(src: Path, dest: Path, batch_id: str = "") -> None:
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        record = {
-            "id": uuid.uuid4().hex,
-            "batch_id": batch_id or uuid.uuid4().hex[:8],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "src": str(src.resolve()),
-            "dest": str(dest.resolve()),
-        }
-        with HISTORY_FILE.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-    except Exception as exc:
-        logging.warning("Failed to write history record: %s", exc)
-
-
 def record_extraction(archive: Path, outputs: list[Path], batch_id: str = "") -> None:
     """Note what an archive was extracted to.
 

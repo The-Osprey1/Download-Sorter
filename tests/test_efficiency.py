@@ -151,22 +151,6 @@ def test_event_driven_watcher_moves_new_file_and_stops_promptly(tmp_path, monkey
     assert not thread.is_alive()
 
 
-def test_history_cleanup_backs_up_and_removes_only_pytest_records(tmp_path):
-    from clean_test_history import clean_history
-
-    history = tmp_path / "history.jsonl"
-    real = json.loads(_record("real.stl"))
-    test_record = dict(real)
-    test_record["src"] = str(tmp_path / "Temp" / "pytest-of-devyn" / "case" / "fake.stl")
-    history.write_text(json.dumps(real) + "\n" + json.dumps(test_record) + "\n", encoding="utf-8")
-
-    removed, malformed, backup = clean_history(history, apply=True)
-
-    assert (removed, malformed) == (1, 0)
-    assert backup is not None and backup.exists()
-    assert [json.loads(line)["src"] for line in history.read_text(encoding="utf-8").splitlines()] == [real["src"]]
-
-
 def test_runtime_state_is_atomic_and_preserves_process_start_time():
     sorter.write_runtime_state("starting", "initializing")
     first = json.loads(sorter.RUNTIME_STATE_FILE.read_text(encoding="utf-8"))

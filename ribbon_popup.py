@@ -28,7 +28,9 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import uuid
 
 # Enable Windows High-DPI awareness BEFORE importing or initializing Tkinter
 if sys.platform == "win32":
@@ -109,6 +111,16 @@ except Exception:
 SLOTS_FILE = Path(tempfile.gettempdir()) / "download_sorter_ribbon_slots.json"
 SLOTS_LOCK = Path(tempfile.gettempdir()) / "download_sorter_ribbon_slots.lock"
 RIBBON_DISMISS_FILE = Path(tempfile.gettempdir()) / "download_sorter_ribbon_dismiss.json"
+
+# Big batches (a zip unpacking, a browser's "download all"): the first few files
+# get their own ribbon, then one ribbon counts the rest instead of a stack of
+# popups. The background sorter writes the running totals to BATCH_FILE and the
+# batch ribbon reads them while it is open.
+BATCH_FILE = Path(tempfile.gettempdir()) / "download_sorter_ribbon_batch.json"
+BATCH_SINGLE_LIMIT = 3       # files in a burst that still get their own ribbon
+BATCH_GAP_SECONDS = 4.0      # this long without a new file ends the burst
+BATCH_IDLE_CLOSE_MS = 6000   # the batch ribbon closes this long after the last file
+BATCH_POLL_MS = 300
 
 # Category color map aligned with the shared design tokens
 CATEGORY_COLORS: dict[str, str] = {
@@ -516,11 +528,15 @@ def release_slot(slot: int, pid: int) -> None:
             pass
 
 
-def dismiss_active_ribbons(dest_path: str | Path | None = None) -> None:
-    """Request active ribbon popups (for a specific file or all) to dismiss immediately."""
+def dismiss_active_ribbons(
+    dest_path: str | Path | None = None,
+    paths: list[str | Path] | None = None,
+) -> None:
+    """Request active ribbon popups (for one file, several files, or all) to dismiss immediately."""
     data = {
         "timestamp": time.time(),
         "path": str(Path(dest_path).resolve()) if dest_path else None,
+        "paths": [str(Path(p).resolve()) for p in paths] if paths else None,
     }
     tmp = RIBBON_DISMISS_FILE.with_suffix(".tmp")
     try:
@@ -1063,8 +1079,9 @@ class RibbonPopup:
                     data = json.load(f)
                 sig_time = float(data.get("timestamp", 0))
                 if sig_time >= self.start_time:
-                    target = data.get("path")
-                    if not target or Path(target).resolve() == self.dest_path.resolve():
+                    targets = data.get("paths") or ([data["path"]] if data.get("path") else [])
+                    mine = self.dest_path.resolve()
+                    if not targets or any(Path(t).resolve() == mine for t in targets):
                         self.close()
                         return
             except Exception:
@@ -1141,6 +1158,34 @@ class RibbonPopup:
             release_slot(self.slot, self.pid)
 
 
+def _ribbon_command(*args: str) -> list[str]:
+    """The command that shows a ribbon in its own process.
+
+    In the installed app this file is bundled inside DownloadSorter.exe, so the
+    ribbon is started through the app's own ``--ribbon`` command. (Passing this
+    file's path to the .exe, as before, made it quit with "Unknown command", so
+    no ribbon ever appeared.)
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--ribbon", *args]
+    return [str(PYTHON), str(Path(__file__).resolve()), *args]
+
+
+def _app_command(*args: str) -> list[str]:
+    """A Download Sorter command (such as ``--undo``) started from a ribbon."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, *args]
+    return [str(PYTHON), str(ROOT / "main.py"), *args]
+
+
+def _spawn(args: list[str]) -> None:
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        subprocess.Popen(args, creationflags=flags)
+    except Exception as exc:
+        logging.debug("Failed to start ribbon process: %s", exc)
+
+
 def notify_file_held(
     dest_path: str | Path,
     planned_dest: str | Path,
@@ -1150,20 +1195,113 @@ def notify_file_held(
     """Spawn the ribbon popup in held mode."""
     dest = Path(dest_path).resolve()
     planned = Path(planned_dest).resolve()
-    args = [str(PYTHON), str(Path(__file__).resolve()), str(dest)]
+    extra = [str(Path(downloads_root).resolve())] if downloads_root else []
+    _spawn(_ribbon_command(str(dest), *extra, "--held", "--planned", str(planned)))
+
+
+_burst_lock = threading.Lock()
+_burst: dict = {}
+
+
+def _folder_label(dest: Path, downloads_root: Path | None) -> str:
+    """The folder a file went to, as shown to the user (relative to Downloads)."""
     if downloads_root:
-        args.append(str(Path(downloads_root).resolve()))
-    args.extend(["--held", "--planned", str(planned)])
-    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            rel = dest.relative_to(Path(downloads_root).resolve())
+            return str(rel.parent) if rel.parent != Path(".") else "Downloads"
+        except ValueError:
+            pass
+    return dest.parent.name or str(dest.parent)
+
+
+def record_burst(
+    dest: Path,
+    downloads_root: Path | None,
+    batch_id: str | None = None,
+    now: float | None = None,
+) -> tuple[str, dict]:
+    """Count a filed file into the current burst.
+
+    Returns ("single", state) while the burst is small enough for one ribbon per
+    file, then ("batch", state). A burst ends after BATCH_GAP_SECONDS without a
+    new file.
+    """
+    now = time.time() if now is None else now
+    with _burst_lock:
+        if not _burst or now - float(_burst.get("last", 0)) > BATCH_GAP_SECONDS:
+            _burst.clear()
+            _burst.update({
+                "id": uuid.uuid4().hex[:8], "started": now, "last": now, "count": 0,
+                "folders": {}, "batches": [], "singles": [], "ribbon": False,
+                "root": str(Path(downloads_root).resolve()) if downloads_root else "",
+            })
+        _burst["last"] = now
+        _burst["count"] += 1
+        label = _folder_label(dest, downloads_root)
+        _burst["folders"][label] = _burst["folders"].get(label, 0) + 1
+        # "hold_release" is shared by every released 3MF hold, so undoing it
+        # would reach far beyond this batch.
+        if batch_id and batch_id != "hold_release" and batch_id not in _burst["batches"]:
+            _burst["batches"].append(batch_id)
+        if _burst["count"] <= BATCH_SINGLE_LIMIT:
+            _burst["singles"].append(str(dest))
+            return "single", json.loads(json.dumps(_burst))
+        first_batch_file = not _burst["ribbon"]
+        _burst["ribbon"] = True
+        state = json.loads(json.dumps(_burst))
+        state["first_batch_file"] = first_batch_file
+        return "batch", state
+
+
+def _write_batch_state(state: dict) -> None:
+    tmp = BATCH_FILE.with_suffix(".tmp")
     try:
-        subprocess.Popen(args, creationflags=flags)
-    except Exception as exc:
-        logging.debug("Failed to spawn ribbon hold notification: %s", exc)
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        tmp.replace(BATCH_FILE)
+    except Exception:
+        logging.debug("Could not write the batch ribbon state", exc_info=True)
 
 
-def notify_file_moved(dest_path: str | Path, downloads_root: str | Path | None = None) -> None:
-    """Spawn the ribbon popup non-blocking in a separate detached process."""
+def read_batch_state() -> dict:
+    try:
+        data = json.loads(BATCH_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def batch_summary(state: dict, max_folders: int = 3) -> tuple[str, str]:
+    """Title and message for the batch ribbon, e.g. ("Filed 37 files", "Images 25 · Documents 12")."""
+    count = int(state.get("count", 0))
+    title = f"Filed {count} file{'s' if count != 1 else ''}"
+    folders = sorted((state.get("folders") or {}).items(), key=lambda item: (-item[1], item[0]))
+    parts = [f"{name} {n}" for name, n in folders[:max_folders]]
+    if len(folders) > max_folders:
+        parts.append(f"+{len(folders) - max_folders} more")
+    return title, " · ".join(parts)
+
+
+def notify_file_moved(
+    dest_path: str | Path,
+    downloads_root: str | Path | None = None,
+    batch_id: str | None = None,
+) -> None:
+    """Show that a file was filed, without flooding the screen.
+
+    The first few files of a burst each get their own ribbon. From then on one
+    batch ribbon counts the whole burst ("Filed 37 files: Images 25, ...") and
+    the single ribbons of that burst are closed.
+    """
     dest = Path(dest_path).resolve()
+    root = Path(downloads_root).resolve() if downloads_root else None
+    kind, state = record_burst(dest, root, batch_id)
+
+    if kind == "batch":
+        _write_batch_state(state)
+        if state.get("first_batch_file"):
+            dismiss_active_ribbons(paths=state.get("singles") or None)
+            _spawn(_ribbon_command("--batch"))
+        return
 
     # Rate check: skip spawning if all notification slots are already occupied
     try:
@@ -1176,15 +1314,7 @@ def notify_file_moved(dest_path: str | Path, downloads_root: str | Path | None =
     except Exception:
         pass
 
-    args = [str(PYTHON), str(Path(__file__).resolve()), str(dest)]
-    if downloads_root:
-        args.append(str(downloads_root))
-
-    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    try:
-        subprocess.Popen(args, creationflags=flags)
-    except Exception as exc:
-        print(f"Failed to spawn ribbon notification: {exc}", file=sys.stderr)
+    _spawn(_ribbon_command(str(dest), *([str(root)] if root else [])))
 
 
 class SummaryRibbonPopup:
@@ -1574,6 +1704,108 @@ class SummaryRibbonPopup:
             release_slot(self.slot, self.pid)
 
 
+class BatchRibbonPopup(SummaryRibbonPopup):
+    """One ribbon for a big batch of files, counting up while they arrive.
+
+    It reads the totals the background sorter writes to BATCH_FILE, restarts
+    its countdown whenever another file is filed, and closes a few seconds
+    after the last one. "Undo" puts the whole batch back; "Open" shows the
+    folder the files went to (or Downloads when they went to several).
+    """
+
+    def __init__(self, enable_animation: bool = True) -> None:
+        self.state = read_batch_state()
+        self.burst_id = self.state.get("id")
+        self.last_seen = self.state.get("last")
+        title, message = batch_summary(self.state)
+        self.poll_job: str | None = None
+        super().__init__(
+            title=title,
+            message=message,
+            accent=DEFAULT_ACCENT,
+            timeout_ms=BATCH_IDLE_CLOSE_MS,
+            enable_animation=enable_animation,
+        )
+        self.action_labels: list[tk.Label] = []
+        for text, handler in (("Undo", self.undo), ("Open", self.open_folder)):
+            label = tk.Label(
+                self.top_row, text=text, font=(FONT_FAMILY, 9, "bold"),
+                fg=ACTION_COLOR, bg=BG_COLOR, cursor="hand2", padx=int(6 * self.scale),
+            )
+            label.pack(side="right")
+            label.bind("<Button-1>", lambda _e, h=handler: (h(), "break")[1])
+            label.bind("<Enter>", self.on_enter)
+            label.bind("<Leave>", self.on_leave)
+            self.action_labels.append(label)
+        self.poll_job = self.root.after(BATCH_POLL_MS, self._poll)
+
+    def _poll(self) -> None:
+        if self.is_closing:
+            return
+        state = read_batch_state()
+        if state.get("id") != self.burst_id:
+            self.close()  # a newer batch has its own ribbon
+            return
+        if state.get("last") != self.last_seen:
+            self.state = state
+            self.last_seen = state.get("last")
+            title, message = batch_summary(state)
+            try:
+                self.title_lbl.config(text=title)
+                self.msg_lbl.config(text=message if len(message) <= 48 else message[:45] + "…")
+            except tk.TclError:
+                return
+            self.remaining_ms = float(self.timeout_ms)
+            if not self.is_hovered and self.slide_job is None:
+                self._schedule_dismiss()
+        try:
+            self.poll_job = self.root.after(BATCH_POLL_MS, self._poll)
+        except tk.TclError:
+            pass
+
+    def _set_hover_state(self, hovered: bool) -> None:
+        super()._set_hover_state(hovered)
+        bg = HOVER_BG if hovered else BG_COLOR
+        for label in getattr(self, "action_labels", []):
+            label.config(bg=bg)
+
+    def folder_to_open(self) -> Path | None:
+        root = self.state.get("root")
+        if not root:
+            return None
+        folders = list((self.state.get("folders") or {}).keys())
+        if len(folders) == 1 and folders[0] != "Downloads":
+            return Path(root) / folders[0]
+        return Path(root)
+
+    def open_folder(self) -> None:
+        folder = self.folder_to_open()
+        if folder is not None and sys.platform == "win32":
+            try:
+                os.startfile(str(folder))  # type: ignore[attr-defined]
+            except OSError as exc:
+                logging.debug("Could not open %s: %s", folder, exc)
+        self.close()
+
+    def undo(self) -> None:
+        batches = [str(b) for b in self.state.get("batches") or []]
+        if batches:
+            args = ["--undo"]
+            for batch in batches:
+                args += ["--batch", batch]
+            _spawn(_app_command(*args, "--notify"))
+        self.close()
+
+    def close(self) -> None:
+        if self.poll_job:
+            try:
+                self.root.after_cancel(self.poll_job)
+            except Exception:
+                pass
+            self.poll_job = None
+        super().close()
+
+
 def notify_summary(
     title: str,
     message: str,
@@ -1625,6 +1857,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--held", action="store_true", help="Show held preview ribbon with File now / Keep here.")
     parser.add_argument("--planned", type=str, default="", help="Planned destination path when held.")
     parser.add_argument("--ribbon-summary", "--summary", dest="summary", action="store_true", help="Display summary toast.")
+    parser.add_argument("--batch", action="store_true", help="Show the ribbon that counts a big batch of files.")
     parser.add_argument("--title", type=str, default="Download Sorter", help="Summary notification title.")
     parser.add_argument("--message", type=str, default="", help="Summary notification message.")
     parser.add_argument("--accent", type=str, default="#69E6AD", help="Accent hex color.")
@@ -1634,7 +1867,9 @@ def main(argv: list[str] | None = None) -> int:
     enable_anim = not args.no_anim
 
     try:
-        if args.summary:
+        if args.batch:
+            popup = BatchRibbonPopup(enable_animation=enable_anim)
+        elif args.summary:
             popup = SummaryRibbonPopup(
                 title=args.title,
                 message=args.message,

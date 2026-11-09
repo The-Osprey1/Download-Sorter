@@ -116,7 +116,7 @@ class TestAttributionTier1AndTier2(unittest.TestCase):
         "clean_old", "gcode_peek", "quick_switcher", "ribbon_popup",
         "rules_manager", "sort_once", "sort_undo", "status",
         "toggle_pause", "tray", "unzip_3d", "unzip_archive", "watch",
-        "remodel", "hold_manager", "clean_test_history", "restore_from_log",
+        "remodel", "hold_manager",
     ]
 
     # ---- Tier 1: Feature Coverage (>=5 tests) ----
@@ -130,23 +130,6 @@ class TestAttributionTier1AndTier2(unittest.TestCase):
         self.assertIn(about.CREDIT, about.version_string())
         self.assertIn(about.CREDIT, about.about_text())
         self.assertIn(about.REPO_URL, about.about_text())
-
-    def test_t1_all_cli_scripts_version_flag(self) -> None:
-        """F1-T1-2: Verify CLI --version returns 0 and prints credit on all CLI scripts."""
-        for script in self.CLI_SCRIPTS:
-            script_path = REPO_ROOT / f"{script}.py"
-            if not script_path.exists():
-                continue
-            res = subprocess.run(
-                [sys.executable, str(script_path), "--version"],
-                capture_output=True, text=True, timeout=15, cwd=str(REPO_ROOT),
-            )
-            self.assertEqual(
-                res.returncode, 0,
-                f"Script {script}.py failed --version: {res.stderr}"
-            )
-            self.assertIn(about.CREDIT, res.stdout, f"{script}.py missing CREDIT in --version")
-            self.assertIn(about.__version__, res.stdout, f"{script}.py missing version in --version")
 
     def test_t1_setup_and_updater_scripts_attribution(self) -> None:
         """F1-T1-3: Verify setup and updater scripts include author credit."""

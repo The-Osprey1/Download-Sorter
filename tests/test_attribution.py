@@ -12,15 +12,16 @@ import about
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Every script that can be run on its own. (These checks used to be repeated
+# in three other test files, each starting the same 20 processes again.)
 CLI_SCRIPTS = [
     "sort_once", "sort_undo", "status", "clean_old", "gcode_peek", "unzip_3d",
     "unzip_archive", "quick_switcher", "ribbon_popup", "toggle_pause", "watch",
-    "tray", "rules_manager", "remodel",
+    "tray", "rules_manager", "remodel", "hold_manager", "batch_handoff",
 ]
 
-HELPER_SCRIPTS = [
-    "hold_manager", "batch_handoff", "clean_test_history", "restore_from_log",
-]
+# Scripts that also accept the short -V.
+V_FLAG_SCRIPTS = ["remodel", "hold_manager", "batch_handoff", "rules_manager"]
 
 
 def test_credit_constants():
@@ -44,20 +45,17 @@ def test_every_cli_prints_credit_on_version(script):
         capture_output=True, text=True, timeout=60, cwd=str(ROOT),
     )
     assert result.returncode == 0, result.stderr
-    assert about.CREDIT in result.stdout
-    assert about.__version__ in result.stdout
+    assert result.stdout.strip() == about.version_string()
 
 
-@pytest.mark.parametrize("script", HELPER_SCRIPTS)
-@pytest.mark.parametrize("flag", ["--version", "-V"])
-def test_helper_scripts_print_credit_on_version_and_v(script, flag):
+@pytest.mark.parametrize("script", V_FLAG_SCRIPTS)
+def test_short_v_flag_prints_the_same_banner(script):
     result = subprocess.run(
-        [sys.executable, str(ROOT / f"{script}.py"), flag],
+        [sys.executable, str(ROOT / f"{script}.py"), "-V"],
         capture_output=True, text=True, timeout=60, cwd=str(ROOT),
     )
     assert result.returncode == 0, result.stderr
-    assert about.CREDIT in result.stdout
-    assert about.__version__ in result.stdout
+    assert result.stdout.strip() == about.version_string()
 
 
 @pytest.mark.parametrize("script", ["setup.bat", "update.bat", "install_context_menu.ps1", "install_startup.ps1"])

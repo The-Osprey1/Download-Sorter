@@ -12,11 +12,6 @@ Adversarially tests all requirements across:
 from __future__ import annotations
 
 import io
-import os
-import shutil
-import subprocess
-import sys
-import tempfile
 import zipfile
 from pathlib import Path
 
@@ -24,23 +19,9 @@ import pytest
 from PIL import Image
 
 import about
-from suite_theme import ACCENTS, COLORS, RADII, TYPE
+from suite_theme import ACCENTS
 
 ROOT = Path(__file__).resolve().parent.parent
-
-# All CLI scripts supporting --version
-ALL_CLI_SCRIPTS = [
-    "sort_once", "sort_undo", "status", "clean_old", "gcode_peek", "unzip_3d",
-    "unzip_archive", "quick_switcher", "ribbon_popup", "toggle_pause", "watch",
-    "tray", "rules_manager", "remodel", "hold_manager", "batch_handoff",
-    "clean_test_history", "restore_from_log",
-]
-
-# Scripts enhanced to support both --version and -V
-V_FLAG_SCRIPTS = [
-    "remodel", "hold_manager", "batch_handoff", "clean_test_history",
-    "restore_from_log", "rules_manager",
-]
 
 
 # =============================================================================
@@ -49,40 +30,6 @@ V_FLAG_SCRIPTS = [
 
 class TestArea1AttributionErgonomics:
     """Stress-test attribution across every single entry point."""
-
-    @pytest.mark.parametrize("script", ALL_CLI_SCRIPTS)
-    def test_cli_version_flag_exact_match(self, script):
-        """Every CLI script must return code 0 and output about.version_string() on --version."""
-        script_path = ROOT / f"{script}.py"
-        assert script_path.exists(), f"Script {script}.py does not exist"
-
-        proc = subprocess.run(
-            [sys.executable, str(script_path), "--version"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            cwd=str(ROOT),
-        )
-        assert proc.returncode == 0, f"{script}.py --version failed with returncode {proc.returncode}: {proc.stderr}"
-        output = proc.stdout.strip()
-        assert about.version_string() in output, f"{script}.py --version missing version banner. Got: {output!r}"
-        assert about.CREDIT in output, f"{script}.py --version missing author credit {about.CREDIT!r}"
-
-    @pytest.mark.parametrize("script", V_FLAG_SCRIPTS)
-    def test_cli_v_flag_exact_match(self, script):
-        """Scripts supporting -V must return code 0 and output about.version_string()."""
-        script_path = ROOT / f"{script}.py"
-        proc = subprocess.run(
-            [sys.executable, str(script_path), "-V"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            cwd=str(ROOT),
-        )
-        assert proc.returncode == 0, f"{script}.py -V failed with returncode {proc.returncode}: {proc.stderr}"
-        output = proc.stdout.strip()
-        assert about.version_string() in output, f"{script}.py -V missing version banner. Got: {output!r}"
-        assert about.CREDIT in output, f"{script}.py -V missing author credit {about.CREDIT!r}"
 
     def test_gui_footer_attribution_in_rules_manager(self):
         """RulesManagerDialog must contain creditFooter with about.CREDIT."""

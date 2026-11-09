@@ -142,7 +142,7 @@ class RibbonGraphicsAndAnimationTests(unittest.TestCase):
             popup.root.destroy()
         except Exception:
             # Fallback for headless environments without GUI display / Tcl init
-            source = (Path(__file__).resolve().parent / "ribbon_popup.py").read_text(encoding="utf-8")
+            source = (Path(__file__).resolve().parent.parent / "ribbon_popup.py").read_text(encoding="utf-8")
             self.assertIn("3MF HOLD", source)
             self.assertIn('COLORS.get("canvas", "#0B0D12")', source)
 

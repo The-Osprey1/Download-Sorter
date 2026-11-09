@@ -147,7 +147,7 @@ class TestEdgeCasesSafety(unittest.TestCase):
             
             # Case 1: All enabled (defaults)
             _handle_post_move(dest, target_root, {})
-            mock_notify.assert_called_once_with(dest, target_root)
+            mock_notify.assert_called_once_with(dest, target_root, batch_id=None)
             mock_record.assert_called_once_with(dest, target_root)
 
             mock_notify.reset_mock()
@@ -171,7 +171,7 @@ class TestEdgeCasesSafety(unittest.TestCase):
 
             # Case 4: Quick switcher disabled
             _handle_post_move(dest, target_root, {"quick_switcher_enabled": False})
-            mock_notify.assert_called_once_with(dest, target_root)
+            mock_notify.assert_called_once_with(dest, target_root, batch_id=None)
             mock_record.assert_not_called()
 
 

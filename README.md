@@ -56,6 +56,63 @@ You need Windows 10 or 11. Nothing else needs to be installed.
   You can change where things go on the **Rules** page, and test a file name with **Try a filename** before saving.
 - **Files you move yourself stay where you put them.** If you drag a sorted file into your own folder inside Downloads, Download Sorter leaves it there.
 
+## How Download Sorter decides where a file goes
+
+Every file goes through the same steps. The first step that gives an answer wins, and nothing is ever deleted: a file that's an exact copy goes to `_Duplicates`, and every move can be undone.
+
+```mermaid
+flowchart TD
+    A(["A file appears in Downloads"]) --> B{"Finished downloading?<br/>Not .crdownload / .part,<br/>not locked, unchanged for 3 s"}
+    B -- "Not yet" --> B2["Wait and check again"]
+    B2 --> B
+    B -- "Yes" --> C{"Should it be left alone?<br/>Sorting paused · you put it there ·<br/>you just undid it · a 'keep' folder ·<br/>OneDrive placeholder · temp file"}
+    C -- "Yes" --> Z1(["Left where it is"])
+    C -- "No" --> R
+
+    subgraph R ["Pick the folder: first match wins"]
+        direction TB
+        R1{"1. Active project on,<br/>and a CAD / 3D file?"} -- "Yes" --> D1["The project's folder"]
+        R1 -- "No" --> R2{"2. Name matches a word rule?<br/>e.g. 'invoice', 'W-2', a course code"}
+        R2 -- "Yes" --> D2["That rule's folder,<br/>e.g. Documents\Invoices & Receipts"]
+        R2 -- "No" --> R3{"3. G-code? Look inside:<br/>Haas CNC or 3D printer"}
+        R3 -- "Yes" --> D3["3D Models"]
+        R3 -- "No" --> R4{"4. 3MF from MakerWorld?"}
+        R4 -- "Yes" --> D4["3D Models\MakerWorld\Designer\Model"]
+        R4 -- "No" --> R5{"5. Known file type?<br/>121 types: .pdf, .jpg, .stl ..."}
+        R5 -- "Yes" --> D5["Its folder: Documents, Images,<br/>Videos, Audio, Archives,<br/>Installers, 3D Models, Code"]
+        R5 -- "No" --> D6["Other"]
+    end
+
+    D1 & D2 & D3 & D4 & D5 & D6 --> H{"A 3MF your slicer may<br/>still have open?"}
+    H -- "Yes" --> H2(["Held in Downloads for up to 7 days,<br/>then filed (or File now / Keep here)"])
+    H -- "No" --> E{"Same name already there,<br/>and exactly the same file?"}
+    E -- "Yes" --> E2["Moved to _Duplicates"]
+    E -- "No" --> Q{"A zip, and unzipping<br/>turned on?"}
+    Q -- "Yes" --> Q2["Unpack it, file the zip in Archives"]
+    Q -- "No" --> M["Move it. Same name there already?<br/>Becomes 'name (2).pdf'"]
+    E2 & Q2 & M --> J["Write it to the undo history<br/>(written before the move, so a crash<br/>can't lose track of a file)"]
+    J --> N(["Show it: ribbon, Home page.<br/>Many files at once: one ribbon that counts"])
+```
+
+**In words:**
+
+1. **Wait until the download is finished.** Browsers write to `.crdownload` or `.part` files first, and big files take a while. Download Sorter waits until the file has stopped changing for 3 seconds and no other program has it open.
+2. **Skip what it shouldn't touch:** files you moved yourself, files you just undid, folders with a `.download-sorter-keep` file, OneDrive files that aren't on your PC yet, and temporary files like `~$report.docx`.
+3. **Pick the folder.** The rules are checked in order and the first match wins:
+   - an **active project**, for CAD and 3D files, when you've turned one on;
+   - **word rules**, which look for whole words in the file name, so "statement" alone doesn't send your personal statement to Invoices;
+   - the **G-code check**, which looks inside `.nc`/`.gcode` files to tell a Haas CNC program from a 3D printer file;
+   - **MakerWorld 3MF files**, filed by designer and model name;
+   - the **file type**: 121 extensions mapped to the main folders;
+   - otherwise **Other**.
+4. **3MF hold.** A 3MF file you just downloaded may be open in your slicer, so it stays in Downloads for up to 7 days. The ribbon offers **File now** and **Keep here**.
+5. **Duplicates.** If a file with the same name is already in the destination folder and the two are identical (checked byte by byte), the new copy goes to `_Duplicates` instead of becoming `report (2).pdf`.
+6. **Zips** are only unpacked if you turned that on in the welcome steps or in Settings.
+7. **Move and record.** Each move is written to the undo history *before* it happens and marked done after. If the PC crashes halfway, the next start finishes or reverses it. **Undo** puts files back exactly where they were.
+8. **Tell you.** A ribbon slides in for each file. When lots of files arrive together, the first 3 get their own ribbon, then one ribbon counts the rest ("Filed 37 files · Images 25 · Documents 12") with **Open** and **Undo**.
+
+The code for each step: readiness and skipping in `sorter.move_file` and `sorter.is_file_ready_to_move`, the folder choice in `sorter.evaluate_routing` (try it on the **Rules** page with **Try a filename**), the hold in `hold_manager.py`, the history in `safe_ops.py`, and the ribbons in `ribbon_popup.py`.
+
 ## Windows protected your PC
 
 New apps from small developers aren't signed with a paid code-signing certificate yet, so Windows SmartScreen warns about them. To install anyway:
@@ -181,6 +238,7 @@ download-sorter-tray
 * **One-Click Reveal**: Click the notification pill to highlight sorted files in Windows File Explorer.
 * **3MF Plate Previews**: Embedded thumbnails with quick **File now** and **Keep here** actions.
 * **Vertical Dynamic Stacking**: Stacks simultaneous downloads neatly down the right margin.
+* **Big batches without the spam**: when lots of files land at once, the first 3 get their own ribbon, then one ribbon counts the rest while they arrive ("Filed 37 files · Images 25 · Documents 12") with **Open** and **Undo** for the whole batch.
 * **Per-Monitor High-DPI Awareness**: Crystal-clear typography on all display scaling levels.
 
 ### 7. 3D Print Inspector & CNC Machine Sniffer (`gcode_peek.py`)
