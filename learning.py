@@ -1,11 +1,16 @@
-"""Learning from how the user organizes files (stage 1: watch only).
+"""Learning from how the user organizes files.
 
 When the user moves a sorted file into another folder inside Downloads, that move
 is an example of where files like it belong. This module turns such moves into
 counts of simple features (words in the file name, the file type, and the website
 the file was downloaded from) and keeps a practice log of what it *would* have
-suggested. It never moves a file and never shows a suggestion; it only learns and
-writes the log, so its reliability can be judged before anything uses it.
+guessed, so its reliability can be judged ("right 8 of 10 times").
+
+It never moves a file by itself. After the user has moved 3 files that share a
+word or a website into the same folder, it can *suggest* a rule ("Put files like
+this in Banking from now on?"); only a Yes adds a rule, which then shows on the
+Rules page like any other. The folder scan at setup (folder_scan.py) also feeds
+it the files already in the user's folders, so it knows them from day one.
 
 Design notes (ideas from other projects, our own code):
 - Learn only from deliberate actions (the user's own moves), never from the
@@ -43,6 +48,14 @@ MAX_LOG_LINES = 2000
 KEEP_LOG_LINES = 1500
 TOP_N = 3
 
+# Suggest a rule once the user has moved this many files that share a word or a
+# website into one folder, and that word or website points to that folder at
+# least this often (so "scan" or "copy", found everywhere, never becomes a rule).
+SUGGEST_AFTER = 3
+SUGGEST_SHARE = 0.8
+PENDING_HOURS = 24        # don't ask about the same thing again for a day
+MAX_PENDING = 20
+
 # Words that say nothing about where a file belongs.
 FILLER_WORDS = frozenset({
     "a", "an", "and", "the", "of", "for", "to", "in", "on", "at", "by", "with", "from",
@@ -63,6 +76,11 @@ _LOCK = threading.RLock()
 def is_enabled(config: dict | None) -> bool:
     block = (config or {}).get("learning")
     return isinstance(block, dict) and bool(block.get("enabled", False))
+
+
+def suggestions_enabled(config: dict | None) -> bool:
+    block = (config or {}).get("learning")
+    return is_enabled(config) and isinstance(block, dict) and bool(block.get("suggest", True))
 
 
 def _learning_file() -> Path:
@@ -91,6 +109,8 @@ def _write_json_atomic(target: Path, data: Any) -> None:
 def _singular(word: str) -> str:
     if len(word) > 4 and word.endswith("ies"):
         return word[:-3] + "y"
+    if len(word) > 4 and word.endswith(("xes", "ches", "shes", "sses", "zes")):
+        return word[:-2]  # taxes -> tax, matches -> match, classes -> class
     if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
         return word[:-1]
     return word
@@ -196,9 +216,12 @@ class Model:
         data = data if isinstance(data, dict) else {}
         folders = data.get("folders")
         self.folders: dict[str, dict] = folders if isinstance(folders, dict) else {}
+        # Everything else kept alongside: the user's own moves per folder,
+        # suggestions waiting for an answer, declined ones, seeded file names.
+        self.extra: dict[str, Any] = {k: v for k, v in data.items() if k not in ("version", "folders")}
 
     def to_dict(self) -> dict:
-        return {"version": 1, "folders": self.folders}
+        return {"version": 1, "folders": self.folders, **self.extra}
 
     @property
     def example_count(self) -> int:
@@ -379,7 +402,11 @@ def _folder_label(folder: Path, root: Path) -> str | None:
 
 
 def observe_user_move(dest: Path, root: Path, config: dict) -> dict | None:
-    """Learn from a move the user made. Logs the guess it would have made first."""
+    """Learn from a move the user made. Logs the guess it would have made first.
+
+    The returned record carries a "suggestion" when this move makes a rule worth
+    offering (see SUGGEST_AFTER); the caller shows it and the user decides.
+    """
     if not is_enabled(config):
         return None
     label = _folder_label(Path(dest).parent, root)
@@ -402,9 +429,218 @@ def observe_user_move(dest: Path, root: Path, config: dict) -> dict | None:
             "in_top_three": folder_key(label) in names,
         }
         model.learn(feats, label)
+        _count_move(model, feats, label)
+        if suggestions_enabled(config):
+            suggestion = _suggestion_for(model, feats, label, Path(dest), config)
+            if suggestion:
+                record["suggestion"] = suggestion
         save_model(model)
-        _append_log(record)
+        _append_log({k: v for k, v in record.items() if k != "suggestion"})
     return record
+
+
+# ---------------------------------------------------------------------------
+# seeding from the folder scan, and suggesting rules
+# ---------------------------------------------------------------------------
+
+def _name_features(file_name: str) -> list[str]:
+    feats = [f"w:{w}" for w in name_words(file_name)]
+    suffix = Path(file_name).suffix.lower()
+    if suffix:
+        feats.append(f"x:{suffix}")
+    return feats
+
+
+def seed_examples(examples: Iterable[tuple[str, str]], max_remembered: int = 5000) -> int:
+    """Learn (file name, folder) pairs found by the setup scan. Each file is only counted once."""
+    with _LOCK:
+        model = load_model()
+        seeded = list(model.extra.get("seeded") or [])
+        known = set(seeded)
+        added = 0
+        for name, folder in examples:
+            key = f"{folder_key(folder)}/{str(name).lower()}"
+            if key in known:
+                continue
+            feats = _name_features(str(name))
+            if not feats:
+                continue
+            model.learn(feats, folder)
+            known.add(key)
+            seeded.append(key)
+            added += 1
+        model.extra["seeded"] = seeded[-max_remembered:]
+        if added:
+            save_model(model)
+    return added
+
+
+def _count_move(model: Model, feats: Iterable[str], label: str) -> None:
+    """Count the user's own moves separately: only those can lead to a suggestion."""
+    moves = model.extra.setdefault("moves", {})
+    entry = moves.setdefault(folder_key(label), {"label": label, "count": 0, "features": {}})
+    entry["label"] = label
+    entry["count"] = int(entry.get("count", 0)) + 1
+    counts = entry.setdefault("features", {})
+    for feat in set(feats):
+        counts[feat] = int(counts.get(feat, 0)) + 1
+
+
+def _asked_recently(model: Model, key: str) -> bool:
+    now = datetime.now(timezone.utc)
+    for item in (model.extra.get("pending") or {}).values():
+        if key in item.get("keys", []):
+            try:
+                asked = datetime.fromisoformat(str(item.get("time")))
+            except ValueError:
+                return True
+            if (now - asked).total_seconds() < PENDING_HOURS * 3600:
+                return True
+    return False
+
+
+def _already_routed_there(dest: Path, label: str, config: dict) -> bool:
+    try:
+        routing = sorter.evaluate_routing(dest.name, config, file_path=dest)
+    except Exception:
+        return False
+    return folder_key(str(routing.get("destination") or "")) == folder_key(label)
+
+
+def _suggestion_for(model: Model, feats: list[str], label: str, dest: Path, config: dict) -> dict | None:
+    key = folder_key(label)
+    moved = (model.extra.get("moves") or {}).get(key) or {}
+    if int(moved.get("count", 0)) < SUGGEST_AFTER:
+        return None
+    declined = set(model.extra.get("declined") or [])
+    here = (model.folders.get(key) or {}).get("features", {})
+    best: dict[str, tuple[int, str]] = {}
+    for feat in dict.fromkeys(feats):
+        kind = feat[:2]
+        if kind not in ("w:", "s:"):
+            continue
+        n = int((moved.get("features") or {}).get(feat, 0))
+        if n < SUGGEST_AFTER or f"{feat}|{key}" in declined or _asked_recently(model, f"{feat}|{key}"):
+            continue
+        total = sum(int(f.get("features", {}).get(feat, 0)) for f in model.folders.values())
+        if not total or int(here.get(feat, 0)) / total < SUGGEST_SHARE:
+            continue
+        if kind not in best or n > best[kind][0]:
+            best[kind] = (n, feat[2:])
+    if not best:
+        return None
+    if _already_routed_there(dest, label, config):
+        return None  # a rule already sends files like this there
+
+    word = best["w:"][1] if "w:" in best else None
+    site = best["s:"][1] if "s:" in best else None
+    extension = None
+    suffix = dest.suffix.lower()
+    if word and not site and suffix and int((moved.get("features") or {}).get(f"x:{suffix}", 0)) >= SUGGEST_AFTER:
+        extension = suffix  # e.g. only PDFs, as every file moved there was one
+    keys = ([f"w:{word}|{key}"] if word else []) + ([f"s:{site}|{key}"] if site else [])
+    suggestion = {
+        "id": uuid.uuid4().hex[:10],
+        "time": _now(),
+        "folder": label,
+        "word": word,
+        "site": site,
+        "extension": extension,
+        "example": dest.name,
+        "count": max(n for n, _ in best.values()),
+        "keys": keys,
+    }
+    pending = model.extra.setdefault("pending", {})
+    pending[suggestion["id"]] = suggestion
+    for old in sorted(pending, key=lambda i: str(pending[i].get("time", "")))[:-MAX_PENDING]:
+        pending.pop(old, None)
+    return suggestion
+
+
+def describe_suggestion(suggestion: dict) -> tuple[str, str]:
+    """("Put files like this in Banking?", "“statement” files from yourbank.com").
+
+    Short on purpose: a ribbon line holds about 48 characters.
+    """
+    title = f"Put files like this in {suggestion.get('folder')}?"
+    word, site, ext = suggestion.get("word"), suggestion.get("site"), suggestion.get("extension")
+    if word and site:
+        message = f"“{word}” files from {site}"
+    elif site:
+        message = f"Files downloaded from {site}"
+    else:
+        message = f"Files with “{word}” in the name"
+        if ext:
+            message = f"{ext.lstrip('.').upper()} files with “{word}” in the name"
+    return title, message
+
+
+def pending_suggestion(suggestion_id: str) -> dict | None:
+    with _LOCK:
+        return dict((load_model().extra.get("pending") or {}).get(suggestion_id) or {}) or None
+
+
+def suggestion_rule(suggestion: dict) -> dict[str, Any]:
+    """The keyword rule a suggestion adds."""
+    rule: dict[str, Any] = {
+        "name": f"{suggestion['folder']} (learned)",
+        "folder": suggestion["folder"],
+        "match": [suggestion["word"]] if suggestion.get("word") else [],
+        "extensions": [suggestion["extension"]] if suggestion.get("extension") else [],
+        "enabled": True,
+        "origin": "learned",
+    }
+    if suggestion.get("site"):
+        rule["sites"] = [suggestion["site"]]
+    return rule
+
+
+def accept_suggestion(suggestion_id: str, config_path: Path | str | None = None) -> dict | None:
+    """Yes: add the suggested rule (first in the list, so it wins) and save the settings."""
+    import config_manager
+
+    with _LOCK:
+        model = load_model()
+        suggestion = (model.extra.get("pending") or {}).pop(suggestion_id, None)
+        if not suggestion:
+            return None
+        save_model(model)
+    rule = suggestion_rule(suggestion)
+    config = config_manager.load_sorter_config(config_path)
+    rules = list(config.get("keyword_rules", []))
+    for existing in rules:
+        same_target = (existing.get("origin") == "learned" and existing.get("folder") == rule["folder"]
+                       and existing.get("sites", []) == rule.get("sites", [])
+                       and existing.get("extensions", []) == rule["extensions"]
+                       and bool(existing.get("match")) == bool(rule["match"]))
+        if same_target:
+            existing["match"] = list(dict.fromkeys(list(existing.get("match", [])) + rule["match"]))
+            existing["enabled"] = True
+            rule = existing
+            break
+    else:
+        rules.insert(0, rule)
+    config["keyword_rules"] = rules
+    config_manager.save_sorter_config(config, config_path)
+    _append_log({"time": _now(), "kind": "rule_added", "folder": rule["folder"],
+                 "match": rule.get("match", []), "sites": rule.get("sites", [])})
+    return rule
+
+
+def decline_suggestion(suggestion_id: str) -> bool:
+    """No: never suggest this word or website for this folder again."""
+    with _LOCK:
+        model = load_model()
+        suggestion = (model.extra.get("pending") or {}).pop(suggestion_id, None)
+        if not suggestion:
+            return False
+        declined = list(model.extra.get("declined") or [])
+        declined.extend(k for k in suggestion.get("keys", []) if k not in declined)
+        model.extra["declined"] = declined
+        save_model(model)
+        _append_log({"time": _now(), "kind": "rule_declined", "folder": suggestion.get("folder"),
+                     "keys": suggestion.get("keys", [])})
+    return True
 
 
 def observe_sorted(dest: Path, root: Path, config: dict) -> dict | None:
@@ -445,6 +681,7 @@ def report() -> dict:
             if feat.startswith("s:"):
                 sites[feat[2:]] += int(count)
     return {
+        "rules_added": sum(1 for r in log if r.get("kind") == "rule_added"),
         "your_moves": sum(1 for r in log if r.get("kind") == "your_move"),
         "judged": len(judged),
         "first_guess_right": first,

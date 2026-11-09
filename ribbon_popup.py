@@ -1806,6 +1806,80 @@ class BatchRibbonPopup(SummaryRibbonPopup):
         super().close()
 
 
+class SuggestionRibbonPopup(SummaryRibbonPopup):
+    """Asks before learning adds a rule: "Put files like this in Banking?" Yes / No.
+
+    Yes adds the rule (it then shows on the Rules page); No means it won't ask
+    about that word or website for that folder again. Closing it, or letting it
+    time out, answers nothing.
+    """
+
+    TIMEOUT_MS = 20000
+
+    def __init__(self, suggestion_id: str, enable_animation: bool = True) -> None:
+        import learning
+
+        self.suggestion_id = suggestion_id
+        self.suggestion = learning.pending_suggestion(suggestion_id) or {}
+        title, message = learning.describe_suggestion(self.suggestion) if self.suggestion else (
+            "Nothing to ask", "This suggestion was already answered.")
+        super().__init__(
+            title=title,
+            message=message,
+            accent=ACTION_COLOR,
+            timeout_ms=self.TIMEOUT_MS if self.suggestion else 2000,
+            enable_animation=enable_animation,
+        )
+        self.action_labels: list[tk.Label] = []
+        if not self.suggestion:
+            return
+        for text, handler in (("No", self.no), ("Yes", self.yes)):
+            label = tk.Label(
+                self.top_row, text=text, font=(FONT_FAMILY, 9, "bold"),
+                fg=ACTION_COLOR, bg=BG_COLOR, cursor="hand2", padx=int(6 * self.scale),
+            )
+            label.pack(side="right")
+            label.bind("<Button-1>", lambda _e, h=handler: (h(), "break")[1])
+            label.bind("<Enter>", self.on_enter)
+            label.bind("<Leave>", self.on_leave)
+            self.action_labels.append(label)
+
+    def _set_hover_state(self, hovered: bool) -> None:
+        super()._set_hover_state(hovered)
+        bg = HOVER_BG if hovered else BG_COLOR
+        for label in getattr(self, "action_labels", []):
+            label.config(bg=bg)
+
+    def yes(self) -> None:
+        import learning
+
+        try:
+            rule = learning.accept_suggestion(self.suggestion_id)
+        except Exception as exc:
+            logging.warning("Could not add the learned rule: %s", exc)
+            rule = None
+        self.close()
+        if rule:
+            notify_summary(
+                "Rule added",
+                f"New files like this go to {rule['folder']}. Change it on the Rules page.",
+            )
+
+    def no(self) -> None:
+        import learning
+
+        try:
+            learning.decline_suggestion(self.suggestion_id)
+        except Exception as exc:
+            logging.debug("Could not record the declined suggestion: %s", exc)
+        self.close()
+
+
+def notify_suggestion(suggestion_id: str) -> None:
+    """Ask the user whether to add a rule learning suggested."""
+    _spawn(_ribbon_command("--suggest", str(suggestion_id)))
+
+
 def notify_summary(
     title: str,
     message: str,
@@ -1858,6 +1932,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--planned", type=str, default="", help="Planned destination path when held.")
     parser.add_argument("--ribbon-summary", "--summary", dest="summary", action="store_true", help="Display summary toast.")
     parser.add_argument("--batch", action="store_true", help="Show the ribbon that counts a big batch of files.")
+    parser.add_argument("--suggest", type=str, default="", help="Ask whether to add a learned rule (its id).")
     parser.add_argument("--title", type=str, default="Download Sorter", help="Summary notification title.")
     parser.add_argument("--message", type=str, default="", help="Summary notification message.")
     parser.add_argument("--accent", type=str, default="#69E6AD", help="Accent hex color.")
@@ -1867,7 +1942,9 @@ def main(argv: list[str] | None = None) -> int:
     enable_anim = not args.no_anim
 
     try:
-        if args.batch:
+        if args.suggest:
+            popup = SuggestionRibbonPopup(args.suggest, enable_animation=enable_anim)
+        elif args.batch:
             popup = BatchRibbonPopup(enable_animation=enable_anim)
         elif args.summary:
             popup = SummaryRibbonPopup(

@@ -48,11 +48,29 @@ from PySide6.QtWidgets import QApplication, QPushButton, QLabel
 
 import about
 import config_manager
-from onboarding import HomeDashboardWidget, PersonaCard, SettingsWidget, WelcomeWizardDialog
+import folder_scan
+from onboarding import HomeDashboardWidget, SettingsWidget, WelcomeWizardDialog
 import rules_manager
 from rules_manager import MachineRemodelWidget, RulesManagerDialog
 import sorter
 from suite_theme import ACCENTS, COLORS, RADII, TYPE
+
+
+FAKE_SCAN = {
+    "root": "C:/Users/me/Downloads", "files_scanned": 9, "maker_files": 0, "empty": False,
+    "examples": [("Invoice_1.pdf", "Invoices")],
+    "folders": [
+        {"name": "Invoices", "files": 4, "kind": "custom", "checked": True,
+         "summary": "Files with “invoice” in the name (PDF)",
+         "rule": {"name": "Invoices", "folder": "Invoices", "match": ["invoice", "invoices"],
+                  "extensions": [".pdf"], "enabled": True, "origin": "scan"}},
+        {"name": "Music", "files": 3, "kind": "category", "category": "Audio", "checked": True,
+         "summary": "Use this folder for audio instead of “Audio”"},
+        {"name": "Odds and ends", "files": 2, "kind": "custom", "checked": False,
+         "summary": "No pattern yet. Move files here and Download Sorter will learn it."},
+    ],
+}
+EMPTY_SCAN = {"root": "", "files_scanned": 0, "maker_files": 0, "empty": True, "examples": [], "folders": []}
 
 
 @pytest.fixture(scope="session")
@@ -148,63 +166,33 @@ class TestWelcomeWizardNavigationTransitions:
             dlg.deleteLater()
             qapp.processEvents()
 
-    def test_persona_card_selection_permutations_and_styling(self, qapp):
-        """Stress-test persona card selection toggling across all 4 personas in multiple permutations."""
-        cfg = copy.deepcopy(sorter.DEFAULT_CONFIG)
-        dlg = WelcomeWizardDialog(config=cfg)
+    def test_step1_offers_your_folders_then_categories(self, qapp, monkeypatch):
+        """Step 1 lists the folders found in Downloads; ones without a pattern can't be ticked."""
+        monkeypatch.setattr(folder_scan, "scan_downloads", lambda *_a, **_k: FAKE_SCAN)
+        dlg = WelcomeWizardDialog(config=copy.deepcopy(sorter.DEFAULT_CONFIG))
         try:
             dlg.show()
             qapp.processEvents()
-
-            assert len(dlg._persona_cards) == 4, "Must display exactly 4 persona cards"
-            personas = ["everyday_home", "academic_student", "office_admin", "maker_3d"]
-            for pid in personas:
-                assert pid in dlg._persona_cards, f"Missing persona card for {pid}"
-
-            mint_accent = ACCENTS["downloadSorter"].lower()
-
-            # Permutation cycle
-            cycle = [
-                "maker_3d",
-                "academic_student",
-                "everyday_home",
-                "office_admin",
-                "maker_3d",
-                "office_admin",
-                "academic_student",
-                "everyday_home",
-            ]
-
-            for target_pid in cycle:
-                # Trigger selection
-                card = dlg._persona_cards[target_pid]
-                dlg._on_persona_selected(target_pid)
-                qapp.processEvents()
-
-                assert dlg._selected_persona == target_pid
-                assert card._selected is True
-                assert card._indicator.text() == "●"
-                assert mint_accent in card.styleSheet().lower()
-                assert mint_accent in card._indicator.styleSheet().lower()
-                assert COLORS["successSubtle"].lower() in card._icon_lbl.styleSheet().lower()
-
-                # Verify all other 3 cards are mutually excluded
-                for other_pid, other_card in dlg._persona_cards.items():
-                    if other_pid != target_pid:
-                        assert other_card._selected is False, (
-                            f"Card {other_pid} must be unselected when {target_pid} is active"
-                        )
-                        assert other_card._indicator.text() == "○"
-                        assert mint_accent not in other_card.styleSheet().lower()
-                        assert mint_accent not in other_card._indicator.styleSheet().lower()
-
-            # Boundary Stress: Unknown persona selection does not crash
-            dlg._on_persona_selected("unknown_persona_invalid")
+            checks = dlg._folder_checks
+            assert list(checks) == ["Invoices", "Music", "Odds and ends"]
+            assert checks["Invoices"].isChecked() and checks["Music"].isChecked()
+            assert not checks["Odds and ends"].isEnabled()
+            assert len(dlg._category_checks) == len(sorter.DEFAULT_CONFIG["extension_rules"])
+            assert all(c.isChecked() for c in dlg._category_checks.values())
+            assert dlg._starter_checks == {}, "starter folders only when Downloads has none"
+            assert "found 2 folders" in dlg._mascot_speech_lbl.text()
+        finally:
+            dlg.close()
+            dlg.deleteLater()
             qapp.processEvents()
-            assert dlg._selected_persona == "unknown_persona_invalid"
-            for p_card in dlg._persona_cards.values():
-                assert p_card._selected is False
-                assert p_card._indicator.text() == "○"
+
+    def test_step1_with_an_empty_downloads_offers_categories_and_starters(self, qapp, monkeypatch):
+        monkeypatch.setattr(folder_scan, "scan_downloads", lambda *_a, **_k: EMPTY_SCAN)
+        dlg = WelcomeWizardDialog(config=copy.deepcopy(sorter.DEFAULT_CONFIG))
+        try:
+            assert dlg._folder_checks == {}
+            assert set(dlg._starter_checks) == {key for key, _l, _r in folder_scan.STARTER_FOLDERS}
+            assert not any(c.isChecked() for c in dlg._starter_checks.values())
         finally:
             dlg.close()
             dlg.deleteLater()
@@ -325,13 +313,12 @@ class TestWizardCheckboxesAndPersistence:
         cfg_file.write_text(json.dumps(pre_existing_config, indent=2), encoding="utf-8")
 
         # Launch wizard with this configuration
+        monkeypatch.setattr(folder_scan, "scan_downloads", lambda *_a, **_k: FAKE_SCAN)
         dlg = WelcomeWizardDialog(config=pre_existing_config)
         try:
             dlg.show()
             qapp.processEvents()
 
-            # Select 'office_admin'
-            dlg._on_persona_selected("office_admin")
             dlg._on_next_clicked()
             dlg._on_next_clicked()
             qapp.processEvents()
@@ -345,7 +332,7 @@ class TestWizardCheckboxesAndPersistence:
             saved = json.loads(cfg_file.read_text(encoding="utf-8"))
 
             # Milestone 3 core requirements
-            assert saved.get("user_persona") == "office_admin", "Persona must update to 'office_admin'"
+            assert saved.get("user_persona") == "custom", "set up from the user's own folders"
             assert saved.get("onboarding_completed") is True, "onboarding_completed must be True"
 
             # Strict preservation of pre-existing user data
@@ -365,8 +352,8 @@ class TestWizardCheckboxesAndPersistence:
                 "PreExistingTaxRule was dropped or corrupted during persona rule application"
             )
 
-            # Injected office_admin rules
-            assert len(saved.get("keyword_rules", [])) > 1
+            # The ticked folder from the scan became a rule
+            assert "Invoices" in rule_names
         finally:
             dlg.close()
             dlg.deleteLater()

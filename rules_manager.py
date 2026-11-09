@@ -327,6 +327,12 @@ class RuleEditDialog(QDialog):
         if self.rule_type == "keyword":
             raw_kws = [k.strip().lower() for k in self._keywords_input.text().split(",") if k.strip()]
             rule["match"] = raw_kws
+            # Keep the website a learned rule also checks; once edited by hand
+            # it is the user's own rule.
+            if self.original_rule.get("sites"):
+                rule["sites"] = list(self.original_rule["sites"])
+            if self.original_rule.get("origin"):
+                rule["origin"] = "user"
         return rule
 
 
@@ -478,6 +484,10 @@ class RuleTableWidget(QWidget):
                 # Col 3: Keywords
                 matches = rule.get("match", [])
                 match_str = ", ".join(matches) if isinstance(matches, list) else str(matches)
+                sites = rule.get("sites") or []
+                if sites:
+                    site_str = "downloaded from " + ", ".join(str(x) for x in sites)
+                    match_str = f"{match_str} ({site_str})" if match_str else site_str
                 kw_item = QTableWidgetItem(match_str)
                 kw_item.setForeground(QColor(fg))
                 kw_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
@@ -1752,7 +1762,7 @@ class RulesManagerDialog(QDialog):
     def set_active_persona(self, persona_id: str) -> None:
         """Show maker-only controls for the maker profile and update the try-it examples."""
         self._current_persona = persona_id
-        is_maker = (persona_id == "maker_3d")
+        is_maker = persona_id == "maker_3d" or bool(getattr(self, "_config", {}).get("show_maker_features"))
         if hasattr(self, "_active_project_card"):
             self._active_project_card.setVisible(is_maker)
         if hasattr(self, "_sandbox") and hasattr(self._sandbox, "set_persona"):

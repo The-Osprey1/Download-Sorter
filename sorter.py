@@ -66,8 +66,9 @@ V2_DEFAULTS: dict = {
         "slicers": ["bambu-studio.exe", "orca-slicer.exe", "prusa-slicer.exe"],
     },
     "mirror": {"enabled": False},
-    # Learning from how the user organizes files (stage 1 only watches and logs).
-    "learning": {"enabled": False},
+    # Learning from how the user organizes files: it keeps score of its guesses and,
+    # after 3 similar moves, asks before adding a rule. It never moves files itself.
+    "learning": {"enabled": True, "suggest": True},
     # Once a day, ask GitHub which version is newest (see update_check.py).
     "update_check": {"enabled": True},
     "remodel": {
@@ -232,6 +233,12 @@ def apply_v2_defaults(config: dict) -> dict:
     if not isinstance(config, dict):
         return config
     legacy = config.get("schema_version") is None
+    # Learning used to be an off-by-default preview. Settings saved before it
+    # could suggest rules (no "suggest" key yet) get it switched on once; after
+    # that the user's choice in Settings is kept.
+    learning_block = config.get("learning")
+    if isinstance(learning_block, dict) and "suggest" not in learning_block:
+        learning_block["enabled"] = True
     for key, default in V2_DEFAULTS.items():
         if key not in config:
             config[key] = copy.deepcopy(default)
@@ -1202,6 +1209,22 @@ def evaluate_routing(
         rule_trace.append({"tier": "active_project", "status": "disabled_or_none"})
 
     # --- Tier 2: Keyword Rules (R1) ---
+    # A rule can also require the website a file came from ("sites"), read
+    # once per file from the note Windows keeps beside a download.
+    file_site: list[str | None] = []
+
+    def site_of_file() -> str | None:
+        if not file_site:
+            site = None
+            if file_path is not None:
+                try:
+                    import learning
+                    site = learning.source_site(Path(file_path))
+                except Exception:
+                    site = None
+            file_site.append(site)
+        return file_site[0]
+
     for rule_index, rule in enumerate(config.get("keyword_rules", [])):
         rule_name = rule.get("name") or rule.get("folder", "Keyword Rule")
         if not rule.get("enabled", True):
@@ -1217,11 +1240,24 @@ def evaluate_routing(
             rule_trace.append({"tier": "keyword", "rule": rule_name, "status": "extension_mismatch"})
             continue
 
+        sites = [str(item).lower() for item in rule.get("sites", []) if item]
+        if sites:
+            site = site_of_file()
+            if not site or not any(site == wanted or site.endswith("." + wanted) for wanted in sites):
+                rule_trace.append({"tier": "keyword", "rule": rule_name, "status": "site_mismatch"})
+                continue
+
         matched_token: str | None = None
         for token in rule.get("match", []):
             if matches_keyword(filename, token):
                 matched_token = token
                 break
+        trigger = f"keyword '{matched_token}'" if matched_token else ""
+        if sites and matched_token:
+            trigger += f" from {site_of_file()}"
+        elif sites and not rule.get("match"):
+            matched_token = site_of_file()
+            trigger = f"downloaded from {matched_token}"
 
         if matched_token:
             dest_folder = rule.get("folder", "")
@@ -1236,7 +1272,7 @@ def evaluate_routing(
                 "destination": dest_folder,
                 "match_type": "keyword",
                 "winning_rule": rule_name,
-                "matched_trigger": f"keyword '{matched_token}'",
+                "matched_trigger": trigger,
                 "is_active_project": False,
                 "sniffer_details": None,
                 "rule_trace": rule_trace,

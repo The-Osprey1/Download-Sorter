@@ -63,6 +63,7 @@ REQUIRED_RELEASE_FILES = [
     "suite_theme.py",
     "onboarding.py",
     "learning.py",
+    "folder_scan.py",
     "ui_icons.py",
     "ui_motion.py",
     "ui_style.py",

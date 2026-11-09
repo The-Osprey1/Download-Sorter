@@ -31,6 +31,7 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
 ## What happens next
 
+- **Setup starts from your own folders.** The first welcome step shows the folders already in your Downloads folder (like `Invoices` or `IME 4030`) and offers to keep filing matching files into them. If there are none yet, you tick the kinds of files you want sorted.
 - **Nothing moves until you finish the welcome steps.** If you chose to sort the files already in Downloads, that first sort counts as one batch, so a single **Undo last sort** puts everything back.
 - **New downloads are filed a few seconds after they finish.** Half-finished downloads are left alone.
 - **The Home page shows each file as it's filed**, with where it went and an Undo button:
@@ -55,6 +56,7 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
   You can change where things go on the **Rules** page, and test a file name with **Try a filename** before saving.
 - **Files you move yourself stay where you put them.** If you drag a sorted file into your own folder inside Downloads, Download Sorter leaves it there.
+- **It learns from your moves, and asks first.** After you've moved 3 similar files into one folder, a ribbon asks “Put files like this in Banking?”. **Yes** adds a rule you can see and change on the Rules page; **No** means it won't ask again. It never moves a file on a guess. You can turn learning off in Settings.
 
 ## How Download Sorter decides where a file goes
 
@@ -72,7 +74,7 @@ flowchart TD
     subgraph R ["Pick the folder: first match wins"]
         direction TB
         R1{"1. Active project on,<br/>and a CAD / 3D file?"} -- "Yes" --> D1["The project's folder"]
-        R1 -- "No" --> R2{"2. Name matches a word rule?<br/>e.g. 'invoice', 'W-2', a course code"}
+        R1 -- "No" --> R2{"2. Name matches a word rule?<br/>e.g. 'invoice', a course code,<br/>or a learned rule like 'statement'<br/>from yourbank.com"}
         R2 -- "Yes" --> D2["That rule's folder,<br/>e.g. Documents\Invoices & Receipts"]
         R2 -- "No" --> R3{"3. G-code? Look inside:<br/>Haas CNC or 3D printer"}
         R3 -- "Yes" --> D3["3D Models"]
@@ -100,7 +102,7 @@ flowchart TD
 2. **Skip what it shouldn't touch:** files you moved yourself, files you just undid, folders with a `.download-sorter-keep` file, OneDrive files that aren't on your PC yet, and temporary files like `~$report.docx`.
 3. **Pick the folder.** The rules are checked in order and the first match wins:
    - an **active project**, for CAD and 3D files, when you've turned one on;
-   - **word rules**, which look for whole words in the file name, so "statement" alone doesn't send your personal statement to Invoices;
+   - **word rules**, which look for whole words in the file name, so "statement" alone doesn't send your personal statement to Invoices. They come from your folders at setup, from ready-made starter rules, or from rules you said **Yes** to when it learned from your moves. A rule can also require the website a file came from;
    - the **G-code check**, which looks inside `.nc`/`.gcode` files to tell a Haas CNC program from a 3D printer file;
    - **MakerWorld 3MF files**, filed by designer and model name;
    - the **file type**: 121 extensions mapped to the main folders;
