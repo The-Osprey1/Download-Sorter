@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 * **One ribbon for big batches (`ribbon_popup.py`, `watch.py`, `sort_undo.py`)**: when lots of files land at once (a zip unpacking, a browser's "download all"), the first 3 still get their own ribbon. After that, one ribbon counts the rest while they arrive ("Filed 37 files · Images 25 · Documents 12") and closes a few seconds after the last one. Its **Undo** puts the whole batch back and **Open** shows the folder. `--undo --batch` can now be given several times.
 
+### Removed
+* **Old one-off scripts**: `restore_from_log.py` (rebuilt moves from logs written before undo history existed, before 2.0) and `clean_test_history.py` (removed test records from history, no longer needed since tests use their own folders), plus `sorter.record_history`, which only the first one used.
+* **Repeated tests**: the `--version` check for every script ran in four test files, starting about 20 processes each time. It now runs once, in `tests/test_attribution.py`, with the strictest check of the four. The stray `test_ribbon_popup.py` moved into `tests/`.
+
 ### Fixed
 * **Ribbons didn't appear in the installed app (`ribbon_popup.py`)**: since 2.1.0 the installed app started each "File sorted" and 3MF hold ribbon in a way it didn't understand ("Unknown command"), so they never showed. They now start through the app's own `--ribbon` command. Summary ribbons were not affected.
 * **"Couldn't download the update" (`updater.py`)**: GitHub's download server sometimes answers "504 Gateway Timeout" or drops the connection, and the in-app update gave up on the first try. It now tries up to 3 times, a few seconds apart, says what went wrong (for example "GitHub answered with error 504") if it still can't, and reuses an installer it already downloaded and checked instead of downloading it again.

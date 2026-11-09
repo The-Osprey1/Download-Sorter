@@ -28,8 +28,6 @@ ALL_SCRIPTS = [
     "remodel.py",
     "hold_manager.py",
     "batch_handoff.py",
-    "clean_test_history.py",
-    "restore_from_log.py",
     "sort_once.py",
     "sort_undo.py",
     "status.py",
@@ -49,8 +47,6 @@ M1_OWNED_SCRIPTS = [
     "remodel.py",
     "hold_manager.py",
     "batch_handoff.py",
-    "clean_test_history.py",
-    "restore_from_log.py",
 ]
 
 
@@ -81,33 +77,9 @@ def test_oracle_shell_scripts_attribution():
 # 2. ALL SCRIPTS UNDER --version
 # =============================================================================
 
-@pytest.mark.parametrize("script_name", ALL_SCRIPTS)
-def test_all_scripts_version_flag_exits_zero(script_name):
-    script_path = ROOT / script_name
-    assert script_path.exists(), f"Script {script_name} does not exist"
-    res = subprocess.run(
-        [sys.executable, str(script_path), "--version"],
-        capture_output=True, text=True, timeout=15, cwd=str(ROOT),
-    )
-    assert res.returncode == 0, f"{script_name} --version failed with code {res.returncode}: {res.stderr}"
-    assert res.stdout.strip() == about.version_string()
-    assert "Made by Devyn Fidel (2026)" in res.stdout
-
-
 # =============================================================================
 # 3. M1 SCRIPTS UNDER -V (CHALLENGE / STRESS POINT)
 # =============================================================================
-
-@pytest.mark.parametrize("script_name", ["hold_manager.py", "batch_handoff.py", "clean_test_history.py", "restore_from_log.py"])
-def test_helper_scripts_v_flag_exits_zero(script_name):
-    script_path = ROOT / script_name
-    res = subprocess.run(
-        [sys.executable, str(script_path), "-V"],
-        capture_output=True, text=True, timeout=15, cwd=str(ROOT),
-    )
-    assert res.returncode == 0, f"{script_name} -V failed: {res.stderr}"
-    assert res.stdout.strip() == about.version_string()
-
 
 def test_remodel_v_flag_adversarial_vulnerability():
     """Documents the failure of remodel.py under -V flag.
