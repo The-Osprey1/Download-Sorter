@@ -23,6 +23,8 @@ os.environ.setdefault("DOWNLOAD_SORTER_REDUCED_MOTION", "1")
 # Never ask GitHub for the latest version during tests (tests/test_update_check.py
 # turns it back on with a fake network).
 os.environ.setdefault("DOWNLOAD_SORTER_NO_UPDATE_CHECK", "1")
+# The welcome steps ask before the first big sort; tests answer "Sort them".
+os.environ.setdefault("DOWNLOAD_SORTER_NO_DIALOGS", "1")
 
 
 # pystray's Windows backend registers a window class named after id(icon) when

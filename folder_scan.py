@@ -57,8 +57,27 @@ MAKER_EXTENSIONS = frozenset({
     ".gcode", ".bgcode", ".gco", ".nc", ".tap", ".ngc",
 })
 
+# Course websites: files downloaded from them are school files whatever their
+# name ("week3.pdf"). Matched on the site name Windows records for a download.
+SCHOOL_SITES = [
+    "instructure.com",        # Canvas
+    "blackboard.com",
+    "brightspace.com", "d2l.com",
+    "classroom.google.com",
+    "gradescope.com",
+    "piazza.com",
+    "schoology.com",
+    "moodlecloud.com",
+]
+SCHOOL_SITES_RULE: dict[str, Any] = {
+    "name": "School websites", "folder": "Documents\\School", "match": [], "sites": list(SCHOOL_SITES),
+    "extensions": [".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".txt", ".zip", ".ipynb", ".py"],
+    "enabled": True,
+}
+
 # Ready-made folders offered when Downloads has no folders yet: (key, label, rule).
 STARTER_FOLDERS: list[tuple[str, str, dict[str, Any]]] = [
+    ("school_sites", "Files from Canvas, Blackboard, Brightspace, Google Classroom and Gradescope", SCHOOL_SITES_RULE),
     ("receipts", "Invoices and receipts", {
         "name": "Invoices & Receipts", "folder": "Documents\\Invoices & Receipts",
         "match": ["invoice", "receipt", "billing", "billing_statement", "payment_confirmation"],

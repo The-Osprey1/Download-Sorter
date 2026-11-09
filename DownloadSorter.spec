@@ -49,6 +49,7 @@ hidden_imports = [
     'remodel',
     'safe_ops',
     'defusedxml',
+    'pypdf',
     'onboarding',
     'learning',
     'folder_scan',

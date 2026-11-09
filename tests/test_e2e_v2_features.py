@@ -578,7 +578,7 @@ class Test3MFGracePeriodHoldTier1AndTier2(unittest.TestCase):
         hold_manager.hold_file(f2, self.config, planned_dest=self.downloads / "d2.3mf")
 
         self.assertEqual(t._held_count(), 2)
-        self.assertIn("2 3MF(s) held in Downloads", t.tooltip())
+        self.assertIn("2 3MF files held in Downloads", t.tooltip())
 
         # make_icon badge check
         icon_normal = tray.make_icon(paused=False)
@@ -907,7 +907,7 @@ class TestCrossFeatureCombinationsTier3(unittest.TestCase):
         """F1+F3+F4: System tray accurately updates tooltip and menus across hold and filing."""
         import tray
         t = tray.SorterTray()
-        self.assertIn(f"{tray.moves_today()} file(s) filed today", t.tooltip())
+        self.assertIn(f"{tray._count_text(tray.moves_today(), 'file')} filed today", t.tooltip())
 
         # Register held file
         f_hold = self.test_root / "Held.3mf"
@@ -915,7 +915,7 @@ class TestCrossFeatureCombinationsTier3(unittest.TestCase):
         config = sorter.get_default_config()
         hold_manager.hold_file(f_hold, config, planned_dest=self.test_root / "out.3mf")
 
-        self.assertIn("1 3MF(s) held in Downloads", t.tooltip())
+        self.assertIn("1 3MF file held in Downloads", t.tooltip())
 
 
 # ==============================================================================

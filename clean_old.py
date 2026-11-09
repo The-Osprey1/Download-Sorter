@@ -73,6 +73,49 @@ def find_old_files(target_dir: Path, min_age_days: float) -> list[tuple[Path, fl
     return candidates
 
 
+CLEANUP_STATE = "cleanup.json"
+CLEANUP_EVERY_SECONDS = 24 * 3600
+
+
+def auto_cleanup(config: dict, now: float | None = None) -> dict | None:
+    """Once a day, when turned on in Settings: old installers and zips to the Recycle Bin.
+
+    Returns {"count", "bytes"} when it ran (count may be 0), None when it
+    didn't (off, not Windows, or already ran in the last day). Files go to the
+    Recycle Bin, never straight to deletion, so they can be restored there.
+    """
+    import json
+    import sorter
+
+    block = config.get("cleanup") if isinstance(config, dict) else None
+    if not isinstance(block, dict) or not block.get("enabled") or sys.platform != "win32":
+        return None
+    now = time.time() if now is None else now
+    state_file = Path(sorter.LOG_DIR) / CLEANUP_STATE
+    try:
+        last = float(json.loads(state_file.read_text(encoding="utf-8")).get("last_run", 0))
+    except (OSError, ValueError, AttributeError):
+        last = 0.0
+    if 0 <= now - last < CLEANUP_EVERY_SECONDS:
+        return None
+
+    days = max(1.0, float(block.get("days", 30) or 30))
+    downloads = watch_root(config)
+    count = total = 0
+    for name in block.get("folders") or ["Installers", "Archives"]:
+        for path, _age, size in find_old_files(folder_path(downloads, str(name)), days):
+            if send_to_recycle_bin(path):
+                count += 1
+                total += size
+                logging.info("Moved old file to the Recycle Bin: %s", path)
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps({"last_run": now, "count": count, "bytes": total}), encoding="utf-8")
+    except OSError:
+        pass
+    return {"count": count, "bytes": total}
+
+
 def format_size(bytes_val: int) -> str:
     if bytes_val < 1024 * 1024:
         return f"{round(bytes_val / 1024, 1)} KB"

@@ -69,6 +69,15 @@ V2_DEFAULTS: dict = {
     # Learning from how the user organizes files: it keeps score of its guesses and,
     # after 3 similar moves, asks before adding a rule. It never moves files itself.
     "learning": {"enabled": True, "suggest": True},
+    # Optional: move installers and zips nobody needed for a while to the
+    # Recycle Bin, once a day (clean_old.py). Off unless the user turns it on.
+    "cleanup": {"enabled": False, "days": 30, "folders": ["Installers", "Archives"]},
+    # Optional extras, all off unless the user turns them on in Settings:
+    # pictures into a folder per month, rule words found inside PDFs, and
+    # tidier file names (Undo always puts the old name back).
+    "photos": {"by_month": False},
+    "pdf_text": {"enabled": False, "max_mb": 10},
+    "rename": {"tidy": False, "add_date": False},
     # Once a day, ask GitHub which version is newest (see update_check.py).
     "update_check": {"enabled": True},
     "remodel": {
@@ -1060,6 +1069,96 @@ def matches_keyword(name: str, token: str) -> bool:
     return bool(re.search(pattern, name.lower()))
 
 
+# ---------------------------------------------------------------------------
+# Optional extras (Settings > Extra options), all off by default
+# ---------------------------------------------------------------------------
+
+MONTH_FOLDER = re.compile(r"^\d{4}-\d{2}$")
+_COPY_MARK = re.compile(r"(?:\s*-\s*copy)?(?:\s*\(\d{1,3}\))+$|\s*-\s*copy$", re.IGNORECASE)
+_DATE_IN_FRONT = re.compile(r"^\d{4}-\d{2}-\d{2}[ _-]")
+# Never renamed: other files point to these by name (CAD assemblies, code
+# imports, slicer projects, web pages), or the name is the program's own.
+NO_RENAME_EXTENSIONS = frozenset({
+    ".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs", ".f3d", ".f3z", ".sldprt",
+    ".sldasm", ".slddrw", ".ipt", ".iam", ".dwg", ".dxf", ".blend", ".gcode", ".bgcode",
+    ".gco", ".nc", ".tap", ".ngc", ".py", ".ipynb", ".js", ".ts", ".html", ".htm", ".css",
+    ".json", ".xml", ".yml", ".yaml", ".toml", ".c", ".cpp", ".h", ".hpp", ".java", ".cs",
+    ".go", ".rs", ".sh", ".bat", ".ps1", ".exe", ".msi", ".msix", ".appx", ".dll", ".torrent",
+})
+
+
+def _option(config: dict, block: str, key: str) -> bool:
+    value = config.get(block) if isinstance(config, dict) else None
+    return isinstance(value, dict) and bool(value.get(key))
+
+
+def photo_month(file_path: Path | None) -> str:
+    """"2024-11" from when a photo was taken (its EXIF date), else the file's date, else today."""
+    when: datetime | None = None
+    if file_path is not None:
+        try:
+            from PIL import Image
+            with Image.open(file_path) as image:
+                exif = image.getexif()
+                raw = exif.get_ifd(0x8769).get(36867) or exif.get(306)  # DateTimeOriginal, DateTime
+            if raw:
+                when = datetime.strptime(str(raw).strip()[:19], "%Y:%m:%d %H:%M:%S")
+        except Exception:
+            when = None
+        if when is None:
+            try:
+                when = datetime.fromtimestamp(Path(file_path).stat().st_mtime)
+            except OSError:
+                when = None
+    return (when or datetime.now()).strftime("%Y-%m")
+
+
+def pdf_head_text(file_path: Path, config: dict) -> str:
+    """The start of a PDF's first page, lowercased ('' when it can't be read).
+
+    Only the top of the first page is used: an invoice says "Invoice" there,
+    while a paper that mentions invoices somewhere in its text does not.
+    """
+    block = config.get("pdf_text") if isinstance(config, dict) else None
+    max_mb = float((block or {}).get("max_mb", 10) or 10)
+    try:
+        if Path(file_path).stat().st_size > max_mb * 1024 * 1024:
+            return ""
+        from pypdf import PdfReader
+        reader = PdfReader(str(file_path))
+        if reader.is_encrypted or not reader.pages:
+            return ""
+        text = reader.pages[0].extract_text() or ""
+    except Exception:
+        return ""
+    return " ".join(text.split())[:600].lower()
+
+
+def filed_name(path: Path, config: dict) -> str:
+    """The name a file is filed under: its own, unless tidy names or the date are turned on.
+
+    Tidy: "My_File (1).pdf" -> "My File.pdf". Date: "2026-11-09 My File.pdf",
+    using the day the download finished. Undo restores the original name.
+    """
+    name = path.name
+    tidy, add_date = _option(config, "rename", "tidy"), _option(config, "rename", "add_date")
+    if not (tidy or add_date) or path.suffix.lower() in NO_RENAME_EXTENSIONS:
+        return name
+    stem, suffix = path.stem, path.suffix
+    if tidy:
+        cleaned = _COPY_MARK.sub("", stem)
+        cleaned = re.sub(r"_+", " ", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .-")
+        stem = cleaned or stem
+    if add_date and not _DATE_IN_FRONT.match(stem):
+        try:
+            when = datetime.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            when = datetime.now()
+        stem = f"{when:%Y-%m-%d} {stem}"
+    return stem + suffix
+
+
 def evaluate_routing(
     filename: str,
     config: dict,
@@ -1221,6 +1320,14 @@ def evaluate_routing(
     # once per file from the note Windows keeps beside a download.
     file_site: list[str | None] = []
 
+    pdf_head: list[str] = []
+
+    def head_of_pdf() -> str:
+        if not pdf_head:
+            look = (file_path is not None and ext == ".pdf" and _option(config, "pdf_text", "enabled"))
+            pdf_head.append(pdf_head_text(Path(file_path), config) if look else "")
+        return pdf_head[0]
+
     def site_of_file() -> str | None:
         if not file_site:
             site = None
@@ -1261,6 +1368,12 @@ def evaluate_routing(
                 matched_token = token
                 break
         trigger = f"keyword '{matched_token}'" if matched_token else ""
+        if not matched_token and rule.get("match") and head_of_pdf():
+            for token in rule.get("match", []):
+                if matches_keyword(head_of_pdf(), token):
+                    matched_token = token
+                    trigger = f"the word '{token}' at the top of the PDF"
+                    break
         if sites and matched_token:
             trigger += f" from {site_of_file()}"
         elif sites and not rule.get("match"):
@@ -1405,6 +1518,8 @@ def evaluate_routing(
         )
         if ext in rule_exts:
             dest_folder = rule.get("folder", "")
+            if str(rule.get("name", "")).lower() == "images" and _option(config, "photos", "by_month"):
+                dest_folder = f"{dest_folder}\\{photo_month(Path(file_path) if file_path else None)}"
             rule_trace.append({
                 "tier": "extension",
                 "rule": rule_name,
@@ -1737,8 +1852,9 @@ def move_file(
         destination_dir = folder_path(downloads, routing["destination"])
 
     reason = routing["matched_trigger"]
-    primary_target = destination_dir / path.name
-    destination = unique_destination(destination_dir, path.name)
+    name = filed_name(path, config)
+    primary_target = destination_dir / name
+    destination = unique_destination(destination_dir, name)
 
     # Retention first: "Keep here" and the grace-period hold win over everything
     # else, including duplicate cleanup (a slicer may have the held copy open).

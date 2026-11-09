@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -543,10 +544,14 @@ class WelcomeWizardDialog(QDialog):
         cat_box.addLayout(grid)
         layout.addWidget(cat_card)
 
-        if not folders:
+        # Ready-made folders: all of them when Downloads has none of its own,
+        # otherwise just the one for course websites.
+        starters = folder_scan.STARTER_FOLDERS if not folders else [
+            s for s in folder_scan.STARTER_FOLDERS if s[0] == "school_sites"]
+        if starters:
             layout.addWidget(ui_style.label("Extra folders inside Documents (optional):", "muted"))
             starter_card, starter_box = ui_style.card(spacing=4)
-            for key, label, _rule in folder_scan.STARTER_FOLDERS:
+            for key, label, _rule in starters:
                 chk = QCheckBox(label)
                 chk.setChecked(False)
                 starter_box.addWidget(chk)
@@ -727,16 +732,50 @@ class WelcomeWizardDialog(QDialog):
             self._update_navigation()
 
     def _on_finish_clicked(self) -> None:
+        # Show what the first sort would do before doing it, so nobody is
+        # surprised by hundreds of files moving at once.
+        if hasattr(self, "_chk_sort_now") and self._chk_sort_now.isChecked() and sorter:
+            try:
+                plan = sorter.preview_existing(self._chosen_config(), limit=5000)
+            except Exception:
+                logging.debug("Could not preview the first sort", exc_info=True)
+                plan = []
+            if plan and not self._confirm_first_sort(plan):
+                self._chk_sort_now.setChecked(False)
         self.accept()
+
+    def _chosen_config(self) -> dict[str, Any]:
+        """The settings with the folders, categories and starters ticked in step 1."""
+        chosen = [n for n, c in self._folder_checks.items() if c.isEnabled() and c.isChecked()]
+        off = [n for n, c in self._category_checks.items() if not c.isChecked()]
+        starters = [k for k, c in self._starter_checks.items() if c.isChecked()]
+        return folder_scan.apply_scan(self._config, self._scan, chosen, off, starters)
+
+    def _confirm_first_sort(self, plan: list) -> bool:
+        """Ask before the first big sort. True = sort them now."""
+        if os.environ.get("DOWNLOAD_SORTER_NO_DIALOGS"):
+            return True  # automated tests
+        root = sorter.watch_root(self._config) if sorter else None
+        counts = first_sort_summary(plan, root)
+        total = len(plan)
+        lines = [f"{folder}: {n} file{'s' if n != 1 else ''}" for folder, n in counts[:8]]
+        if len(counts) > 8:
+            lines.append(f"…and {len(counts) - 8} more folders")
+        box = QMessageBox(self)
+        box.setWindowTitle("Sort the files already in Downloads?")
+        box.setText(f"Download Sorter would file {total} file{'s' if total != 1 else ''} already in "
+                    "your Downloads folder:")
+        box.setInformativeText("\n".join(lines) + "\n\nYou can put them all back with one Undo.")
+        sort_btn = box.addButton("Sort them", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return box.clickedButton() is sort_btn
 
     def accept(self) -> None:
         """Set up from the ticked folders, persist preferences and onboarding completion, then close."""
         try:
-            chosen = [n for n, c in self._folder_checks.items() if c.isEnabled() and c.isChecked()]
-            off = [n for n, c in self._category_checks.items() if not c.isChecked()]
-            starters = [k for k, c in self._starter_checks.items() if c.isChecked()]
             try:
-                self._config = folder_scan.apply_scan(self._config, self._scan, chosen, off, starters)
+                self._config = self._chosen_config()
             except Exception:
                 logging.exception("Could not apply the folder choices")
                 self._config["user_persona"] = "custom"
@@ -798,6 +837,34 @@ PERSONA_LABELS: list[tuple[str, str]] = [
     ("office_admin", "Office and work"),
     ("maker_3d", "3D printing, CAD and CNC"),
 ]
+
+
+def first_sort_summary(plan: list, root: Path | None) -> list[tuple[str, int]]:
+    """[("Images", 80), ("Documents", 40), ...]: where a sort would send files, most first."""
+    counts: dict[str, int] = {}
+    for _src, dest in plan:
+        dest = Path(dest)
+        try:
+            folder = str(dest.parent.relative_to(root)) if root else dest.parent.name
+        except ValueError:
+            folder = str(dest.parent)
+        counts[folder] = counts.get(folder, 0) + 1
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+
+def _storage_sense_days() -> int | None:
+    try:
+        return suite_data.storage_sense_downloads_days()
+    except Exception:
+        return None
+
+
+def _open_storage_sense_settings() -> None:
+    if sys.platform == "win32":
+        try:
+            os.startfile("ms-settings:storagepolicies")  # type: ignore[attr-defined]
+        except OSError:
+            logging.debug("Could not open Storage Sense settings", exc_info=True)
 
 
 def _friendly_time(raw: str) -> str:
@@ -1075,7 +1142,11 @@ class HomeDashboardWidget(QWidget):
         # The dot "breathes" while Downloads is being watched (or the sorter is starting).
         ui_motion.breathe(self._status_dot, (state == "running" or starting) and self.isVisible())
         self._btn_pause_resume.setText(btn_text)
-        self._btn_pause_resume.setIcon(ui_icons.icon(btn_icon))
+        # The most useful action is the green one: starting or resuming when
+        # sorting is off, otherwise sorting what's waiting.
+        sorting_stopped = not starting and state != "running"
+        ui_style.set_role(self._btn_pause_resume, "primary" if sorting_stopped else None, btn_icon)
+        ui_style.set_role(self._btn_sort_now, None if sorting_stopped else "primary", "sort")
         self._btn_pause_resume.setEnabled(not starting)
         self._last_state = "starting" if starting else state
 
@@ -1653,12 +1724,41 @@ class SettingsWidget(QWidget):
         self._chk_context = QCheckBox("Add “Sort with Download Sorter” to the folder right-click menu")
         self._chk_context.toggled.connect(self._on_context_menu_toggled)
         windows.addWidget(self._chk_context)
+        # Windows Storage Sense can delete old files in Downloads, sorted ones included.
+        self._storage_sense_lbl = ui_style.label("", "muted", wrap=True)
+        self._storage_sense_lbl.setStyleSheet(f"color: {COLORS['warning']};")
+        self._storage_sense_lbl.setVisible(False)
+        windows.addWidget(self._storage_sense_lbl)
+        self._btn_storage_sense = ui_style.button("Open Storage Sense settings")
+        self._btn_storage_sense.clicked.connect(_open_storage_sense_settings)
+        self._btn_storage_sense.setVisible(False)
+        windows.addWidget(self._btn_storage_sense)
 
         downloads = self._section(layout, "Zip files")
         self._chk_unpack = QCheckBox("Unzip downloaded .zip files into the Extracted folder")
         self._chk_unpack.toggled.connect(self._on_unpack_toggled)
         downloads.addWidget(self._chk_unpack)
         downloads.addWidget(ui_style.label("The original zip file is kept in the Archives folder.", "muted", wrap=True))
+
+        extras = self._section(
+            layout, "Extra options",
+            "All off unless you turn them on. Undo puts files back with their old names.",
+        )
+        self._option_checks: dict[tuple[str, str], QCheckBox] = {}
+        for key, text in (
+            (("photos", "by_month"), "Put pictures into a folder for each month (Images\\2026-11), "
+                                     "by the date a photo was taken"),
+            (("pdf_text", "enabled"), "Also look for rule words at the top of PDFs, so a "
+                                      "“document (3).pdf” that says Invoice still goes to Invoices"),
+            (("rename", "tidy"), "Tidy file names: “My_File (1).pdf” becomes “My File.pdf”"),
+            (("rename", "add_date"), "Put the date in front of file names: “2026-11-09 Invoice.pdf”"),
+            (("cleanup", "enabled"), "Move installers and zip files older than 30 days to the Recycle Bin, "
+                                     "once a day"),
+        ):
+            chk = QCheckBox(text)
+            chk.toggled.connect(lambda checked, k=key: self._on_option_toggled(k, checked))
+            extras.addWidget(chk)
+            self._option_checks[key] = chk
 
         learn = self._section(
             layout, "Learning",
@@ -1730,11 +1830,25 @@ class SettingsWidget(QWidget):
         self._chk_learning.blockSignals(True)
         self._chk_learning.setChecked(learning.is_enabled(self._config))
         self._chk_learning.blockSignals(False)
+        for (block_name, key), chk in self._option_checks.items():
+            block = self._config.get(block_name)
+            chk.blockSignals(True)
+            chk.setChecked(bool(block.get(key)) if isinstance(block, dict) else False)
+            chk.blockSignals(False)
+        days = _storage_sense_days()
+        if days:
+            self._storage_sense_lbl.setText(
+                f"Windows Storage Sense is set to delete files in Downloads that haven't been opened "
+                f"for {days} days. That includes the folders Download Sorter files into. To keep "
+                "your sorted files, set “Delete files in my Downloads folder” to Never."
+            )
+        self._storage_sense_lbl.setVisible(bool(days))
+        self._btn_storage_sense.setVisible(bool(days))
         block = self._config.get("update_check")
         self._chk_updates.blockSignals(True)
         self._chk_updates.setChecked(bool(block.get("enabled", True)) if isinstance(block, dict) else True)
         self._chk_updates.blockSignals(False)
-        self.set_persona(self._config.get("user_persona", "everyday_home"))
+        self.set_persona(self._config.get("user_persona", "custom"))
 
     def set_persona(self, persona_id: str) -> None:
         idx = self._persona_combo.findData(persona_id)
@@ -1754,6 +1868,19 @@ class SettingsWidget(QWidget):
         if hasattr(suite_data, "set_context_menu_enabled"):
             try:
                 suite_data.set_context_menu_enabled(checked)
+            except Exception:
+                pass
+
+    def _on_option_toggled(self, key: tuple[str, str], checked: bool) -> None:
+        block_name, name = key
+        block = self._config.get(block_name)
+        if not isinstance(block, dict):
+            block = {}
+            self._config[block_name] = block
+        block[name] = bool(checked)
+        if hasattr(suite_data, "save_sorter_config"):
+            try:
+                suite_data.save_sorter_config(self._config)
             except Exception:
                 pass
 

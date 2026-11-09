@@ -154,6 +154,7 @@ def consolidate_downloads(
                 candidates.append(entry)
 
     # 2. Subfolders inside target flat categories (e.g. Documents\PDFs, 3D Models\STL, Images\Photos)
+    by_month = sorter._option(config, "photos", "by_month")
     for cat_name in FLAT_CATEGORIES_TO_CONSOLIDATE:
         cat_dir = resolve_category_dir(root, cat_name)
         if not cat_dir.exists() or not cat_dir.is_dir():
@@ -161,6 +162,9 @@ def consolidate_downloads(
         for sub_root, dirs, files in os.walk(cat_dir):
             sub_path = Path(sub_root)
             if sub_path.resolve() == cat_dir.resolve():
+                if by_month and cat_name == "Images":
+                    # Pictures by month (Images\2026-11) is a layout the user chose.
+                    dirs[:] = [d for d in dirs if not sorter.MONTH_FOLDER.match(d)]
                 continue  # Files directly in the root of the category are already flat!
             dirs[:] = [d for d in dirs if not is_protected_directory(sub_path / d)]
             for f in files:

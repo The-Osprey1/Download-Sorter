@@ -1,6 +1,6 @@
 # Download Sorter
 
-> **Made by Devyn Fidel (2026)** · v2.2.2 · [MIT License](LICENSE)
+> **Made by Devyn Fidel (2026)** · v2.3.0 · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
@@ -15,7 +15,7 @@
 
 ## Get it
 
-1. **Download** the installer, `DownloadSorter-Setup-v2.2.2-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
+1. **Download** the installer, `DownloadSorter-Setup-v2.3.0-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
 2. **Run it.** Windows will probably show a blue "Windows protected your PC" screen the first time. [Here's why, and what to click](#windows-protected-your-pc).
    - It installs just for you, in `%LOCALAPPDATA%\Programs\DownloadSorter`. No administrator password is needed.
    - It adds Start menu and desktop shortcuts, and an entry in Installed apps.
@@ -56,6 +56,7 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
   You can change where things go on the **Rules** page, and test a file name with **Try a filename** before saving.
 - **Files you move yourself stay where you put them.** If you drag a sorted file into your own folder inside Downloads, Download Sorter leaves it there.
+- **Extra options in Settings**, all off until you turn them on: pictures in a folder per month, rule words found at the top of PDFs, tidier names or the date in front (Undo restores the old name), and old installers and zips to the Recycle Bin once a day. Settings also warns you if Windows Storage Sense is set to delete old files in Downloads, which would include your sorted files.
 - **It learns from your moves, and asks first.** After you've moved 3 similar files into one folder, a ribbon asks “Put files like this in Banking?”. **Yes** adds a rule you can see and change on the Rules page; **No** means it won't ask again. It never moves a file on a guess. You can turn learning off in Settings.
 
 ## How Download Sorter decides where a file goes
@@ -74,14 +75,14 @@ flowchart TD
     subgraph R ["Pick the folder: first match wins"]
         direction TB
         R1{"1. Active project on,<br/>and a CAD / 3D file?"} -- "Yes" --> D1["The project's folder"]
-        R1 -- "No" --> R2{"2. Name matches a word rule?<br/>e.g. 'invoice', a course code,<br/>or a learned rule like 'statement'<br/>from yourbank.com"}
+        R1 -- "No" --> R2{"2. Name matches a word rule?<br/>e.g. 'invoice', a course code,<br/>or a learned rule like 'statement'<br/>from yourbank.com<br/>(also the top of a PDF, if turned on)"}
         R2 -- "Yes" --> D2["That rule's folder,<br/>e.g. Documents\Invoices & Receipts"]
         R2 -- "No" --> R3{"3. G-code? Look inside:<br/>Haas CNC or 3D printer"}
         R3 -- "Yes" --> D3["3D Models"]
         R3 -- "No" --> R4{"4. 3MF from MakerWorld?"}
         R4 -- "Yes" --> D4["3D Models\MakerWorld\Designer\Model"]
         R4 -- "No" --> R5{"5. Known file type?<br/>121 types: .pdf, .jpg, .stl ..."}
-        R5 -- "Yes" --> D5["Its folder: Documents, Images,<br/>Videos, Audio, Archives,<br/>Installers, 3D Models, CAD, Code"]
+        R5 -- "Yes" --> D5["Its folder: Documents, Images,<br/>Videos, Audio, Archives,<br/>Installers, 3D Models, CAD, Code<br/>(pictures by month, if turned on)"]
         R5 -- "No" --> D6["Other"]
     end
 
@@ -91,7 +92,7 @@ flowchart TD
     E -- "Yes" --> E2["Moved to _Duplicates"]
     E -- "No" --> Q{"A zip, and unzipping<br/>turned on?"}
     Q -- "Yes" --> Q2["Unpack it, file the zip in Archives"]
-    Q -- "No" --> M["Move it. Same name there already?<br/>Becomes 'name (2).pdf'"]
+    Q -- "No" --> M["Move it (tidier name or date in front,<br/>if turned on). Same name there already?<br/>Becomes 'name (2).pdf'"]
     E2 & Q2 & M --> J["Write it to the undo history<br/>(written before the move, so a crash<br/>can't lose track of a file)"]
     J --> N(["Show it: ribbon, Home page.<br/>Many files at once: one ribbon that counts"])
 ```
@@ -110,7 +111,7 @@ flowchart TD
 4. **3MF hold.** A 3MF file you just downloaded may be open in your slicer, so it stays in Downloads for up to 7 days. The ribbon offers **File now** and **Keep here**.
 5. **Duplicates.** If a file with the same name is already in the destination folder and the two are identical (checked byte by byte), the new copy goes to `_Duplicates` instead of becoming `report (2).pdf`.
 6. **Zips** are only unpacked if you turned that on in the welcome steps or in Settings.
-7. **Move and record.** Each move is written to the undo history *before* it happens and marked done after. If the PC crashes halfway, the next start finishes or reverses it. **Undo** puts files back exactly where they were.
+7. **Move and record.** If you turned on tidy names or dates, the file gets its new name here. Each move is written to the undo history *before* it happens and marked done after. If the PC crashes halfway, the next start finishes or reverses it. **Undo** puts files back exactly where they were.
 8. **Tell you.** A ribbon slides in for each file. When lots of files arrive together, the first 3 get their own ribbon, then one ribbon counts the rest ("Filed 37 files · Images 25 · Documents 12") with **Open** and **Undo**.
 
 The code for each step: readiness and skipping in `sorter.move_file` and `sorter.is_file_ready_to_move`, the folder choice in `sorter.evaluate_routing` (try it on the **Rules** page with **Try a filename**), the hold in `hold_manager.py`, the history in `safe_ops.py`, and the ribbons in `ribbon_popup.py`.
@@ -128,7 +129,7 @@ To check that your download is exactly what was published:
 2. Run this in PowerShell, in the folder where the installer is:
 
    ```powershell
-   Get-FileHash .\DownloadSorter-Setup-v2.2.2-windows-x64.exe -Algorithm SHA256
+   Get-FileHash .\DownloadSorter-Setup-v2.3.0-windows-x64.exe -Algorithm SHA256
    ```
 
 3. The long code it prints should match the line for the installer in `checksums.txt`.
@@ -150,7 +151,7 @@ All the source code is in this repository, and the installer is built from it by
 - **Uninstall:** go to Windows Settings, then Apps, then Installed apps, then Download Sorter, then Uninstall. It asks whether to also delete your rules and history.
 - **Something went wrong?** [Report a bug](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml). The log helps a lot: right-click the tray icon, choose **Open log folder**, and attach `sorter.log`.
 
-*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.2.2-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
+*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.3.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
 
 ---
 
