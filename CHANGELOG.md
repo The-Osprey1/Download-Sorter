@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * **Words at the top of a PDF (`sorter.py`, Settings; new dependency `pypdf`)**: optionally, a rule's words are also looked for at the top of a PDF's first page, so `document (3).pdf` that says "INVOICE" still goes to Invoices. Large (over 10 MB), locked or unreadable PDFs are skipped.
   * **Tidy names and dates (`sorter.py`, Settings)**: optionally, `My_File (1).pdf` is filed as `My File.pdf`, and/or the date goes in front (`2026-11-09 Invoice.pdf`). Code, CAD, 3D and installer files keep their names. Undo puts the old name back.
 
+* **Ready for beta testers**:
+  * **Unexpected errors are no longer silent (new `problem_report.py`, `main.py`, `tray.py`)**: the installed app has no console, so an error used to close it without a trace. Now every unexpected error is written to `sorter.log` and saved in `%LOCALAPPDATA%\download-sorter\crash-reports` (the newest 20 are kept). In the tray and windows, a message says what happened and offers to open a bug report with the details filled in. Nothing is sent unless you post it.
+  * **Report a problem (`tray.py`, Settings)**: a new tray menu item, and the link in Settings → About, open a GitHub bug report with your Download Sorter and Windows versions already filled in.
+  * **Beta testing guide (new `BETA_TESTING.md`)**: what to install, a checklist of things to try, known issues, and how to send feedback. Linked from the top of the README and from GitHub's "New issue" page.
+  * **Issue forms (`.github/ISSUE_TEMPLATE`)**: the bug report asks for the installer, portable zip or source, has a field the app fills in, and reminds people that logs contain file names. A new **Beta feedback** form asks about first impressions.
+
 ### Changed
 * **Easier to use (`onboarding.py`, `rules_manager.py`, `tray.py`, `ui_style.py`)**:
   * When sorting is off or paused, **Start sorting** / **Resume sorting** is the green button on Home, since that's what you most likely want.

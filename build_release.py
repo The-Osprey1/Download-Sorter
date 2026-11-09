@@ -96,6 +96,7 @@ def build_standalone(use_inno: bool = False) -> int:
         "CHANGELOG.md",
         "CONTRIBUTING.md",
         "SECURITY.md",
+        "BETA_TESTING.md",
         "DownloadSorter.ico",
     ]
     for filename in extra_files:

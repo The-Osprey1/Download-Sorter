@@ -24,7 +24,7 @@ keywords = [
     "haas"
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Environment :: Win32 (MS Windows)",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
@@ -84,6 +84,7 @@ py-modules = [
     "folder_scan",
     "onboarding",
     "main",
+    "problem_report",
     "quick_switcher",
     "remodel",
     "ribbon_popup",

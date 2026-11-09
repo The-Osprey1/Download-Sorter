@@ -51,6 +51,15 @@ if sys.platform == "win32":
 
 
 @pytest.fixture(autouse=True)
+def restore_error_hooks():
+    """tray.main() installs Download Sorter's crash handler; don't let it outlive the test."""
+    import threading
+    saved = (sys.excepthook, threading.excepthook)
+    yield
+    sys.excepthook, threading.excepthook = saved
+
+
+@pytest.fixture(autouse=True)
 def isolate_sorter_state(tmp_path, monkeypatch):
     import sorter
     import watch

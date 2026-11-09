@@ -1,65 +1,72 @@
 name: 🐛 Bug Report
-description: Report a reproducible bug or sorting anomaly
+description: Something went wrong, a file went to the wrong place, or the app showed an error
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for reporting an issue! Please provide as much detail as possible to help us reproduce and resolve it quickly.
+        Thanks for taking the time to report this! The quickest way to start a report is **Report a problem** in Download Sorter (right-click the tray icon, or Settings → About): it fills in your version and Windows version for you.
+
+        **Before you post:** look over what you paste below. Logs and error messages can contain file and folder names. Replace anything you'd rather not share with something like `file.pdf`.
 
   - type: input
     id: version
     attributes:
-      label: Download Sorter Version
-      placeholder: e.g. 1.0.0
+      label: Download Sorter version
+      description: Shown in Settings → About, or in the tray menu under "About Download Sorter".
+      placeholder: e.g. 2.3.0
     validations:
       required: true
 
   - type: dropdown
     id: install_mode
     attributes:
-      label: Installation Method
+      label: How did you install it?
       options:
-        - Standalone Windows Executable (DownloadSorter.exe / ZIP)
-        - Python Virtual Environment (setup.bat / git clone)
-        - Other
-    validations:
-      required: true
-
-  - type: dropdown
-    id: os_version
-    attributes:
-      label: Windows OS Version
-      options:
-        - Windows 11 (23H2 or newer)
-        - Windows 11 (22H2 or older)
-        - Windows 10 (22H2)
-        - Windows 10 (other)
+        - Installer (DownloadSorter-Setup-...exe)
+        - Portable zip (DownloadSorter-...-windows-x64.zip)
+        - From source (git clone / setup.bat)
+        - Not sure
     validations:
       required: true
 
   - type: textarea
+    id: system
+    attributes:
+      label: System details
+      description: Filled in for you when you use "Report a problem" in the app. Otherwise, your Windows version is enough (Settings → System → About).
+      placeholder: |
+        Download Sorter: 2.3.0
+        System: Windows 11 (build 10.0.26100)
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
     id: description
     attributes:
-      label: Bug Description
-      description: What happened? What did you expect to happen instead?
+      label: What happened?
+      description: What did you expect to happen instead?
     validations:
       required: true
 
   - type: textarea
     id: reproduction_steps
     attributes:
-      label: Steps to Reproduce
+      label: Steps to reproduce
+      description: If a file went to the wrong folder, the file's name (or one like it) and where it went help the most.
       placeholder: |
-        1. Download file named '...'
-        2. Sorter runs
-        3. File moved to incorrect directory
+        1. Downloaded a file named 'March statement.pdf' from my bank
+        2. It went to Documents instead of Documents\Banking
     validations:
-      required: true
+      required: false
 
   - type: textarea
     id: logs
     attributes:
-      label: Relevant Log Output
-      description: Check `%LOCALAPPDATA%\download-sorter\sorter.log` for recent messages.
+      label: Error details or log
+      description: |
+        If Download Sorter showed an error, the details are filled in here. Otherwise, right-click the tray icon, choose **Open log folder**, and paste the last lines of `sorter.log`, or drag the file into this box. Crash reports are in the `crash-reports` folder next to it.
       render: text
+    validations:
+      required: false

@@ -8,6 +8,7 @@ Provides:
 from __future__ import annotations
 
 import copy
+import html
 import json
 import logging
 import os
@@ -42,6 +43,7 @@ from PySide6.QtWidgets import (
 
 import about
 import folder_scan
+import problem_report
 from suite_theme import ACCENTS, COLORS, RADII
 import learning
 import ui_icons
@@ -1797,11 +1799,15 @@ class SettingsWidget(QWidget):
         link.setOpenExternalLinks(True)
         info.addWidget(link)
 
+        # The bug report opens with the version and Windows version filled in.
+        report_href = html.escape(problem_report.issue_url(), quote=True)
+        link_style = f'style="color: {COLORS["info"]}; text-decoration: none;"'
         report_link = ui_style.label(
-            f'<a href="{about.REPO_URL}/issues/new/choose" style="color: {COLORS["info"]}; text-decoration: none;">'
-            f"Report a problem or suggest a rule</a>",
+            f'<a href="{report_href}" {link_style}>Report a problem</a> · '
+            f'<a href="{about.REPO_URL}/issues/new/choose" {link_style}>Suggest a rule or an idea</a>',
             "muted",
         )
+        report_link.setToolTip("Opens GitHub in your browser. Nothing is sent until you post it.")
         report_link.setOpenExternalLinks(True)
         info.addWidget(report_link)
 

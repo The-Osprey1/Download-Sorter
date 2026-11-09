@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 Beta testing guide
+    url: https://github.com/The-Osprey1/Download-Sorter/blob/main/BETA_TESTING.md
+    about: What to try, known issues, and how to send feedback.
+  - name: 🔒 Report a security problem privately
+    url: https://github.com/The-Osprey1/Download-Sorter/security/advisories/new
+    about: Please don't post security problems in public issues.

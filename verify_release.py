@@ -33,6 +33,7 @@ REQUIRED_RELEASE_FILES = [
     "FLOWCHART.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
+    "BETA_TESTING.md",
     "CHANGELOG.md",
     "pyproject.toml",
     "requirements.txt",
@@ -68,6 +69,7 @@ REQUIRED_RELEASE_FILES = [
     "ui_motion.py",
     "ui_style.py",
     "quit_signal.py",
+    "problem_report.py",
     "update_check.py",
     "updater.py",
     "installer_builder.py",
@@ -79,6 +81,7 @@ REQUIRED_RELEASE_FILES = [
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
     ".github/ISSUE_TEMPLATE/bug_report.yml",
+    ".github/ISSUE_TEMPLATE/beta_feedback.yml",
     ".github/ISSUE_TEMPLATE/feature_request.yml",
     ".github/ISSUE_TEMPLATE/rule_preset_request.yml",
 ]
