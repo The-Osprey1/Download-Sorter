@@ -257,3 +257,115 @@ def test_tray_closes_on_request_without_turning_sorting_off():
     tray.SorterTray.on_quit_requested(fake)
     assert fake.stop_event.is_set() and fake.icon.stopped
     assert not tray.SERVICE_DISABLED_FILE.exists(), "an update must not leave sorting switched off"
+
+
+# ---------------------------------------------------------------------------
+# GitHub's download server sometimes answers 504 or drops the connection
+# ---------------------------------------------------------------------------
+
+def _http_error(code: int):
+    import urllib.error
+
+    return urllib.error.HTTPError(PREFIX + NAME, code, "error", {}, None)
+
+
+@pytest.fixture
+def no_waiting(monkeypatch):
+    waits = []
+    monkeypatch.setattr(updater, "_sleep", waits.append)
+    return waits
+
+
+def test_a_504_is_tried_again(monkeypatch, fake_github, no_waiting):
+    answer = updater._open
+    failures = [_http_error(504)]
+
+    def flaky(url):
+        if not url.endswith("checksums.txt") and failures:
+            raise failures.pop()
+        return answer(url)
+
+    monkeypatch.setattr(updater, "_open", flaky)
+    path = updater.download(_release())
+    assert path.read_bytes() == PAYLOAD
+    assert no_waiting == [updater.RETRY_WAITS[0]]
+
+
+def test_a_connection_dropped_mid_download_starts_again(monkeypatch, fake_github, no_waiting):
+    answer = updater._open
+    calls = []
+
+    class Dropping(io.BytesIO):
+        headers = {"Content-Length": str(len(PAYLOAD))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, size=-1):
+            data = super().read(size)
+            if self.tell() > len(PAYLOAD) // 2:
+                raise ConnectionResetError("connection reset")
+            return data
+
+    def flaky(url):
+        if not url.endswith("checksums.txt"):
+            calls.append(url)
+            if len(calls) == 1:
+                return Dropping(PAYLOAD)
+        return answer(url)
+
+    monkeypatch.setattr(updater, "_open", flaky)
+    path = updater.download(_release())
+    assert path.read_bytes() == PAYLOAD
+    assert len(calls) == 2
+
+
+def test_gives_up_after_three_tries_and_says_why(monkeypatch, no_waiting):
+    tries = []
+
+    def always_504(url):
+        tries.append(url)
+        raise _http_error(504)
+
+    monkeypatch.setattr(updater, "_open", always_504)
+    with pytest.raises(updater.UpdateError, match="error 504"):
+        updater.download(_release())
+    assert len(tries) == 3
+    assert list(updater.updates_dir().iterdir()) == []
+
+
+def test_a_missing_file_is_not_tried_again(monkeypatch, no_waiting):
+    tries = []
+
+    def not_found(url):
+        tries.append(url)
+        raise _http_error(404)
+
+    monkeypatch.setattr(updater, "_open", not_found)
+    with pytest.raises(updater.UpdateError, match="error 404"):
+        updater.download(_release())
+    assert len(tries) == 1 and no_waiting == []
+
+
+def test_an_installer_already_downloaded_and_checked_is_reused(fake_github):
+    updater.download(_release())
+    fake_github["opened"].clear()
+
+    seen = []
+    path = updater.download(_release(), progress=lambda done, total: seen.append((done, total)))
+
+    assert path.read_bytes() == PAYLOAD
+    assert fake_github["opened"] == [PREFIX + "checksums.txt"], "only the checksum is fetched again"
+    assert seen == [(len(PAYLOAD), len(PAYLOAD))]
+
+
+def test_an_old_file_that_does_not_match_is_downloaded_again(fake_github):
+    updater.updates_dir().mkdir(parents=True, exist_ok=True)
+    (updater.updates_dir() / NAME).write_bytes(b"something else")
+
+    path = updater.download(_release())
+
+    assert path.read_bytes() == PAYLOAD
