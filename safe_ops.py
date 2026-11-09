@@ -304,12 +304,31 @@ def move(
     if snapshot(src) != before:
         _abort(op_id, "changed-before-move")
         raise Refused("changed-during-check", src)
-    try:
-        shutil.move(str(src), str(final))
-    except BaseException as exc:
+    last_exc: BaseException | None = None
+    for attempt in range(4):
+        try:
+            # If a prior attempt copied the file to final and they match, finish unlinking src
+            if final.exists() and src.exists() and sorter.are_files_identical(src, final):
+                try:
+                    os.unlink(src)
+                    last_exc = None
+                    break
+                except OSError as unlink_exc:
+                    last_exc = unlink_exc
+                    if attempt < 3:
+                        time.sleep(0.05 * (attempt + 1))
+                    continue
+            shutil.move(str(src), str(final))
+            last_exc = None
+            break
+        except (PermissionError, OSError) as exc:
+            last_exc = exc
+            if attempt < 3:
+                time.sleep(0.05 * (attempt + 1))
+    if last_exc is not None:
         if src.exists() and not final.exists():
-            _abort(op_id, f"{type(exc).__name__}: {exc}")
-        raise
+            _abort(op_id, f"{type(last_exc).__name__}: {last_exc}")
+        raise last_exc
     append_journal(_done_record(op_id, batch_id, src_abs, dest_abs, op, undoable))
     return final
 
