@@ -286,7 +286,7 @@ def _handle_post_move(
     if config.get("ribbon_enabled", True) and config.get("notifications", True):
         try:
             from ribbon_popup import notify_file_moved
-            notify_file_moved(dest, target_root)
+            notify_file_moved(dest, target_root, batch_id=batch_id)
         except Exception as err:
             logging.debug("Ribbon notification skipped: %s", err)
     try:

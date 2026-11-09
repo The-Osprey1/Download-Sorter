@@ -143,7 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         "-c", "--count", type=int, default=None, help="Number of files to undo (default: last batch)"
     )
     parser.add_argument(
-        "-b", "--batch", type=str, default=None, help="Specific batch ID to undo"
+        "-b", "--batch", action="append", default=None,
+        help="Batch ID to undo (repeat to undo several batches at once)"
     )
     parser.add_argument(
         "-a", "--all", action="store_true", help="Undo all active recorded moves"
@@ -187,9 +188,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.all:
         targets = list(reversed(active))
     elif args.batch:
-        targets = [rec for rec in reversed(active) if rec.get("batch_id") == args.batch]
+        wanted = set(args.batch)
+        targets = [rec for rec in reversed(active) if rec.get("batch_id") in wanted]
         if not targets:
-            print(f"No active moves found for batch '{args.batch}'.")
+            print(f"No active moves found for batch '{', '.join(args.batch)}'.")
             return 0
     elif args.count is not None:
         targets = list(reversed(active[-args.count:]))
