@@ -33,6 +33,7 @@ Commands:
   --unzip <zip>         Safely unpack archive into Extracted/ with wrapper stripping
   --status              Print daemon health, memory usage, and recent moves
   --clean               Clean old installers/archives to Windows Recycle Bin
+  --consolidate, --flatten Consolidate nested subfolders into official flat categories
   --remodel             Scan or safely remodel messy PC folder architectures
   --dialog <hwnd>       Spawn floating Quick Switcher pill for active File Dialog
   --quit                Ask a running Download Sorter (tray and windows) to close
@@ -224,6 +225,13 @@ def main(argv: list[str] | None = None) -> int:
         if cmd in ("--clean",):
             import clean_old
             return clean_old.main()
+
+        if cmd in ("--consolidate", "--flatten"):
+            import consolidate
+            try:
+                return consolidate.main(args[1:])
+            except TypeError:
+                return consolidate.main()
 
         if cmd in ("--remodel",):
             import watch

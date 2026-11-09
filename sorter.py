@@ -2120,3 +2120,23 @@ def sort_existing_misplaced(
     return moved
 
 
+def consolidate_downloads(
+    target_root: Path | str | None = None,
+    config: dict | None = None,
+    dry_run: bool = False,
+    batch_id: str = "",
+    include_held: bool = True,
+    remove_empty: bool = True,
+) -> dict:
+    """Consolidate nested subfolders and legacy categories into flat official categories."""
+    import consolidate
+    return consolidate.consolidate_downloads(
+        target_root=target_root,
+        config=config,
+        dry_run=dry_run,
+        batch_id=batch_id,
+        include_held=include_held,
+        remove_empty=remove_empty,
+    )
+
+
