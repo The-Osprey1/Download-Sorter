@@ -150,6 +150,7 @@ namespace DownloadSorterInstaller
         {
             bool silent = false;
             bool update = false;
+            bool noShortcuts = false;
             string customDir = null;
 
             for (int i = 0; i < args.Length; i++)
@@ -172,6 +173,12 @@ namespace DownloadSorterInstaller
                     // they are, and open Download Sorter again afterwards.
                     update = true;
                     silent = true;
+                }
+                else if (string.Equals(a, "/NO-SHORTCUTS", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a, "--no-shortcuts", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a, "/noshortcuts", StringComparison.OrdinalIgnoreCase))
+                {
+                    noShortcuts = true;
                 }
                 else if (a.StartsWith("/D=", StringComparison.OrdinalIgnoreCase) ||
                          a.StartsWith("-D=", StringComparison.OrdinalIgnoreCase) ||
@@ -198,12 +205,16 @@ namespace DownloadSorterInstaller
                     StopRunningApp(targetDir);
                     if (update)
                     {
-                        PerformInstall(targetDir, false, false);
+                        string desktopDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                        bool hasDesktop = !noShortcuts && File.Exists(Path.Combine(desktopDir, "Download Sorter.lnk"));
+                        string smPrograms = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs");
+                        bool hasStartMenu = !noShortcuts && File.Exists(Path.Combine(smPrograms, "Download Sorter.lnk"));
+                        PerformInstall(targetDir, hasDesktop, hasStartMenu);
                         Relaunch(targetDir);
                     }
                     else
                     {
-                        PerformInstall(targetDir, true, true);
+                        PerformInstall(targetDir, !noShortcuts, !noShortcuts);
                     }
                     return 0;
                 }
