@@ -794,6 +794,10 @@ PERSONA_PROFILES: list[dict[str, Any]] = [
 ]
 
 
+# Set up from the user's own folders (folder_scan.py), with no starter rules.
+CUSTOM_PROFILE_ID = "custom"
+
+
 def get_persona_profiles() -> list[dict[str, Any]]:
     """Return a deep copy of all available user persona profiles."""
     return copy.deepcopy(PERSONA_PROFILES)
@@ -858,6 +862,18 @@ def apply_persona_profile(config: dict[str, Any], persona_id: str) -> dict[str, 
     Validates persona_id, sets user_persona and onboarding_completed = True,
     and merges keyword rules tailored to the persona without duplicates.
     """
+    if persona_id == CUSTOM_PROFILE_ID:
+        # "Just my folders": no starter rules. Built-in rules nobody added words
+        # to are dropped; the user's own, scanned and learned rules stay.
+        updated = copy.deepcopy(config)
+        updated["user_persona"] = CUSTOM_PROFILE_ID
+        updated["onboarding_completed"] = True
+        updated["keyword_rules"] = [
+            copy.deepcopy(r) for r in updated.get("keyword_rules", [])
+            if isinstance(r, dict) and r.get("name") and not is_untouched_profile_rule(r)
+        ]
+        return updated
+
     profile = next((p for p in PERSONA_PROFILES if p["id"] == persona_id), None)
     if not profile:
         raise ValueError(f"Unknown persona ID: {persona_id}")

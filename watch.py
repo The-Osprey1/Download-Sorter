@@ -212,7 +212,15 @@ class DownloadsHandler(FileSystemEventHandler):
             if not learning.is_user_move(src, dest, self.root, cfg):
                 return False
             sorter.remember_user_placed(Path(dest))
-            learning.observe_user_move(Path(dest), self.root, cfg)
+            record = learning.observe_user_move(Path(dest), self.root, cfg)
+            suggestion = (record or {}).get("suggestion")
+            if suggestion and cfg.get("ribbon_enabled", True) and cfg.get("notifications", True):
+                # A ribbon that can't show must never undo the user's move.
+                try:
+                    from ribbon_popup import notify_suggestion
+                    notify_suggestion(suggestion["id"])
+                except Exception as err:
+                    logging.debug("Rule suggestion ribbon skipped: %s", err)
         except Exception:
             logging.exception("Could not handle the move of %s", dest)
             return False

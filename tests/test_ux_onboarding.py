@@ -296,15 +296,10 @@ def test_welcome_wizard_dialog_steps_and_navigation(qapp):
         dlg.show()
         qapp.processEvents()
 
-        # Step 1: Persona Selection (index 0)
+        # Step 1: Your folders (index 0)
         assert dlg._stack.currentIndex() == 0 or dlg._current_step == 0
         assert hasattr(dlg, "_btn_next")
         assert hasattr(dlg, "_btn_back")
-
-        # Select a persona to enable navigation
-        if hasattr(dlg, "_on_persona_selected"):
-            dlg._on_persona_selected("everyday_home")
-            qapp.processEvents()
         assert dlg._btn_next.isEnabled()
 
         # Step 1 -> Step 2: Feature Tour
@@ -328,34 +323,17 @@ def test_welcome_wizard_dialog_steps_and_navigation(qapp):
         qapp.processEvents()
 
 
-def test_welcome_wizard_persona_card_selection(qapp):
-    """Verify persona card selection, visual highlight tokens, and state transitions."""
+def test_welcome_wizard_has_no_profile_cards(qapp):
+    """Step 1 is built from the user's own folders, not 4 fixed profiles."""
     from onboarding import WelcomeWizardDialog
+    import onboarding
 
-    cfg = copy.deepcopy(sorter.DEFAULT_CONFIG)
-    dlg = WelcomeWizardDialog(config=cfg)
+    assert not hasattr(onboarding, "PersonaCard")
+    dlg = WelcomeWizardDialog(config=copy.deepcopy(sorter.DEFAULT_CONFIG))
     try:
-        dlg.show()
-        qapp.processEvents()
-
-        assert hasattr(dlg, "_persona_cards"), "WelcomeWizardDialog must maintain _persona_cards mapping"
-        assert len(dlg._persona_cards) >= 4, "Must display at least 4 persona cards"
-
-        # Simulate selecting academic_student
-        dlg._on_persona_selected("academic_student")
-        qapp.processEvents()
-        assert dlg._selected_persona == "academic_student"
-
-        # Check visual highlight token matches suite_theme mint accent
-        card = dlg._persona_cards["academic_student"]
-        card_style = card.styleSheet().lower()
-        mint_hex = suite_theme.ACCENTS["downloadSorter"].lower()
-        assert mint_hex in card_style, f"Selected persona card style must include theme accent {mint_hex}"
-
-        # Switch to maker_3d
-        dlg._on_persona_selected("maker_3d")
-        qapp.processEvents()
-        assert dlg._selected_persona == "maker_3d"
+        assert not hasattr(dlg, "_persona_cards")
+        assert dlg._step_pill_1.text().endswith("Your folders")
+        assert dlg._category_checks, "the category boxes are always there"
     finally:
         dlg.close()
         dlg.deleteLater()
@@ -372,13 +350,21 @@ def test_welcome_wizard_finish_and_config_persistence(qapp, tmp_path, monkeypatc
     cfg_file.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(config_manager, "SORTER_CONFIG_FILE", cfg_file)
 
+    import folder_scan
+
+    monkeypatch.setattr(folder_scan, "scan_downloads", lambda *_a, **_k: {
+        "root": str(tmp_path), "files_scanned": 4, "maker_files": 0, "empty": False, "examples": [],
+        "folders": [{"name": "Invoices", "files": 4, "kind": "custom", "checked": True, "summary": "",
+                     "rule": {"name": "Invoices", "folder": "Invoices", "match": ["invoice"],
+                              "enabled": True, "origin": "scan"}}],
+    })
     dlg = WelcomeWizardDialog(config=cfg)
     try:
         dlg.show()
         qapp.processEvents()
 
-        # Step 1: Select office_admin
-        dlg._on_persona_selected("office_admin")
+        # Step 1: keep the Invoices folder
+        assert dlg._folder_checks["Invoices"].isChecked()
         dlg._on_next_clicked() if hasattr(dlg, "_on_next_clicked") else dlg._btn_next.click()
         qapp.processEvents()
 
@@ -395,9 +381,9 @@ def test_welcome_wizard_finish_and_config_persistence(qapp, tmp_path, monkeypatc
 
         # Verify config saved to disk with persona and onboarding flag
         saved_config = json.loads(cfg_file.read_text(encoding="utf-8"))
-        assert saved_config.get("user_persona") == "office_admin", "user_persona was not persisted"
+        assert saved_config.get("user_persona") == "custom", "user_persona was not persisted"
         assert saved_config.get("onboarding_completed") is True, "onboarding_completed was not persisted"
-        assert len(saved_config.get("keyword_rules", [])) > 0, "Persona rules were not populated in saved config"
+        assert [r["name"] for r in saved_config["keyword_rules"]] == ["Invoices"], "the ticked folder's rule"
     finally:
         dlg.close()
         dlg.deleteLater()
@@ -900,19 +886,16 @@ def test_recommend_persona_profile_defensive(tmp_path):
     assert sorter.DEFAULT_CONFIG == snapshot_before, "DEFAULT_CONFIG was mutated by recommend_persona_profile"
 
 
-def test_welcome_wizard_auto_recommendation_and_mascot(qapp, tmp_path, monkeypatch):
-    """Verify WelcomeWizardDialog auto-recommends on Step 1, exposes mascot & speech label, and updates on navigation."""
+def test_welcome_wizard_scan_message_and_mascot(qapp, tmp_path, monkeypatch):
+    """Step 1 says what the folder scan found; the mascot and its message follow each step."""
     from onboarding import SorterMascotWidget, WelcomeWizardDialog
-    import config_manager
+    import folder_scan
 
-    # Mock recommend_persona_profile to recommend maker_3d
-    mock_rec = {
-        "recommended_id": "maker_3d",
-        "reason": "We spotted 4 3D/CAD files in your Downloads — 3D Printing, CAD & CNC Maker is recommended for your PC!",
-        "scores": {"maker_3d": 12, "academic_student": 0, "office_admin": 0, "everyday_home": 0},
-        "files_scanned": 4,
-    }
-    monkeypatch.setattr(config_manager, "recommend_persona_profile", lambda *args, **kwargs: mock_rec)
+    monkeypatch.setattr(folder_scan, "scan_downloads", lambda *args, **kwargs: {
+        "root": str(tmp_path), "files_scanned": 6, "maker_files": 4, "empty": False, "examples": [],
+        "folders": [{"name": "Prints", "files": 4, "kind": "category", "category": "3D Models",
+                     "checked": True, "summary": "Use this folder for 3d models instead of “3D Models”"}],
+    })
 
     cfg = copy.deepcopy(sorter.DEFAULT_CONFIG)
     dlg = WelcomeWizardDialog(config=cfg)
@@ -924,23 +907,12 @@ def test_welcome_wizard_auto_recommendation_and_mascot(qapp, tmp_path, monkeypat
         assert hasattr(dlg, "_mascot_widget"), "WelcomeWizardDialog must expose _mascot_widget"
         assert isinstance(dlg._mascot_widget, SorterMascotWidget)
         assert hasattr(dlg, "_mascot_speech_lbl"), "WelcomeWizardDialog must expose _mascot_speech_lbl"
-        assert hasattr(dlg, "_recommended_persona_id"), "WelcomeWizardDialog must expose _recommended_persona_id"
-        assert dlg._recommended_persona_id == "maker_3d"
-
-        # Pre-selection on Step 1
-        assert dlg._selected_persona == "maker_3d", "Recommended persona 'maker_3d' was not pre-selected"
-        card = dlg._persona_cards["maker_3d"]
-        assert card._selected is True
-
-        # Check badge on recommended card
-        assert card._rec_badge_lbl is not None
-        assert card._rec_badge_lbl.isVisible()
-        assert "Recommended" in card._rec_badge_lbl.text()
+        assert dlg._folder_checks["Prints"].isChecked()
 
         # Step 1 speech text and mascot pose
         assert dlg._mascot_widget.state in ("smart", "waving")
         assert "Hi! I'm Sorty!" in dlg._mascot_speech_lbl.text()
-        assert "3D" in dlg._mascot_speech_lbl.text()
+        assert "found 1 folder" in dlg._mascot_speech_lbl.text()
 
         # Navigate to Step 2
         dlg._on_next_clicked()
@@ -1007,36 +979,3 @@ def test_mascot_widget_poses_and_pixmap(qapp):
         assert pixmap.height() == 80
     finally:
         widget.deleteLater()
-
-
-def test_persona_card_recommendation_badge(qapp):
-    """Verify PersonaCard displays and toggles the recommendation badge correctly."""
-    from onboarding import PersonaCard
-
-    card = PersonaCard("academic_student", "🎓", "Student", "Study materials")
-    try:
-        card.show()
-        qapp.processEvents()
-        assert card._rec_badge_lbl is None
-
-        # Enable recommendation badge
-        card.set_recommended(True, "✨ Recommended for your PC")
-        qapp.processEvents()
-        assert card._rec_badge_lbl is not None
-        assert card._rec_badge_lbl.isVisible()
-        assert "Recommended for your PC" in card._rec_badge_lbl.text()
-
-        # Disable recommendation badge
-        card.set_recommended(False)
-        qapp.processEvents()
-        assert not card._rec_badge_lbl.isVisible()
-
-        # Re-enable recommendation badge
-        card.set_recommended(True)
-        qapp.processEvents()
-        assert card._rec_badge_lbl.isVisible()
-    finally:
-        card.close()
-        card.deleteLater()
-        qapp.processEvents()
-

@@ -68,6 +68,7 @@ _PATHS: dict[str, str] = {
 _FILLED = {"more", "play"}
 
 PERSONA_ICONS = {
+    "custom": "folder",
     "everyday_home": "profile_home",
     "academic_student": "profile_school",
     "office_admin": "profile_office",

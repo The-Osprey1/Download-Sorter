@@ -1,8 +1,7 @@
 """First-run onboarding wizard and consumer Home Dashboard GUI for Download Sorter.
 
 Provides:
-- PersonaCard: Clickable selection card for persona profiles.
-- WelcomeWizardDialog: 3-step first-run wizard (persona, preview, system setup).
+- WelcomeWizardDialog: 3-step first-run wizard (your folders, preview, system setup).
 - HomeDashboardWidget: Everyday main view (status hero, recent activity, quick settings).
 """
 
@@ -10,7 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
-import os
+import logging
 from pathlib import Path
 import subprocess
 import sys
@@ -19,22 +18,20 @@ import time
 from typing import Any
 import uuid
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
     QProgressBar,
-    QPushButton,
     QScrollArea,
-    QSizePolicy,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -43,7 +40,8 @@ from PySide6.QtWidgets import (
 )
 
 import about
-from suite_theme import ACCENTS, COLORS, RADII, TYPE
+import folder_scan
+from suite_theme import ACCENTS, COLORS, RADII
 import learning
 import ui_icons
 import ui_motion
@@ -349,145 +347,11 @@ class SorterMascotWidget(QWidget):
 
 
 # ============================================================================
-# 1. PersonaCard Widget
-# ============================================================================
-
-class PersonaCard(QFrame):
-    """Clickable selection card for user workflow personas."""
-
-    clicked = Signal(str)
-
-    def __init__(
-        self,
-        persona_id: str,
-        icon: str,
-        name: str,
-        description: str,
-        badge: str = "",
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.persona_id = persona_id
-        self._selected = False
-        self._badge_lbl: QLabel | None = None
-        self._rec_badge_lbl: QLabel | None = None
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._init_ui(icon, name, description, badge)
-
-    def _init_ui(self, icon: str, name: str, description: str, badge: str) -> None:
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(12)
-
-        icon_name = icon if icon in ui_icons.names() else ui_icons.PERSONA_ICONS.get(self.persona_id, "folder")
-        self._icon_lbl = QLabel()
-        self._icon_lbl.setFixedSize(40, 40)
-        self._icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._icon_name = icon_name
-        layout.addWidget(self._icon_lbl, 0, Qt.AlignmentFlag.AlignTop)
-
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(3)
-
-        self._title_row = QHBoxLayout()
-        self._title_row.setSpacing(8)
-
-        self._title_lbl = QLabel(name.replace("&", "and"))
-        self._title_lbl.setStyleSheet("font-size: 14px; font-weight: 600;")
-        self._title_row.addWidget(self._title_lbl)
-
-        if badge:
-            self._badge_lbl = QLabel(badge)
-            self._badge_lbl.setStyleSheet(
-                f"color: {COLORS['textMuted']}; border: 1px solid {COLORS['border']};"
-                " border-radius: 4px; padding: 1px 6px; font-size: 11px;"
-            )
-            self._title_row.addWidget(self._badge_lbl)
-
-        self._title_row.addStretch()
-        text_layout.addLayout(self._title_row)
-
-        self._desc_lbl = QLabel(description)
-        self._desc_lbl.setStyleSheet(f"color: {COLORS['textMuted']}; font-size: 12px;")
-        self._desc_lbl.setWordWrap(True)
-        text_layout.addWidget(self._desc_lbl)
-
-        layout.addLayout(text_layout, 1)
-
-        self._indicator = QLabel("○")
-        self._indicator.setFont(QFont(TYPE["ui"], 13))
-        self._indicator.setStyleSheet(f"color: {COLORS['textMuted']};")
-        layout.addWidget(self._indicator)
-
-        self.update_style()
-
-    def set_recommended(self, is_rec: bool, badge_text: str = "Recommended") -> None:
-        """Display or hide the smart recommendation badge on this card."""
-        if is_rec:
-            if self._rec_badge_lbl is None:
-                self._rec_badge_lbl = QLabel(badge_text)
-                self._rec_badge_lbl.setStyleSheet(
-                    f"background: {COLORS['successSubtle']}; color: {ACCENTS['downloadSorter']};"
-                    f" border: 1px solid {COLORS['successBorder']}; border-radius: 4px;"
-                    " padding: 1px 6px; font-size: 11px; font-weight: 600;"
-                )
-                # Insert right after _title_lbl (index 1)
-                self._title_row.insertWidget(1, self._rec_badge_lbl)
-            else:
-                self._rec_badge_lbl.setText(badge_text)
-                self._rec_badge_lbl.setVisible(True)
-        else:
-            if self._rec_badge_lbl is not None:
-                self._rec_badge_lbl.setVisible(False)
-
-    def set_selected(self, selected: bool) -> None:
-        self._selected = selected
-        self._indicator.setText("●" if selected else "○")
-        self._indicator.setStyleSheet(
-            f"color: {ACCENTS['downloadSorter']};" if selected else f"color: {COLORS['textMuted']};"
-        )
-        self.update_style()
-
-    def update_style(self) -> None:
-        icon_color = ACCENTS["downloadSorter"] if self._selected else COLORS["textMuted"]
-        self._icon_lbl.setPixmap(ui_icons.pixmap(self._icon_name, icon_color, 22))
-        self._icon_lbl.setStyleSheet(
-            f"background: {COLORS['successSubtle'] if self._selected else COLORS['surfaceRaised']};"
-            f" border-radius: {RADII['control']}px;"
-        )
-        if self._selected:
-            self.setStyleSheet(f"""
-                PersonaCard {{
-                    background-color: {COLORS['surfaceRaised']};
-                    border: 1px solid {ACCENTS['downloadSorter']};
-                    border-radius: {RADII['card']}px;
-                }}
-            """)
-        else:
-            self.setStyleSheet(f"""
-                PersonaCard {{
-                    background-color: {COLORS['surface']};
-                    border: 1px solid {COLORS['border']};
-                    border-radius: {RADII['card']}px;
-                }}
-                PersonaCard:hover {{
-                    background-color: {COLORS['surfaceHover']};
-                    border-color: {COLORS['borderStrong']};
-                }}
-            """)
-
-    def mousePressEvent(self, event) -> None:
-        self.clicked.emit(self.persona_id)
-        super().mousePressEvent(event)
-
-
-# ============================================================================
 # 2. WelcomeWizardDialog (3-Step Guided Setup)
 # ============================================================================
 
 class WelcomeWizardDialog(QDialog):
-    """3-step first-run wizard guiding persona selection, feature tour, and system setup."""
+    """3-step first-run wizard: the folders already in Downloads, how it works, and system setup."""
 
     def __init__(self, config: dict[str, Any] | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -499,35 +363,31 @@ class WelcomeWizardDialog(QDialog):
             suite_data.load_sorter_config() if hasattr(suite_data, "load_sorter_config") else {}
         )
         self._current_step = 0
-        self._persona_cards: dict[str, PersonaCard] = {}
+        self._folder_checks: dict[str, QCheckBox] = {}
+        self._category_checks: dict[str, QCheckBox] = {}
+        self._starter_checks: dict[str, QCheckBox] = {}
 
-        # 1. Automatic smart profile recommendation via local file scan
-        if hasattr(suite_data, "recommend_persona_profile"):
-            try:
-                rec = suite_data.recommend_persona_profile()
-            except Exception:
-                rec = {
-                    "recommended_id": "everyday_home",
-                    "reason": "Everyday & Home PC is recommended to keep your photos, music, documents, and downloads tidy!",
-                    "scores": {},
-                    "files_scanned": 0,
-                }
+        # Step 1 is built from the folders already in Downloads (folder_scan.py).
+        scan_config = self._config if self._config.get("extension_rules") else (
+            sorter.get_default_config() if sorter else {}
+        )
+        try:
+            self._scan = folder_scan.scan_downloads(scan_config)
+        except Exception:
+            logging.debug("Folder scan failed", exc_info=True)
+            self._scan = {"folders": [], "empty": True, "files_scanned": 0, "maker_files": 0, "examples": []}
+        usable = [f for f in self._scan["folders"] if f.get("rule") or f.get("kind") == "category"]
+        if usable:
+            noun = "folder" if len(usable) == 1 else "folders"
+            self._step1_speech = (
+                f"I found {len(usable)} {noun} you already use in Downloads. "
+                "Tick the ones I should keep filing into."
+            )
         else:
-            rec = {
-                "recommended_id": "everyday_home",
-                "reason": "Everyday & Home PC is recommended to keep your photos, music, documents, and downloads tidy!",
-                "scores": {},
-                "files_scanned": 0,
-            }
-
-        self._recommended_persona_id: str = rec.get("recommended_id", "everyday_home")
-        self._recommendation_reason: str = rec.get("reason", "Everyday is a good fit for most PCs.")
-
-        # Default persona selection: pre-select recommended or preserve existing persona in config
-        if "user_persona" in self._config:
-            self._selected_persona = self._config["user_persona"]
-        else:
-            self._selected_persona = self._recommended_persona_id
+            self._step1_speech = (
+                "Your Downloads folder doesn't have folders of its own yet. "
+                "Pick the folders you'd like, and I'll learn more as you go."
+            )
 
         self._init_ui()
 
@@ -545,7 +405,7 @@ class WelcomeWizardDialog(QDialog):
 
         header_layout.addStretch()
 
-        self._step_pill_1 = QLabel("1  Profile")
+        self._step_pill_1 = QLabel("1  Your folders")
         self._step_pill_2 = QLabel("2  How it works")
         self._step_pill_3 = QLabel("3  Finish")
         for pill in (self._step_pill_1, self._step_pill_2, self._step_pill_3):
@@ -574,7 +434,7 @@ class WelcomeWizardDialog(QDialog):
         bubble_col.setSpacing(4)
 
         bubble_col.addStretch()
-        self._mascot_speech_lbl = QLabel(f"Hi! I'm Sorty! {self._recommendation_reason}")
+        self._mascot_speech_lbl = QLabel(f"Hi! I'm Sorty! {self._step1_speech}")
         self._mascot_speech_lbl.setWordWrap(True)
         bubble_col.addWidget(self._mascot_speech_lbl)
 
@@ -584,7 +444,7 @@ class WelcomeWizardDialog(QDialog):
 
         # Main Stacked Pages
         self._stack = QStackedWidget(self)
-        self._stack.addWidget(self._build_step1_persona())
+        self._stack.addWidget(self._build_step1_folders())
         self._stack.addWidget(self._build_step2_preview())
         self._stack.addWidget(self._build_step3_preferences())
         layout.addWidget(self._stack, 1)
@@ -618,40 +478,80 @@ class WelcomeWizardDialog(QDialog):
 
         layout.addLayout(footer)
 
-        # Initial selection and navigation sync
-        self._on_persona_selected(self._selected_persona)
         self._update_navigation()
 
-    def _build_step1_persona(self) -> QWidget:
+    def _build_step1_folders(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 8, 0, 8)
         layout.setSpacing(10)
 
-        layout.addWidget(ui_style.label("What do you mostly download?", "title"))
-        layout.addWidget(ui_style.label(
-            "This picks a set of starter rules. Every profile sorts files by type; "
-            "you can switch later in Settings.", "muted", wrap=True))
-        layout.addSpacing(4)
+        folders = self._scan.get("folders", [])
+        existing = {str(r.get("folder") or "").lower(): r for r in self._config.get("keyword_rules", [])}
+        if folders:
+            layout.addWidget(ui_style.label("Your folders", "title"))
+            layout.addWidget(ui_style.label(
+                "These folders are already in your Downloads folder. New files that fit one go "
+                "into it. Untick any you'd rather not use.", "muted", wrap=True))
+            folder_card, folder_box = ui_style.card(spacing=2)
+            for entry in folders:
+                usable = bool(entry.get("rule")) or entry.get("kind") == "category"
+                files = int(entry.get("files", 0))
+                count = f"  ·  {files} file{'s' if files != 1 else ''}" if files else ""
+                chk = QCheckBox(f"{entry['name']}{count}")
+                previous = existing.get(entry["name"].lower())
+                chk.setChecked(usable and bool(entry.get("checked", True))
+                               and (previous is None or previous.get("enabled", True)))
+                chk.setEnabled(usable)
+                folder_box.addWidget(chk)
+                note = ui_style.label(entry.get("summary", ""), "caption", wrap=True)
+                note.setContentsMargins(26, 0, 0, 6)
+                folder_box.addWidget(note)
+                self._folder_checks[entry["name"]] = chk
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setWidget(folder_card)
+            scroll.setMaximumHeight(250)
+            layout.addWidget(scroll)
+            layout.addWidget(ui_style.label("Everything else is sorted by type into:", "muted"))
+        else:
+            layout.addWidget(ui_style.label("Pick your folders", "title"))
+            layout.addWidget(ui_style.label(
+                "Each kind of file gets its own folder inside Downloads. Untick any you don't "
+                "want; those files go to Other. You can add folders of your own any time.",
+                "muted", wrap=True))
 
-        profiles: list[tuple[str, str, str, str]] = []
-        if hasattr(suite_data, "get_persona_profiles"):
-            try:
-                for p in suite_data.get_persona_profiles():
-                    profiles.append((p.get("id", ""), "", p.get("name", ""), p.get("description", "")))
-            except Exception:
-                profiles = []
+        cat_card, cat_box = ui_style.card(spacing=4)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(6)
+        seen: set[str] = set()
+        rules = self._config.get("extension_rules") or (
+            sorter.get_default_config().get("extension_rules", []) if sorter else [])
+        for rule in rules:
+            name = str(rule.get("name") or "")
+            folder = str(rule.get("folder") or name)
+            if not name or folder.lower() in seen:
+                continue
+            seen.add(folder.lower())
+            chk = QCheckBox(folder)
+            chk.setChecked(bool(rule.get("enabled", True)))
+            idx = len(self._category_checks)
+            grid.addWidget(chk, idx // 4, idx % 4)
+            self._category_checks[name] = chk
+        cat_box.addLayout(grid)
+        layout.addWidget(cat_card)
 
-        if not profiles:
-            profiles = [(pid, "", name, "") for pid, name in PERSONA_LABELS]
-
-        for pid, icon, name, desc in profiles:
-            card = PersonaCard(pid, icon, name, desc, parent=page)
-            if pid == self._recommended_persona_id:
-                card.set_recommended(True)
-            card.clicked.connect(self._on_persona_selected)
-            self._persona_cards[pid] = card
-            layout.addWidget(card)
+        if not folders:
+            layout.addWidget(ui_style.label("Extra folders inside Documents (optional):", "muted"))
+            starter_card, starter_box = ui_style.card(spacing=4)
+            for key, label, _rule in folder_scan.STARTER_FOLDERS:
+                chk = QCheckBox(label)
+                chk.setChecked(False)
+                starter_box.addWidget(chk)
+                self._starter_checks[key] = chk
+            layout.addWidget(starter_card)
 
         layout.addStretch()
         return page
@@ -767,12 +667,6 @@ class WelcomeWizardDialog(QDialog):
         layout.addStretch()
         return page
 
-    def _on_persona_selected(self, persona_id: str) -> None:
-        self._selected_persona = persona_id
-        for pid, card in self._persona_cards.items():
-            card.set_selected(pid == persona_id)
-        self._btn_next.setEnabled(True)
-
     def _update_navigation(self) -> None:
         idx = self._current_step
         self._btn_back.setEnabled(idx > 0)
@@ -784,7 +678,7 @@ class WelcomeWizardDialog(QDialog):
 
         if hasattr(self, "_mascot_speech_lbl"):
             if idx == 0:
-                self._mascot_speech_lbl.setText(f"Hi! I'm Sorty! {self._recommendation_reason}")
+                self._mascot_speech_lbl.setText(f"Hi! I'm Sorty! {self._step1_speech}")
             elif idx == 1:
                 self._mascot_speech_lbl.setText(
                     "I work offline and only move files around on your PC. Every move can be "
@@ -836,13 +730,16 @@ class WelcomeWizardDialog(QDialog):
         self.accept()
 
     def accept(self) -> None:
-        """Apply persona profile, persist preferences and onboarding completion, then close dialog."""
+        """Set up from the ticked folders, persist preferences and onboarding completion, then close."""
         try:
-            if hasattr(suite_data, "apply_persona_profile"):
-                self._config = suite_data.apply_persona_profile(self._config, self._selected_persona)
-            else:
-                self._config["user_persona"] = self._selected_persona
-                self._config["onboarding_completed"] = True
+            chosen = [n for n, c in self._folder_checks.items() if c.isEnabled() and c.isChecked()]
+            off = [n for n, c in self._category_checks.items() if not c.isChecked()]
+            starters = [k for k, c in self._starter_checks.items() if c.isChecked()]
+            try:
+                self._config = folder_scan.apply_scan(self._config, self._scan, chosen, off, starters)
+            except Exception:
+                logging.exception("Could not apply the folder choices")
+                self._config["user_persona"] = "custom"
 
             self._config["onboarding_completed"] = True
 
@@ -861,6 +758,8 @@ class WelcomeWizardDialog(QDialog):
             # background sorter start; it then does the initial sort itself.
             if hasattr(suite_data, "save_sorter_config"):
                 suite_data.save_sorter_config(self._config)
+            # The learner starts out knowing which files live in which folder.
+            folder_scan.seed_learning(self._scan, self._config)
 
             if hasattr(self, "_chk_startup") and hasattr(suite_data, "set_startup_enabled"):
                 try:
@@ -893,6 +792,7 @@ class WelcomeWizardDialog(QDialog):
 # ============================================================================
 
 PERSONA_LABELS: list[tuple[str, str]] = [
+    ("custom", "Just my folders"),
     ("everyday_home", "Everyday"),
     ("academic_student", "Student"),
     ("office_admin", "Office and work"),
@@ -1727,9 +1627,10 @@ class SettingsWidget(QWidget):
         layout.addWidget(header)
 
         profile = self._section(
-            layout, "Profile",
-            "Your profile adds starter rules for the kinds of files you download. "
-            "Rules you've added yourself are kept when you switch.",
+            layout, "Your folders and starter rules",
+            "Setup looks at the folders in your Downloads folder and keeps filing into them. "
+            "You can also add a set of ready-made name rules. Your own folders, and rules you "
+            "added or that were learned, are kept when you switch.",
         )
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -1740,7 +1641,7 @@ class SettingsWidget(QWidget):
         self._persona_combo.currentIndexChanged.connect(self._on_persona_combo_changed)
         row.addWidget(self._persona_combo)
         row.addStretch()
-        self._btn_rerun_tour = ui_style.button("Run setup again")
+        self._btn_rerun_tour = ui_style.button("Look at my folders again")
         self._btn_rerun_tour.clicked.connect(self._on_rerun_tour)
         row.addWidget(self._btn_rerun_tour)
         profile.addLayout(row)
@@ -1760,13 +1661,13 @@ class SettingsWidget(QWidget):
         downloads.addWidget(ui_style.label("The original zip file is kept in the Archives folder.", "muted", wrap=True))
 
         learn = self._section(
-            layout, "Learning (preview)",
+            layout, "Learning",
             "When you move a sorted file into another folder inside Downloads, Download Sorter "
-            "notes the words in its name, its type and the website it came from. For now it only "
-            "keeps a practice log of what it would have suggested; it doesn't move or suggest "
-            "anything. Everything stays on this PC.",
+            "notes the words in its name, its type and the website it came from. After you've "
+            "moved 3 similar files into a folder, it asks whether to add a rule for them. It "
+            "never moves files on its own guess, and everything stays on this PC.",
         )
-        self._chk_learning = QCheckBox("Learn from how I organize files")
+        self._chk_learning = QCheckBox("Learn from how I organize files and suggest rules")
         self._chk_learning.toggled.connect(self._on_learning_toggled)
         learn.addWidget(self._chk_learning)
         learn_row = QHBoxLayout()
@@ -1882,6 +1783,7 @@ class SettingsWidget(QWidget):
             block = {}
             self._config["learning"] = block
         block["enabled"] = bool(checked)
+        block.setdefault("suggest", True)  # the user has chosen; don't switch it on again
         if hasattr(suite_data, "save_sorter_config"):
             try:
                 suite_data.save_sorter_config(self._config)
@@ -1896,6 +1798,9 @@ class SettingsWidget(QWidget):
                 "(inside Downloads), and it will start learning from those moves."
             )
         lines = [f"Files you've moved: {rep['your_moves']}"]
+        if rep.get("rules_added"):
+            noun = "rule" if rep["rules_added"] == 1 else "rules"
+            lines.append(f"Rules you've added from its suggestions: {rep['rules_added']} {noun}")
         if rep["judged"]:
             lines.append(
                 f"Its first guess was right {rep['first_guess_right']} of {rep['judged']} times "

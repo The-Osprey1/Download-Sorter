@@ -51,6 +51,7 @@ hidden_imports = [
     'defusedxml',
     'onboarding',
     'learning',
+    'folder_scan',
     'ui_icons',
     'ui_motion',
     'ui_style',

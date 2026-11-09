@@ -80,6 +80,7 @@ py-modules = [
     "gcode_peek",
     "hold_manager",
     "learning",
+    "folder_scan",
     "onboarding",
     "main",
     "quick_switcher",

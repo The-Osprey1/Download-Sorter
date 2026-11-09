@@ -323,7 +323,6 @@ def _finish_wizard(qapp, monkeypatch, sort_now: bool, sorter_status: str | None,
 
     dlg = onboarding.WelcomeWizardDialog(config=sorter.get_default_config())
     try:
-        dlg._on_persona_selected("everyday_home")
         dlg._chk_sort_now.setChecked(sort_now)
         if unzip is not None:
             dlg._chk_unzip.setChecked(unzip)

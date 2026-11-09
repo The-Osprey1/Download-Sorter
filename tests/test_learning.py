@@ -1,4 +1,4 @@
-"""Stage 1 of the learning sorter: watch, learn from the user's own moves, log guesses.
+"""The learning sorter: watch, learn from the user's own moves, log guesses.
 
 Also covers the fix that makes it possible: a file the user moves into a folder
 inside Downloads stays there, instead of being treated as a misplaced download
@@ -223,7 +223,9 @@ def test_new_downloads_into_a_subfolder_are_still_rescued(downloads, config):
 # learning switched off / on
 # ---------------------------------------------------------------------------
 
-def test_learning_is_off_by_default_and_stores_nothing(downloads, config):
+def test_learning_switched_off_stores_nothing(downloads, config):
+    assert learning.is_enabled(config), "learning is on by default"
+    config["learning"] = {"enabled": False, "suggest": True}
     assert not learning.is_enabled(config)
     handler = watch.DownloadsHandler(downloads, config)
     src = _old_file(downloads / "Documents" / "PDFs" / "statement.pdf")
@@ -309,9 +311,11 @@ def test_settings_switch_and_report(qapp, monkeypatch, downloads, sites):
     monkeypatch.setattr(onboarding.suite_data, "save_sorter_config", lambda cfg, *a, **k: saved.append(json.loads(json.dumps(cfg))))
     widget = onboarding.SettingsWidget(config=sorter.get_default_config())
     try:
-        assert widget._chk_learning.isChecked() is False
+        assert widget._chk_learning.isChecked() is True, "on by default"
         assert "Nothing yet" in widget.learning_report_text()
 
+        widget._chk_learning.setChecked(False)
+        assert saved[-1]["learning"] == {"enabled": False, "suggest": True}
         widget._chk_learning.setChecked(True)
         assert saved[-1]["learning"]["enabled"] is True
 
