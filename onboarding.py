@@ -1697,6 +1697,14 @@ class SettingsWidget(QWidget):
         link.setOpenExternalLinks(True)
         info.addWidget(link)
 
+        report_link = ui_style.label(
+            f'<a href="{about.REPO_URL}/issues/new/choose" style="color: {COLORS["info"]}; text-decoration: none;">'
+            f"Report a problem or suggest a rule</a>",
+            "muted",
+        )
+        report_link.setOpenExternalLinks(True)
+        info.addWidget(report_link)
+
         layout.addStretch()
 
     def refresh_data(self) -> None:

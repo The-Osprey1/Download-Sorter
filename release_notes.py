@@ -73,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     if output is None:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
         sys.stdout.write(notes)
     else:
         output.parent.mkdir(parents=True, exist_ok=True)

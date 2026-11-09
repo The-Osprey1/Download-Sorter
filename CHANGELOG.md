@@ -17,14 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   When Downloads has no folders of its own, the step shows a box for each kind of file plus optional extra folders (receipts, school, career, taxes and bank). The files already in your folders also teach the learner where things go. In Settings, the profile list is now "Your folders and starter rules", with **Just my folders** first and **Look at my folders again**.
 * **Learning is on, and asks before adding a rule (`learning.py`, `ribbon_popup.py`, `watch.py`)**: after you've moved 3 similar files into one folder (same word in the name, or same website), a ribbon asks "Put files like this in Banking?". **Yes** adds a rule, named "Banking (learned)", that you can see and change on the Rules page; **No** means it won't ask about that again. It only asks when the word or website points to that folder at least 4 times out of 5, and never when a rule already files it there. It still never moves a file on its own guess. Learning is switched on for everyone once; you can turn it off in Settings.
 * **Rules can check the website a file came from (`sorter.py`)**: a learned rule like "“statement” files from yourbank.com" only matches statements downloaded from that site. The Rules page shows it as "(downloaded from yourbank.com)".
+
+### Fixed
+* **Plural words (`learning.py`)**: "taxes", "boxes" and "classes" were read as "taxe", "boxe" and "classe".
+
+## [2.2.2] - 2026-11-09
+
+### Added
 * **One ribbon for big batches (`ribbon_popup.py`, `watch.py`, `sort_undo.py`)**: when lots of files land at once (a zip unpacking, a browser's "download all"), the first 3 still get their own ribbon. After that, one ribbon counts the rest while they arrive ("Filed 37 files · Images 25 · Documents 12") and closes a few seconds after the last one. Its **Undo** puts the whole batch back and **Open** shows the folder. `--undo --batch` can now be given several times.
+* **Report a problem in Settings (`onboarding.py`)**: Added a direct link in the Settings About section to report an issue or suggest rules on GitHub.
+
+### Changed
+* **Differentiate 3D Print Meshes and CAD models (`sorter.py`)**: 3D print mesh and printer formats (`.stl`, `.3mf`, `.obj`, `.blend`, `.3ds`, `.fbx`, `.glb`, `.gltf`, `.gcode`) sort to `3D Models`, while mechanical/engineering CAD files (`.step`, `.stp`, `.iges`, `.igs`, `.f3d`, `.f3z`, `.ipt`, `.iam`, `.sldprt`, `.sldasm`, `.slddrw`, `.dwg`, `.dxf`) sort to `CAD`.
 
 ### Removed
 * **Old one-off scripts**: `restore_from_log.py` (rebuilt moves from logs written before undo history existed, before 2.0) and `clean_test_history.py` (removed test records from history, no longer needed since tests use their own folders), plus `sorter.record_history`, which only the first one used.
 * **Repeated tests**: the `--version` check for every script ran in four test files, starting about 20 processes each time. It now runs once, in `tests/test_attribution.py`, with the strictest check of the four. The stray `test_ribbon_popup.py` moved into `tests/`.
 
 ### Fixed
-* **Plural words (`learning.py`)**: "taxes", "boxes" and "classes" were read as "taxe", "boxe" and "classe".
+* **Protect library folders in Remodel (`remodel.py`)**: Cleanup and remodel scans now recognize library folders (`3D Printing`, `CAD`, `Games`, `Finance`, `Extracted`, `timelapse`, etc.) as protected categories so their subfolder hierarchies are never moved into `Other`.
 * **Ribbons didn't appear in the installed app (`ribbon_popup.py`)**: since 2.1.0 the installed app started each "File sorted" and 3MF hold ribbon in a way it didn't understand ("Unknown command"), so they never showed. They now start through the app's own `--ribbon` command. Summary ribbons were not affected.
 * **"Couldn't download the update" (`updater.py`)**: GitHub's download server sometimes answers "504 Gateway Timeout" or drops the connection, and the in-app update gave up on the first try. It now tries up to 3 times, a few seconds apart, says what went wrong (for example "GitHub answered with error 504") if it still can't, and reuses an installer it already downloaded and checked instead of downloading it again.
 

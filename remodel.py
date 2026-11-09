@@ -223,6 +223,10 @@ def check_folder_protection(
 
     # Check if folder name is already an organized category
     cat_names = {c.lower() for c in category_folders}
+    cat_names.update({
+        "3d printing", "3d models", "cad", "games", "finance",
+        "xyzfiles", "extracted", "timelapse", "hardware", "projects"
+    })
     if folder.name.lower() in cat_names:
         return ProtectionCheck(True, f"Already an organized category ({folder.name})", "organized_category")
 

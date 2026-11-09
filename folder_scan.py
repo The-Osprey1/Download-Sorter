@@ -44,7 +44,7 @@ CATEGORY_ALIASES: dict[str, frozenset[str]] = {
     "Audio": frozenset({"music", "songs", "sounds", "podcasts"}),
     "Archives": frozenset({"zips", "zip", "compressed"}),
     "Installers": frozenset({"install", "installs", "setup", "setups", "programs", "apps", "software"}),
-    "3D Models": frozenset({"3d prints", "3d printing", "3d print", "prints", "models", "stl", "stls", "3d", "cad"}),
+    "3D Models": frozenset({"3d prints", "3d printing", "3d print", "prints", "models", "stl", "stls", "3d"}),
     "Code": frozenset({"scripts", "source", "programming", "projects code"}),
 }
 
