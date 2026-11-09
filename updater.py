@@ -5,6 +5,9 @@ when this can work: only in the installed app, never when running from source.
 
 1. ``download`` streams the installer from this repository's GitHub release
    into ``%LOCALAPPDATA%\\download-sorter\\updates``, reporting progress.
+   GitHub's download server sometimes answers "504" or drops the connection,
+   so each download is tried up to 3 times, a few seconds apart. An installer
+   already downloaded and checked is used again instead of downloading it twice.
 2. It then downloads the release's ``checksums.txt`` and checks the file's size
    and SHA-256 against it. A file that doesn't match is deleted, never run.
    (A file downloaded this way has no "came from the internet" mark, so
@@ -23,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +35,11 @@ import update_check
 CHUNK = 64 * 1024
 READ_TIMEOUT_SECONDS = 30.0
 MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+# GitHub's download server sometimes answers "504 Gateway Timeout" or drops the
+# connection; asking again a moment later usually works. Seconds to wait
+# before each new try (so 3 tries in all).
+RETRY_WAITS = (2.0, 5.0)
+_sleep = time.sleep
 
 
 class UpdateError(Exception):
@@ -87,6 +96,48 @@ def _open(url: str):
     return urllib.request.urlopen(request, timeout=READ_TIMEOUT_SECONDS)
 
 
+def _is_temporary(exc: BaseException) -> bool:
+    """True for failures worth trying again: server errors and network trouble."""
+    import urllib.error
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code == 429
+    return isinstance(exc, (OSError, TimeoutError))
+
+
+def _problem(exc: BaseException) -> str:
+    """A short, plain description of why a download failed."""
+    import urllib.error
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"GitHub answered with error {exc.code}"
+    return "Couldn't reach GitHub"
+
+
+def _with_retries(task: Callable[[], object], cancelled: Callable[[], bool] | None = None):
+    """Run ``task``, trying again after a short wait when it fails for a temporary reason."""
+    for attempt in range(len(RETRY_WAITS) + 1):
+        try:
+            return task()
+        except UpdateError:
+            raise
+        except Exception as exc:
+            if attempt == len(RETRY_WAITS) or not _is_temporary(exc):
+                raise
+            logging.info("Update download failed (%s); trying again", exc)
+            _sleep(RETRY_WAITS[attempt])
+            if cancelled and cancelled():
+                raise Cancelled("Download cancelled.")
+
+
+def _sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(CHUNK), b""):
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
 def expected_sha256(checksums_text: str, file_name: str) -> str | None:
     """The SHA-256 listed for ``file_name`` in a checksums.txt ("<hash>  <name>")."""
     for line in checksums_text.splitlines():
@@ -115,22 +166,21 @@ def download(
     folder.mkdir(parents=True, exist_ok=True)
     final = folder / name
     partial = folder / (name + ".part")
-    digest = hashlib.sha256()
-    received = 0
 
-    try:
+    def read_checksums() -> str:
         with _open(str(release["checksums_url"])) as response:
-            checksums = response.read(64 * 1024).decode("utf-8", errors="replace")
-        wanted = expected_sha256(checksums, name)
-        if not wanted:
-            raise UpdateError("The release doesn't list a checksum for the installer.")
+            return response.read(64 * 1024).decode("utf-8", errors="replace")
 
+    def fetch_installer() -> tuple[int, str, int]:
+        expected = total
+        digest = hashlib.sha256()
+        received = 0
         with _open(str(release["installer_url"])) as response, partial.open("wb") as out:
             length = response.headers.get("Content-Length") if hasattr(response, "headers") else None
-            if not total and length and str(length).isdigit():
-                total = int(length)
+            if not expected and length and str(length).isdigit():
+                expected = int(length)
             if progress:
-                progress(0, total)
+                progress(0, expected)
             while True:
                 if cancelled and cancelled():
                     raise Cancelled("Download cancelled.")
@@ -143,11 +193,26 @@ def download(
                 digest.update(chunk)
                 out.write(chunk)
                 if progress:
-                    progress(received, total)
+                    progress(received, expected)
+        return received, digest.hexdigest().lower(), expected
 
-        if total and received != total:
+    try:
+        wanted = expected_sha256(str(_with_retries(read_checksums, cancelled)), name)
+        if not wanted:
+            raise UpdateError("The release doesn't list a checksum for the installer.")
+
+        # Already downloaded and checked earlier (for example before a failed
+        # restart)? Use it instead of downloading it again.
+        if final.is_file() and _sha256_of(final) == wanted:
+            if progress:
+                size = final.stat().st_size
+                progress(size, size)
+            return final
+
+        received, got, expected = _with_retries(fetch_installer, cancelled)  # type: ignore[misc]
+        if expected and received != expected:
             raise UpdateError("The download was incomplete.")
-        if digest.hexdigest().lower() != wanted:
+        if got != wanted:
             raise UpdateError("The download didn't match the published file.")
         os.replace(partial, final)
         return final
@@ -157,7 +222,9 @@ def download(
     except Exception as exc:
         partial.unlink(missing_ok=True)
         logging.warning("Update download failed: %s", exc)
-        raise UpdateError("Couldn't download the update.") from exc
+        raise UpdateError(
+            f"Couldn't download the update ({_problem(exc)}). Try again in a few minutes."
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
