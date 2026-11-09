@@ -8,7 +8,7 @@ never drift between places.
 from __future__ import annotations
 
 APP_NAME = "Download Sorter"
-__version__ = "2.2.1"
+__version__ = "2.2.2"
 AUTHOR = "Devyn Fidel"
 YEAR = 2026
 CREDIT = f"Made by {AUTHOR} ({YEAR})"

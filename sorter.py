@@ -157,9 +157,24 @@ DEFAULT_CONFIG: dict = {
             "name": "3D Models & Print Files",
             "folder": "3D Models",
             "extensions": [
-                ".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs",
+                ".stl", ".3mf", ".obj",
                 ".3ds", ".fbx", ".blend", ".glb", ".gltf",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "CAD & Engineering",
+            "folder": "CAD",
+            "extensions": [
+                ".step", ".stp", ".iges", ".igs",
                 ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf",
+            ],
+            "enabled": True,
+        },
+        {
+            "name": "CNC & Toolpaths",
+            "folder": "CAD\\CAM & CNC Toolpaths",
+            "extensions": [
                 ".gcode", ".bgcode", ".nc", ".tap", ".ngc", ".gco", ".g",
             ],
             "enabled": True,

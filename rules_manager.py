@@ -19,6 +19,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+import about
+if about.handle_version_flag():
+    sys.exit(0)
+
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPalette
 from PySide6.QtWidgets import (
