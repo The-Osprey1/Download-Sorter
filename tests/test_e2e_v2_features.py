@@ -65,6 +65,24 @@ import suite_theme
 # Helper Functions
 # ==============================================================================
 
+def _treat_files_as_finished(test: unittest.TestCase) -> None:
+    """Treat every existing file as finished downloading for the rest of ``test``.
+
+    These tests are about where files go and the 3MF hold, not about waiting for
+    a download to finish. On Windows a file written a moment ago can briefly look
+    unfinished (antivirus still has it open, or its timestamp is a hair ahead),
+    so the hold or the move was skipped now and then on the Windows test
+    machines. Same idea as the ``finished_downloads`` fixture in conftest.py.
+    """
+    for target, replacement in (
+        ("sorter.is_file_ready_to_move", lambda path, settle: Path(path).is_file()),
+        ("sorter.is_file_locked", lambda path: False),
+    ):
+        patcher = patch(target, side_effect=replacement)
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
+
 def create_sample_3mf(
     dest_path: Path,
     thumbnail_rel_path: str = "Metadata/plate_1.png",
@@ -469,6 +487,7 @@ class Test3MFGracePeriodHoldTier1AndTier2(unittest.TestCase):
     """Tier 1 (Feature Coverage) & Tier 2 (Boundary) for 3MF Hold & MakerWorld."""
 
     def setUp(self) -> None:
+        _treat_files_as_finished(self)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.test_root = Path(self.temp_dir.name).resolve()
         self.downloads = self.test_root / "Downloads"
@@ -650,6 +669,7 @@ class TestStagedMachineRemodelTier1AndTier2(unittest.TestCase):
     """Tier 1 (Feature Coverage) & Tier 2 (Boundary) for Machine Remodel Engine & UI."""
 
     def setUp(self) -> None:
+        _treat_files_as_finished(self)
         from PySide6.QtWidgets import QApplication
         self.app = QApplication.instance() or QApplication([])
 
@@ -933,14 +953,7 @@ class TestRealWorldApplicationScenariosTier4(unittest.TestCase):
 
     def test_t4_scenario_makerworld_lifecycle(self) -> None:
         """Scenario A: User downloads 3MF model from MakerWorld -> held for 7 days -> 'File now'."""
-        # This scenario is about the hold, not about waiting for a download to
-        # finish. On Windows a file written a moment ago can briefly look
-        # unfinished (antivirus still has it open, or its modified time is a
-        # clock tick ahead), so the hold was skipped now and then on the
-        # Windows test machines. Treat the sample file as finished.
-        readiness = patch("sorter.is_file_ready_to_move", side_effect=lambda path, settle: Path(path).is_file())
-        readiness.start()
-        self.addCleanup(readiness.stop)
+        _treat_files_as_finished(self)
 
         downloads = self.root / "Downloads"
         downloads.mkdir()
