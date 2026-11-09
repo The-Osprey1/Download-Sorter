@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Rules can check the website a file came from (`sorter.py`)**: a learned rule like "“statement” files from yourbank.com" only matches statements downloaded from that site. The Rules page shows it as "(downloaded from yourbank.com)".
 
 * **Ideas from similar tools, rebuilt for Download Sorter** (Hazel, File Juggler, organize, AI File Sorter, a browser add-on that sorts by website):
-  * **Course websites (`folder_scan.py`)**: an optional starter folder files anything downloaded from Canvas, Blackboard, Brightspace, Google Classroom, Gradescope, Piazza, Schoology or MoodleCloud into `Documents\School`, whatever the file is called. Offered in the welcome steps.
+  * **Course websites (`folder_scan.py`)**: an optional starter folder files anything downloaded from Canvas, Blackboard, Brightspace, Gradescope, Piazza, Schoology or MoodleCloud into `Documents\School` (Google Classroom files only when downloaded from the Classroom page itself, since most come from Google Drive), whatever the file is called. Offered in the welcome steps.
   * **Storage Sense warning (`config_manager.py`, Settings)**: if Windows Storage Sense is set to delete files in Downloads after a number of days, Settings says so and links to the setting, since that would delete sorted files too.
   * **Old installers and zips to the Recycle Bin (`clean_old.py`, `watch.py`, Settings)**: once a day, if turned on, files older than 30 days in Installers and Archives go to the Recycle Bin, with a ribbon saying how much space it freed.
   * **A preview before the first sort (`onboarding.py`)**: finishing the welcome steps with "Sort the files already in my Downloads folder" first shows how many files would go to which folder, with **Sort them** or **Not now**.
@@ -43,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * The tray reads "1 file filed today" instead of "1 file(s)", and only mentions held 3MF files when there are some.
 
 ### Fixed
+* **Saving rules undid other settings (`rules_manager.py`)**: the Rules page saved the whole settings file as it was when the window opened, so it could turn an option you had just changed in Settings back off, or remove a rule you had just added from a learning ribbon. It now changes only the rules in the current file, and shows rules added elsewhere.
+* **Settings could remove a rule just learned (`onboarding.py`, `config_manager.py`)**: each Settings option now changes only itself in the current settings file.
+* **Nothing private in bug reports (`problem_report.py`)**: a bug report opened from a crash showed the error message as its title, which can contain a file's full path and your Windows user name. The title now names only the kind of error, and the report hides your user name (`%USERPROFILE%`) and file names (`<file>.pdf`). Crash reports saved on your PC keep the full details.
+* **No question during an update (`rules_manager.py`, `onboarding.py`)**: closing for an update with unsaved rule changes now saves them instead of asking while the installer waits.
+* **Daily clean-up and renamed folders (`clean_old.py`)**: it now follows the Installers and Archives rules, so it also cleans up when setup pointed them at one of your own folders.
 * **Plural words (`learning.py`)**: "taxes", "boxes" and "classes" were read as "taxe", "boxe" and "classe".
 
 ## [2.2.2] - 2026-11-09

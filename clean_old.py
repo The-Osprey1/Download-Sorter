@@ -102,8 +102,13 @@ def auto_cleanup(config: dict, now: float | None = None) -> dict | None:
     days = max(1.0, float(block.get("days", 30) or 30))
     downloads = watch_root(config)
     count = total = 0
+    # The names are categories ("Installers"); setup may have pointed them at
+    # one of your own folders (e.g. "Programs"), so use the rule's folder.
+    rule_folders = {str(r.get("name") or "").lower(): str(r.get("folder") or "")
+                    for r in config.get("extension_rules", []) if isinstance(r, dict)}
     for name in block.get("folders") or ["Installers", "Archives"]:
-        for path, _age, size in find_old_files(folder_path(downloads, str(name)), days):
+        folder = rule_folders.get(str(name).lower()) or str(name)
+        for path, _age, size in find_old_files(folder_path(downloads, folder), days):
             if send_to_recycle_bin(path):
                 count += 1
                 total += size

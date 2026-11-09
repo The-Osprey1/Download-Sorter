@@ -117,6 +117,22 @@ def _backup_v1_config(target: Path) -> None:
             pass
 
 
+def current_sorter_config(fallback: dict[str, Any]) -> dict[str, Any]:
+    """The settings as saved right now, or ``fallback`` when there is no settings file yet.
+
+    Pages that change one thing (a Settings option, the rules) start from this
+    instead of the copy they loaded earlier, so they don't undo a change made
+    meanwhile somewhere else: another page, or a rule added from a learning
+    ribbon (which runs in its own process).
+    """
+    if not Path(SORTER_CONFIG_FILE).exists():
+        return fallback
+    try:
+        return load_sorter_config()
+    except Exception:
+        return fallback
+
+
 def save_sorter_config(config: dict[str, Any], config_path: Path | str | None = None) -> bool:
     """Safely persist sorter configuration using a 5-stage atomic commit.
 

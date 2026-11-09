@@ -1814,6 +1814,7 @@ class RulesManagerDialog(QDialog):
     def load_data(self) -> None:
         """Load persistent config and active project state into UI."""
         self._config = suite_data.load_sorter_config()
+        self._loaded_rule_names = {str(r.get("name") or "").lower() for r in self._config.get("keyword_rules", [])}
         self._keyword_table.load_rules(self._config.get("keyword_rules", []))
         self._extension_table.load_rules(self._config.get("extension_rules", []))
 
@@ -1846,10 +1847,32 @@ class RulesManagerDialog(QDialog):
         self._sandbox.set_config_and_project(draft_config, active_proj)
         self._set_dirty(True)
 
+    def config_to_save(self) -> dict[str, Any]:
+        """The settings file as it is now, with this page's rules put in.
+
+        Only the rules belong to this page. Everything else (Settings options,
+        and name rules added elsewhere since the window opened, such as one
+        you said Yes to in a learning ribbon) is kept as it is on disk.
+        """
+        draft = self.get_current_draft_config()
+        current = suite_data.current_sorter_config(draft) if hasattr(suite_data, "current_sorter_config") else draft
+        if current is draft:
+            return draft
+        current = copy.deepcopy(current)
+        loaded = getattr(self, "_loaded_rule_names", set())
+        mine = {str(r.get("name") or "").lower() for r in draft["keyword_rules"]}
+        added_elsewhere = [
+            r for r in current.get("keyword_rules", [])
+            if str(r.get("name") or "").lower() not in loaded | mine
+        ]
+        current["keyword_rules"] = added_elsewhere + draft["keyword_rules"]
+        current["extension_rules"] = draft["extension_rules"]
+        return current
+
     def save_changes(self) -> bool:
         """Atomically persist draft configuration and active project state."""
         try:
-            draft_config = self.get_current_draft_config()
+            draft_config = self.config_to_save()
             ok = suite_data.save_sorter_config(draft_config)
             if not ok:
                 QMessageBox.critical(self, "Couldn't save", "Your rules couldn't be saved. Check that the settings file isn't open in another program.")
@@ -1858,6 +1881,10 @@ class RulesManagerDialog(QDialog):
             proj_state = self._active_project_card.get_state()
             suite_data.save_active_project(proj_state)
 
+            self._config = draft_config
+            self._loaded_rule_names = {str(r.get("name") or "").lower() for r in draft_config["keyword_rules"]}
+            if len(draft_config["keyword_rules"]) != len(self._keyword_table.get_rules()):
+                self._keyword_table.load_rules(draft_config["keyword_rules"])  # show rules added elsewhere
             self._set_dirty(False)
             self._save_btn.setText("Saved")
             return True
@@ -1970,7 +1997,10 @@ class RulesManagerDialog(QDialog):
 
     def closeEvent(self, event) -> None:
         if getattr(self, "_dirty", False):
-            answer = self.ask_to_save_changes()
+            app = QApplication.instance()
+            # Closing for an update: there's no time to ask, so keep the changes.
+            updating = bool(app is not None and app.property(QUITTING_FOR_UPDATE))
+            answer = "save" if updating else self.ask_to_save_changes()
             if answer == "cancel" or (answer == "save" and not self.save_changes()):
                 event.ignore()
                 return
@@ -2010,6 +2040,10 @@ def _start_background_sorter() -> None:
         logging.exception("Could not start the background sorter after setup")
 
 
+# Set on the app when it closes for an update (installer --quit, or Restart and install).
+QUITTING_FOR_UPDATE = "downloadSorterQuittingForUpdate"
+
+
 def _close_when_installer_asks(app) -> None:
     """Close this window process when ``DownloadSorter.exe --quit`` is run
     (the installer does that before replacing the app's files)."""
@@ -2020,7 +2054,11 @@ def _close_when_installer_asks(app) -> None:
         return
     timer = QTimer(app)
     timer.setInterval(500)
-    timer.timeout.connect(lambda: listener.requested() and app.quit())
+    def quit_for_update() -> None:
+        app.setProperty(QUITTING_FOR_UPDATE, True)  # windows save instead of asking
+        app.quit()
+
+    timer.timeout.connect(lambda: listener.requested() and quit_for_update())
     timer.start()
     app._quit_listener = listener  # keep it alive with the app
 
