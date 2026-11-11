@@ -225,7 +225,7 @@ def check_folder_protection(
     cat_names = {c.lower() for c in category_folders}
     cat_names.update({
         "3d printing", "3d models", "cad", "games", "finance",
-        "xyzfiles", "extracted", "timelapse", "hardware", "projects"
+        "extracted", "timelapse", "hardware", "projects"
     })
     if folder.name.lower() in cat_names:
         return ProtectionCheck(True, f"Already an organized category ({folder.name})", "organized_category")
@@ -621,7 +621,7 @@ class RemodelEngine:
                                 pass
                             all_scanned_files.append(sub)
                             # Preview category
-                            routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub)
+                            routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub, use_my_folders=False)
                             dest_name = Path(routed.get("destination", "Other")).parts[0] if routed.get("destination") else "Other"
                             cat_preview[dest_name] = cat_preview.get(dest_name, 0) + 1
                 except (PermissionError, OSError):
@@ -696,7 +696,7 @@ class RemodelEngine:
         for lf in loose_files:
             if lf in duplicate_paths:
                 continue
-            routed = sorter.evaluate_routing(lf.name, self.config, file_path=lf)
+            routed = sorter.evaluate_routing(lf.name, self.config, file_path=lf, use_my_folders=False)
             if routed.get("match_type") == "ignored":
                 continue
             dest_dir = sorter.folder_path(root, routed.get("destination", "Other"))
@@ -838,7 +838,7 @@ class RemodelEngine:
                         if any(m["src"] == str(sub) for m in executed_moves):
                             continue
 
-                        routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub)
+                        routed = sorter.evaluate_routing(sub.name, self.config, file_path=sub, use_my_folders=False)
                         if routed.get("match_type") == "ignored":
                             continue
                         dest_dir = sorter.folder_path(plan.target_root, routed.get("destination", "Other"))

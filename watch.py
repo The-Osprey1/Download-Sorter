@@ -133,7 +133,8 @@ def is_instance_running(name: str = "DownloadSorter_SingleInstance") -> bool:
 
 
 class DownloadsHandler(FileSystemEventHandler):
-    """Monitors Downloads recursively for top-level downloads and misplaced category files."""
+    """Monitors Downloads recursively for top-level downloads and files misplaced in
+    the sorter's own folders. Folders the user made are never sorted."""
     def __init__(self, root: Path, config: dict, routing_context: RoutingContext | None = None) -> None:
         self._lock = threading.Lock()
         self.root = root.resolve()
@@ -174,7 +175,8 @@ class DownloadsHandler(FileSystemEventHandler):
             _enqueue("download", PENDING_DOWNLOADS, path, cfg)
             return
 
-        # Case 2: File is sitting directly inside one of our managed category folders
+        # Case 2: File is sitting directly inside one of the sorter's own folders:
+        # a main folder (Documents), a type folder (Documents\PDF) or a rule's folder.
         parent_rel = str(path.parent.resolve().relative_to(self.root)).replace("/", "\\")
         if parent_rel.lower() in categories:
             # Classification is deliberately deferred until the file is stable;
@@ -183,9 +185,8 @@ class DownloadsHandler(FileSystemEventHandler):
             _enqueue("misplaced", PENDING_MISPLACED, path, cfg)
             return
 
-        # Case 3: File landed directly inside an unmanaged subfolder (e.g. browser remembered an old folder)
-        if len(rel.parts) == 2:
-            _enqueue("misplaced", PENDING_MISPLACED, path, cfg)
+        # Anything else is in a folder the user made. Files there are theirs:
+        # nothing is taken out of a folder you made.
 
     def on_created(self, event) -> None:  # type: ignore[no-untyped-def]
         if not event.is_directory:
@@ -319,9 +320,20 @@ def drain(
     routing_context: RoutingContext | None = None,
     on_activity: Callable[[int], None] | None = None,
 ) -> int:
-    moved_count = 0
     if is_paused():
-        return moved_count
+        return 0
+    # The user's own folders are read once for the whole batch.
+    with sorter.reuse_my_folders():
+        return _drain(config, root, routing_context, on_activity)
+
+
+def _drain(
+    config: dict,
+    root: Path | None,
+    routing_context: RoutingContext | None,
+    on_activity: Callable[[int], None] | None,
+) -> int:
+    moved_count = 0
     target_root = root or watch_root(config)
 
     routing_context = routing_context or compile_routing(config, load_active_project())
@@ -746,14 +758,35 @@ def _startup_sweep(config: dict, routing_context: RoutingContext | None, root: P
         skip_before=cutoff,
     )
     logging.info("Startup Documents sweep moved %s file(s)", docs_moved)
+    # Its own batch: after an update that changes the folder layout, this is what
+    # moves files into their type folders (Documents\PDF), and "Undo last sort"
+    # then undoes exactly that.
+    tidy_id = uuid.uuid4().hex[:8]
     misplaced_moved = sort_existing_misplaced(
         config,
-        batch_id=batch_id,
+        batch_id=tidy_id,
         routing_context=routing_context,
         skip_before=cutoff,
     )
     if misplaced_moved:
         logging.info("Startup category sweep corrected %s misplaced file(s)", misplaced_moved)
+        _notify_tidied(config, misplaced_moved)
+
+
+def _notify_tidied(config: dict, count: int) -> None:
+    """Say that files inside the sorted folders were moved to where they belong now."""
+    if not (config.get("ribbon_enabled", True) and config.get("notifications", True)):
+        return
+    try:
+        import ribbon_popup
+        noun = "file" if count == 1 else "files"
+        ribbon_popup.notify_summary(
+            "Folders tidied",
+            f"Moved {count} {noun} into the folder for their kind, like Documents\\PDF. "
+            "“Undo last sort” puts them back.",
+        )
+    except Exception as err:
+        logging.debug("Tidy ribbon skipped: %s", err)
 
 
 def run(
@@ -799,6 +832,8 @@ def run(
         except Exception as err:
             logging.debug("Quick switcher monitor start skipped: %s", err)
     setup_pending = wait_for_setup and not config.get("onboarding_completed", False)
+    # A sweep that was due while sorting was paused; it runs when sorting is resumed.
+    sweep_pending = False
     try:
         # Observe first, reconcile second: a download arriving during the scan is
         # queued and cannot fall into the startup race window.
@@ -806,6 +841,10 @@ def run(
             SETUP_PENDING.set()
             write_runtime_state("waiting_for_setup", "waiting for the welcome wizard")
             logging.info("Waiting for the welcome wizard to finish before sorting anything")
+        elif is_paused():
+            # Paused means nothing moves, including what is already in the folders.
+            sweep_pending = True
+            logging.info("Sorting is paused; the startup sort waits until it is resumed")
         else:
             _startup_sweep(config, routing_context, root)
 
@@ -836,7 +875,10 @@ def run(
                     SETUP_PENDING.clear()
                     write_runtime_state("running", "welcome wizard finished")
                     logging.info("Welcome wizard finished; sorting starts now")
-                    _startup_sweep(config, routing_context, root)
+                    if is_paused():
+                        sweep_pending = True
+                    else:
+                        _startup_sweep(config, routing_context, root)
                     if on_sorted is not None:
                         try:
                             on_sorted(0)
@@ -845,13 +887,25 @@ def run(
                 elif retargeted and not setup_pending:
                     # Watched folders changed: behave as a restart would for the new
                     # folders (sweep what is already there).
-                    cutoff = existing_files_cutoff(config)
-                    sweep_id = uuid.uuid4().hex[:8]
-                    sort_existing(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
-                    sort_existing_documents(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
+                    if is_paused():
+                        sweep_pending = True
+                    else:
+                        cutoff = existing_files_cutoff(config)
+                        sweep_id = uuid.uuid4().hex[:8]
+                        sort_existing(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
+                        sort_existing_documents(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
 
             if setup_pending:
                 continue
+
+            if sweep_pending and not is_paused():
+                sweep_pending = False
+                _startup_sweep(config, routing_context, root)
+                if on_sorted is not None:
+                    try:
+                        on_sorted(0)
+                    except Exception:
+                        logging.exception("Activity callback failed")
 
             moved = drain(config, root=root, routing_context=routing_context, on_activity=on_sorted)
             if moved and on_sorted is not None:

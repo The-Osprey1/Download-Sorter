@@ -168,7 +168,7 @@ class TestMachineRemodel(unittest.TestCase):
         # Check that loose files were organized into category folders
         doc_folder = self.sandbox / "Documents"
         installer_folder = self.sandbox / "Installers"
-        self.assertTrue((doc_folder / "PDFs" / "Annual_Report.pdf").exists() or (doc_folder / "Annual_Report.pdf").exists() or (self.sandbox / "Academics" / "Annual_Report.pdf").exists())
+        self.assertTrue((doc_folder / "PDF" / "Annual_Report.pdf").exists() or (doc_folder / "Annual_Report.pdf").exists() or (self.sandbox / "Academics" / "Annual_Report.pdf").exists())
         self.assertTrue((installer_folder / "VSCodeSetup.exe").exists())
 
         # Check duplicate quarantine

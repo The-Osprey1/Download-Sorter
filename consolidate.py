@@ -1,10 +1,10 @@
-"""Consolidate nested subfolders into official flat categories.
+"""Re-file old nested folders by the current rules.
 
-Flattens legacy nested subfolders (e.g. Downloads/Documents/PDFs,
-Downloads/Documents/Word, Downloads/3D Models/STL, Downloads/Spreadsheets)
-directly into official flat categories (Downloads/Documents,
-Downloads/3D Models, etc.) using safe_ops with atomic collision resolution
-and reversible history journaling.
+Older versions of Download Sorter made folders such as Downloads/Documents/PDFs,
+Downloads/3D Models/STL or Downloads/Spreadsheets. This files everything in them
+where the current rules put it, which is the two-level layout (Downloads/Documents/PDF,
+Downloads/3D Models/STL), using safe_ops so every move is journaled and can be
+undone. A file that is already in the right folder is left where it is.
 """
 
 from __future__ import annotations

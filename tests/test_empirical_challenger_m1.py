@@ -151,7 +151,7 @@ def test_matrix_vase_multicolor_3mf_oracle(config, expires_at, target_dir, cad_e
     else:
         assert res["is_active_project"] is False
         assert res["match_type"] == "extension"
-        assert res["destination"] == "3D Models"
+        assert res["destination"] == "3D Models\\3MF"
 
 
 @pytest.mark.parametrize("expires_at", EXPIRES_AT_VALUES)
@@ -178,7 +178,7 @@ def test_matrix_bracket_op1_nc_no_sample(config, expires_at, target_dir, cad_ext
     else:
         assert res["is_active_project"] is False
         assert res["match_type"] == "extension"
-        assert res["destination"] == "3D Models"
+        assert res["destination"] == "3D Models\\G-code"
         assert res["winning_rule"] == "3D Models & Print Files"
 
 
@@ -206,7 +206,7 @@ def test_matrix_bracket_op1_nc_haas_sample(config, expires_at, target_dir, cad_e
     else:
         assert res["is_active_project"] is False
         assert res["match_type"] == "gcode_sniffer"
-        assert res["destination"] == "3D Models"
+        assert res["destination"] == "3D Models\\CNC"
         assert res["sniffer_details"]["is_haas"] is True
 
 
@@ -234,7 +234,7 @@ def test_matrix_bracket_op1_nc_printer_sample(config, expires_at, target_dir, ca
     else:
         assert res["is_active_project"] is False
         assert res["match_type"] == "gcode_sniffer"
-        assert res["destination"] == "3D Models"
+        assert res["destination"] == "3D Models\\G-code"
         assert res["sniffer_details"]["is_3d_printer"] is True
 
 

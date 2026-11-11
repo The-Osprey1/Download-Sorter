@@ -87,6 +87,15 @@ V2_DEFAULTS: dict = {
         "desktop_min_age_days": 30,
     },
     "makerworld_destination": MAKERWORLD_FOLDER,
+    # Second tier: inside a main folder, each kind of file gets its own folder
+    # (Documents\PDF holds only PDFs). "names" changes or adds the folder for an
+    # extension ({".pdf": "PDFs"}); an empty name keeps that kind in the main folder.
+    "type_folders": {"enabled": True, "names": {}},
+    # A folder you make in Downloads, or inside a main folder, collects new files
+    # named after it: 3D Models\Flanged Mace takes "flanged_mace_v3.f3d". Nothing
+    # is ever taken out of a folder you made. "skip" lists folders that should
+    # not collect files ("3D Models\Old").
+    "my_folders": {"enabled": True, "skip": []},
 }
 
 # All 27 CAD / 3D / CNC extensions captured by Active Project catch-all
@@ -300,7 +309,7 @@ def compile_routing(config: dict, active_project: dict | None = None) -> Routing
         ),
         document_ignore_dirs=tuple(str(item).lower() for item in config.get("documents_ignore_dirs", [])),
         category_folders=frozenset(
-            folder.replace("/", "\\").lower() for folder in collect_category_folders(config)
+            folder.replace("/", "\\").lower() for folder in collect_managed_folders(config)
         ),
         keyword_extensions=tuple(
             frozenset(str(item).lower() for item in rule.get("extensions", []))
@@ -1092,6 +1101,304 @@ def _option(config: dict, block: str, key: str) -> bool:
     return isinstance(value, dict) and bool(value.get(key))
 
 
+# ---------------------------------------------------------------------------
+# Folder layout: main folder > kind of file, plus the folders you make yourself
+# ---------------------------------------------------------------------------
+# Downloads
+#   Documents
+#     PDF              <- second tier: only PDFs
+#   3D Models
+#     STL
+#     Flanged Mace     <- a folder you made: files named after it land here
+#   Flanged Mace       <- or keep the project at the top of Downloads
+
+# Second tier. Kinds of file that are rare stay in the main folder.
+DEFAULT_TYPE_FOLDERS: dict[str, tuple[str, ...]] = {
+    # Documents
+    "PDF": (".pdf",),
+    "Word": (".doc", ".docx", ".odt", ".rtf"),
+    "Spreadsheets": (".xls", ".xlsx", ".xlsm", ".csv", ".ods"),
+    "Presentations": (".ppt", ".pptx", ".odp", ".key"),
+    "Text": (".txt", ".md", ".tex", ".bib"),
+    "Ebooks": (".epub", ".mobi"),
+    # 3D Models
+    "STL": (".stl",),
+    "3MF": (".3mf",),
+    "OBJ": (".obj",),
+    "Blender": (".blend",),
+    "G-code": (".gcode", ".bgcode", ".gco", ".g", ".nc", ".tap", ".ngc"),
+    # CAD
+    "STEP": (".step", ".stp"),
+    "IGES": (".iges", ".igs"),
+    "Fusion 360": (".f3d", ".f3z"),
+    "Inventor": (".ipt", ".iam"),
+    "SolidWorks": (".sldprt", ".sldasm", ".slddrw"),
+    "AutoCAD": (".dwg", ".dxf"),
+    # Images
+    "JPG": (".jpg", ".jpeg"),
+    "PNG": (".png",),
+    "GIF": (".gif",),
+    "Vector": (".svg", ".ai", ".eps", ".cdr"),
+    # Videos
+    "MP4": (".mp4", ".m4v"),
+    "MOV": (".mov",),
+    "MKV": (".mkv",),
+    # Audio
+    "MP3": (".mp3",),
+    "WAV": (".wav",),
+    "FLAC": (".flac",),
+    # Code
+    "Python": (".py",),
+    "Web": (".js", ".ts", ".jsx", ".tsx", ".html", ".css"),
+    "C and C++": (".c", ".cpp", ".h", ".hpp"),
+    "Data": (".json", ".yaml", ".yml", ".toml", ".xml", ".sql", ".db", ".sqlite", ".parquet", ".feather"),
+    "Logs": (".log", ".dmp", ".out"),
+}
+_DEFAULT_TYPE_BY_EXT: dict[str, str] = {
+    ext: name for name, exts in DEFAULT_TYPE_FOLDERS.items() for ext in exts
+}
+# Toolpaths the G-code sniffer recognises as Haas CNC programs.
+HAAS_TYPE_FOLDER = "CNC"
+
+# A folder with one of these names says nothing about which files belong in it,
+# so it never collects files by name ("New folder", "Old", "PDFs", "Parts").
+GENERIC_FOLDER_WORDS = frozenset({
+    "new", "folder", "old", "misc", "stuff", "temp", "tmp", "other", "others", "file",
+    "files", "download", "downloads", "backup", "backups", "copy", "copies", "untitled",
+    "test", "tests", "sorted", "unsorted", "random", "various", "junk", "final", "draft",
+    "drafts", "export", "exports", "import", "imports", "project", "projects", "work",
+    "part", "parts", "print", "prints", "printed", "model", "models", "doc", "docs",
+    "document", "documents", "image", "images", "picture", "pictures", "photo", "photos",
+    "video", "videos", "music", "audio", "zip", "zips", "archive", "archives", "installer",
+    "installers", "data", "code", "pdf", "pdfs", "word", "stl", "stls", "3mf", "step",
+    "cad", "gcode", "spreadsheet", "spreadsheets", "presentation", "presentations", "text",
+    "ebook", "ebooks", "book", "books", "song", "songs", "movie", "movies", "game", "games",
+    "the", "and", "my",
+})
+MIN_FOLDER_NAME_LETTERS = 4
+
+
+def type_folders_enabled(config: dict) -> bool:
+    """On unless switched off: settings saved before this option existed get the new layout."""
+    block = config.get("type_folders") if isinstance(config, dict) else None
+    return not isinstance(block, dict) or bool(block.get("enabled", True))
+
+
+def type_folder_for(ext: str, config: dict) -> str:
+    """The second-tier folder for a file extension ("PDF" for ".pdf"), or ''."""
+    ext = str(ext or "").lower()
+    block = config.get("type_folders") if isinstance(config, dict) else None
+    names = block.get("names") if isinstance(block, dict) else None
+    if isinstance(names, dict) and names:
+        for key, value in names.items():
+            if str(key).lower() == ext:
+                value = str(value or "").strip()
+                return sanitize_folder_segment(value) if value else ""
+    return _DEFAULT_TYPE_BY_EXT.get(ext, "")
+
+
+def with_type_folder(folder: str, ext: str, config: dict, name: str | None = None) -> str:
+    """``folder`` plus its second tier: "Documents" -> "Documents\\PDF" for a PDF.
+
+    Only a main folder (one name, inside Downloads) gets a second tier. A rule
+    that already points deeper ("Documents\\Invoices"), or at a folder outside
+    Downloads, is used exactly as written.
+    """
+    folder = str(folder or "")
+    if not folder or not type_folders_enabled(config):
+        return folder
+    if len(split_folder(folder)) != 1 or Path(folder).is_absolute() or ":" in folder:
+        return folder
+    sub = name or type_folder_for(ext, config)
+    return f"{split_folder(folder)[0]}\\{sub}" if sub else folder
+
+
+def collect_managed_folders(config: dict) -> list[str]:
+    """Every folder Download Sorter itself files into: the main folders and rule
+    folders, plus the type folders inside the main folders.
+
+    These are the only folders it ever corrects a misplaced file in. Any other
+    folder was made by the user and is left as it is.
+    """
+    folders = list(collect_category_folders(config))
+    if type_folders_enabled(config):
+        for rule in config.get("extension_rules", []):
+            if not isinstance(rule, dict):
+                continue
+            base = str(rule.get("folder") or "")
+            for ext in rule.get("extensions", []) or []:
+                folders.append(with_type_folder(base, str(ext), config))
+        gcode_dest = str(config.get("gcode_destination") or "")
+        for ext in GCODE_SNIFFER_EXTENSIONS:
+            folders.append(with_type_folder(gcode_dest, ext, config))
+        folders.append(with_type_folder(str(config.get("haas_destination") or ""), "", config, HAAS_TYPE_FOLDER))
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for folder in folders:
+        key = str(folder).replace("/", "\\").strip("\\").lower()
+        if key and key not in seen:
+            seen.add(key)
+            ordered.append(str(folder))
+    return ordered
+
+
+def my_folders_enabled(config: dict) -> bool:
+    block = config.get("my_folders") if isinstance(config, dict) else None
+    return not isinstance(block, dict) or bool(block.get("enabled", True))
+
+
+def folder_collects_by_name(name: str) -> bool:
+    """True when a folder's name is specific enough to collect files named after it."""
+    words = [w for w in re.split(r"[^a-z0-9]+", str(name).lower()) if w]
+    letters = "".join(words)
+    if len(letters) < MIN_FOLDER_NAME_LETTERS or not any(c.isalpha() for c in letters):
+        return False
+    if MONTH_FOLDER.match(str(name).strip()):
+        return False
+    return not all(word in GENERIC_FOLDER_WORDS or word.isdigit() for word in words)
+
+
+def _subfolders(folder: Path) -> list[os.DirEntry]:
+    try:
+        with os.scandir(folder) as entries:
+            return [e for e in entries if e.is_dir(follow_symlinks=False)]
+    except OSError:
+        return []
+
+
+def _has_only_subfolders(folder: str) -> bool:
+    """True for a folder holding folders but no files of its own."""
+    try:
+        with os.scandir(folder) as entries:
+            kinds = [e.is_dir(follow_symlinks=False) for e in entries]
+    except OSError:
+        return False
+    return bool(kinds) and all(kinds)
+
+
+_folder_snapshot = threading.local()
+
+
+class reuse_my_folders:
+    """Read the user's folders once for a whole sweep instead of once per file.
+
+    ``with reuse_my_folders(): ...`` around a loop that sorts many files.
+    """
+
+    def __enter__(self) -> "reuse_my_folders":
+        self._outer = getattr(_folder_snapshot, "cache", None)
+        if self._outer is None:
+            _folder_snapshot.cache = {}
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        if self._outer is None:
+            _folder_snapshot.cache = None
+
+
+def my_folders(config: dict, root: Path | None = None) -> list[dict]:
+    """The folders the user made: at the top of Downloads, and directly inside a main folder.
+
+    Each is {"label": "3D Models\\Flanged Mace", "name": "Flanged Mace",
+    "category": "3D Models" or None, "extensions": frozenset or None}. A folder
+    inside a main folder only takes that main folder's kinds of file (and a
+    folder in 3D Models or CAD takes both, so one project keeps its .f3d, .step
+    and .stl together); a folder at the top of Downloads takes any kind.
+    """
+    if not isinstance(config, dict) or not my_folders_enabled(config):
+        return []
+    try:
+        base = Path(root) if root is not None else watch_root(config)
+    except (OSError, ValueError, TypeError):
+        return []
+    cache = getattr(_folder_snapshot, "cache", None)
+    cache_key = (str(base), id(config))
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+
+    def key_of(label: str) -> str:
+        return str(label).replace("/", "\\").strip("\\").lower()
+
+    try:
+        managed = {key_of(f) for f in collect_managed_folders(config)}
+    except (KeyError, AttributeError, TypeError):
+        managed = set()
+    managed_tops = {key.split("\\")[0] for key in managed if key and ":" not in key}
+    extracted = key_of(str(config.get("extracted_destination") or "Extracted"))
+    block = config.get("my_folders") if isinstance(config.get("my_folders"), dict) else {}
+    skipped = {key_of(item) for item in (block.get("skip") or [])}
+    makerworld = key_of(str(config.get("makerworld_destination") or MAKERWORLD_FOLDER))
+
+    def usable(entry: os.DirEntry, label: str) -> bool:
+        name = entry.name
+        if name.startswith((".", "_", "~")) or key_of(label) in skipped:
+            return False
+        if not folder_collects_by_name(name):
+            return False
+        try:
+            return not os.path.exists(os.path.join(entry.path, ".download-sorter-keep"))
+        except OSError:
+            return False
+
+    # Main folders: which kinds of file each one holds.
+    category_exts: dict[str, set[str]] = {}
+    category_names: dict[str, str] = {}
+    for rule in config.get("extension_rules", []):
+        if not isinstance(rule, dict) or not rule.get("enabled", True):
+            continue
+        parts = split_folder(str(rule.get("folder") or ""))
+        if len(parts) != 1 or ":" in parts[0]:
+            continue
+        top = parts[0].lower()
+        category_names.setdefault(top, parts[0])
+        category_exts.setdefault(top, set()).update(str(e).lower() for e in rule.get("extensions", []) or [])
+    for top, exts in category_exts.items():
+        if exts & CAD_EXTENSIONS:
+            exts.update(CAD_EXTENSIONS)
+            exts.update({".slddrw"})
+
+    found: list[dict] = []
+    for entry in _subfolders(base):
+        low = entry.name.lower()
+        if low in managed_tops or low in INTERNAL_DIR_NAMES or low == extracted.split("\\")[0]:
+            continue
+        if usable(entry, entry.name):
+            found.append({"label": entry.name, "name": entry.name, "category": None, "extensions": None})
+    for top, exts in category_exts.items():
+        category = category_names[top]
+        for entry in _subfolders(base / category):
+            label = f"{category}\\{entry.name}"
+            key = key_of(label)
+            if key in managed or any(m.startswith(key + "\\") for m in managed):
+                continue  # a type folder, a rule's folder, or the parent of one
+            if not usable(entry, label):
+                continue
+            if makerworld == top and _has_only_subfolders(entry.path):
+                continue  # MakerWorld designer folders (designer\model) are the sorter's own
+            found.append({"label": label, "name": entry.name, "category": category, "extensions": frozenset(exts)})
+
+    if cache is not None:
+        cache[cache_key] = found
+    return found
+
+
+def match_my_folder(filename: str, config: dict, root: Path | None = None) -> dict | None:
+    """The user's folder a file is named after, if any. The longest folder name wins."""
+    ext = Path(filename).suffix.lower()
+    best: dict | None = None
+    best_rank: tuple[int, int] = (0, 0)
+    for folder in my_folders(config, root):
+        exts = folder["extensions"]
+        if exts is not None and ext not in exts:
+            continue
+        if not matches_keyword(filename, folder["name"]):
+            continue
+        rank = (sum(c.isalnum() for c in folder["name"]), 1 if folder["category"] else 0)
+        if rank > best_rank:
+            best, best_rank = folder, rank
+    return best
+
+
 def photo_month(file_path: Path | None) -> str:
     """"2024-11" from when a photo was taken (its EXIF date), else the file's date, else today."""
     when: datetime | None = None
@@ -1166,15 +1473,19 @@ def evaluate_routing(
     file_path: Path | None = None,
     content_sample: str | None = None,
     routing_context: RoutingContext | None = None,
+    use_my_folders: bool = True,
 ) -> dict:
     """Evaluate routing chain for a file according to strict precedence:
     0. Incomplete / ignored check
     1. Active Project catch-all (R3): matches 27 CAD/3D/CNC extensions to target_directory;
        non-CAD extensions (e.g. university documents, spreadsheets) bypass active project
     2. Keyword rules (R1): checks enabled flag, extension whitelist, word boundary token match
+    2.5 Your own folders: a folder you made in Downloads or inside a main folder takes
+       files named after it ("Flanged Mace" takes "flanged_mace_v3.f3d")
     3. Smart G-code Machine Sniffer (R4): inspects content of .nc, .tap, .gcode, .bgcode to
        route Haas CNC to haas_destination and 3D printer slicers to gcode_destination
-    4. Extension rules (R1): checks enabled flag, extension match
+    4. Extension rules (R1): checks enabled flag, extension match; inside a main folder the
+       file goes into the folder for its kind (Documents\\PDF)
     5. Fallback default
 
     Returns dict matching contract:
@@ -1401,6 +1712,36 @@ def evaluate_routing(
         else:
             rule_trace.append({"tier": "keyword", "rule": rule_name, "status": "no_keyword_match"})
 
+    # --- Tier 2.5: Your own folders ---
+    own_folder = None
+    if use_my_folders:
+        try:
+            own_folder = match_my_folder(p.name, config)
+        except Exception as exc:  # a folder that can't be read must never stop sorting
+            logging.debug("Could not check your own folders for %s: %s", p.name, exc)
+    if own_folder:
+        rule_trace.append({
+            "tier": "my_folder",
+            "rule": "Your folders",
+            "status": "matched",
+            "folder": own_folder["label"],
+            "destination": own_folder["label"],
+        })
+        return {
+            "destination": own_folder["label"],
+            "match_type": "my_folder",
+            "winning_rule": f"Your folder ({own_folder['name']})",
+            "matched_trigger": f"named after your folder '{own_folder['name']}'",
+            "is_active_project": False,
+            "sniffer_details": None,
+            "rule_trace": rule_trace,
+        }
+    rule_trace.append({
+        "tier": "my_folder",
+        "rule": "Your folders",
+        "status": "no_match" if use_my_folders else "not_checked",
+    })
+
     # --- Tier 3: Smart G-code Machine Sniffer (R4) ---
     sniffer_enabled = config.get("gcode_sniffer_enabled", config.get("sniffer", {}).get("enabled", True))
     sniffer_details: dict | None = None
@@ -1421,6 +1762,7 @@ def evaluate_routing(
                 sniffer_details = sniff_res
                 if sniff_res.get("is_haas"):
                     haas_dest = config.get("haas_destination", config.get("sniffer", {}).get("haas_folder", "Code\\Haas"))
+                    haas_dest = with_type_folder(haas_dest, ext, config, HAAS_TYPE_FOLDER)
                     rule_trace.append({
                         "tier": "gcode_sniffer",
                         "status": "matched",
@@ -1439,6 +1781,7 @@ def evaluate_routing(
                     }
                 elif sniff_res.get("is_3d_printer"):
                     gcode_dest = config.get("gcode_destination", config.get("sniffer", {}).get("printer_folder", "Code\\Gcode"))
+                    gcode_dest = with_type_folder(gcode_dest, ext, config)
                     rule_trace.append({
                         "tier": "gcode_sniffer",
                         "status": "matched",
@@ -1520,6 +1863,8 @@ def evaluate_routing(
             dest_folder = rule.get("folder", "")
             if str(rule.get("name", "")).lower() == "images" and _option(config, "photos", "by_month"):
                 dest_folder = f"{dest_folder}\\{photo_month(Path(file_path) if file_path else None)}"
+            else:
+                dest_folder = with_type_folder(dest_folder, ext, config)
             rule_trace.append({
                 "tier": "extension",
                 "rule": rule_name,
@@ -2061,20 +2406,21 @@ def sort_existing(
     if not root.exists():
         return 0
     moved = 0
-    for item in list(root.iterdir()):
-        if item.is_file():
-            if arrived_before(item, skip_before):
-                continue
-            if move_file(
-                item,
-                config,
-                dry_run=dry_run,
-                batch_id=batch_id,
-                check_age=False,
-                source_root=root,
-                routing_context=routing_context,
-            ):
-                moved += 1
+    with reuse_my_folders():
+        for item in list(root.iterdir()):
+            if item.is_file():
+                if arrived_before(item, skip_before):
+                    continue
+                if move_file(
+                    item,
+                    config,
+                    dry_run=dry_run,
+                    batch_id=batch_id,
+                    check_age=False,
+                    source_root=root,
+                    routing_context=routing_context,
+                ):
+                    moved += 1
     return moved
 
 
@@ -2103,17 +2449,18 @@ def preview_existing(config: dict, limit: int = 1000) -> list[tuple[Path, Path]]
         handler.addFilter(quiet)
     found: list[tuple[Path, Path]] = []
     try:
-        for item in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-            if len(found) >= limit:
-                break
-            if not item.is_file():
-                continue
-            try:
-                dest = move_file(item, config, dry_run=True, check_age=False, source_root=root)
-            except Exception:
-                dest = None
-            if dest is not None:
-                found.append((item, Path(dest)))
+        with reuse_my_folders():
+            for item in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+                if len(found) >= limit:
+                    break
+                if not item.is_file():
+                    continue
+                try:
+                    dest = move_file(item, config, dry_run=True, check_age=False, source_root=root)
+                except Exception:
+                    dest = None
+                if dest is not None:
+                    found.append((item, Path(dest)))
     finally:
         root_logger.removeFilter(quiet)
         for handler in handlers:
@@ -2131,20 +2478,30 @@ def sort_existing_documents(
     if not dry_run:
         ensure_tree(config)
     moved = 0
-    for source in document_roots(config):
-        logging.info("Scanning Documents source %s", source)
-        for item in iter_files(source, config, routing_context):
-            if arrived_before(item, skip_before):
-                continue
-            if relocate_from_documents(
-                item,
-                config,
-                dry_run=dry_run,
-                batch_id=batch_id,
-                routing_context=routing_context,
-            ):
-                moved += 1
+    with reuse_my_folders():
+        for source in document_roots(config):
+            logging.info("Scanning Documents source %s", source)
+            for item in iter_files(source, config, routing_context):
+                if arrived_before(item, skip_before):
+                    continue
+                if relocate_from_documents(
+                    item,
+                    config,
+                    dry_run=dry_run,
+                    batch_id=batch_id,
+                    routing_context=routing_context,
+                ):
+                    moved += 1
     return moved
+
+
+def _changed_within_hold(path: Path, config: dict) -> bool:
+    """True when ``path`` changed more recently than the hold's length (7 days by default)."""
+    try:
+        days = float(config.get("hold", {}).get("hold_days", 7))
+        return time.time() - path.stat().st_mtime < days * 86400.0
+    except (OSError, TypeError, ValueError, AttributeError):
+        return True
 
 
 def reclassify_misplaced_file(
@@ -2154,7 +2511,11 @@ def reclassify_misplaced_file(
     batch_id: str = "",
     routing_context: RoutingContext | None = None,
 ) -> Path | None:
-    """Auto-correct a file saved or exported directly into the wrong managed category bucket."""
+    """Auto-correct a file sitting directly in one of the sorter's own folders.
+
+    That is a main folder (Documents), a type folder (Documents\\PDF) or a rule's
+    folder. A folder the user made is never touched: nothing is taken out of it.
+    """
     downloads = watch_root(config)
     if not path.exists() or not path.is_file():
         return None
@@ -2168,34 +2529,39 @@ def reclassify_misplaced_file(
         return None
 
     try:
-        rel = path.resolve().relative_to(downloads)
+        parent_rel = path.parent.resolve().relative_to(downloads)
     except ValueError:
         return None
 
-    # Determine current folder relative to Downloads
-    parent_rel = path.parent.resolve().relative_to(downloads)
+    # Current folder relative to Downloads
     current_folder = str(parent_rel).replace("/", "\\")
 
-    target_folder, reason = explain_classification(path, config, routing_context)
-    target_folder = target_folder.replace("/", "\\")
-
-    # Check if current parent is a managed category folder
-    category_folders = (
+    # Only the sorter's own folders are corrected. Any other folder was made by
+    # the user, and a file in it stays there.
+    managed_folders = (
         routing_context.category_folders
         if routing_context is not None
-        else [f.replace("/", "\\").lower() for f in collect_category_folders(config)]
+        else {f.replace("/", "\\").strip("\\").lower() for f in collect_managed_folders(config)}
     )
-    default_folder = config.get("default_folder", "Other").lower()
+    if current_folder.lower() not in managed_folders:
+        return None
 
-    if current_folder.lower() not in category_folders:
-        # If a recognized file landed directly in an unmanaged subfolder (e.g. browser remembered an old folder), rescue it!
-        if len(rel.parts) == 2 and target_folder.lower() != default_folder:
-            pass
-        else:
-            return None
+    # An active project collects new downloads. It never empties the folders
+    # that are already sorted, so it is left out here.
+    routing = evaluate_routing(
+        path.name,
+        config,
+        active_project={"enabled": False},
+        file_path=path,
+        routing_context=routing_context,
+    )
+    if routing["match_type"] == "ignored":
+        return None
+    target_folder, reason = routing["destination"], routing["matched_trigger"]
+    target_folder = target_folder.replace("/", "\\")
 
     # If already in the right folder, nothing to do
-    if current_folder.lower() == target_folder.lower():
+    if current_folder.lower() == target_folder.lower().strip("\\"):
         return None
 
     settle = float(config.get("watch", {}).get("settle_seconds", DEFAULT_SETTLE_SECONDS))
@@ -2207,8 +2573,10 @@ def reclassify_misplaced_file(
     else:
         destination_dir = folder_path(downloads, target_folder)
     destination = unique_destination(destination_dir, path.name)
-    # Retention first; a dry run never writes hold state or notifies.
-    if hold_in_place(path, config, destination, batch_id, dry_run):
+    # Retention first; a dry run never writes hold state or notifies. The hold
+    # is for files still being worked on: one that hasn't changed for longer
+    # than the hold lasts is simply put in its folder.
+    if _changed_within_hold(path, config) and hold_in_place(path, config, destination, batch_id, dry_run):
         return None
 
 
@@ -2242,25 +2610,32 @@ def sort_existing_misplaced(
     routing_context: RoutingContext | None = None,
     skip_before: float | None = None,
 ) -> int:
-    """Sweep direct children of all managed category folders for misplaced files."""
+    """Sweep the files sitting directly in the sorter's own folders for misplaced ones.
+
+    This is also what moves files from a main folder into its type folders
+    (Documents\\report.pdf -> Documents\\PDF) the first time the two-tier layout
+    is used. Folders the user made are not looked into.
+    """
     downloads = watch_root(config)
-    category_folders = collect_category_folders(config)
     moved = 0
-    for rel_folder in category_folders:
-        folder = folder_path(downloads, rel_folder)
-        if folder.exists() and folder.is_dir():
-            for item in list(folder.iterdir()):
-                if item.is_file():
-                    if arrived_before(item, skip_before):
-                        continue
-                    if reclassify_misplaced_file(
-                        item,
-                        config,
-                        dry_run=dry_run,
-                        batch_id=batch_id,
-                        routing_context=routing_context,
-                    ):
-                        moved += 1
+    with reuse_my_folders():
+        for rel_folder in collect_managed_folders(config):
+            if Path(rel_folder).is_absolute() or ":" in rel_folder:
+                continue
+            folder = folder_path(downloads, rel_folder)
+            if folder.exists() and folder.is_dir():
+                for item in list(folder.iterdir()):
+                    if item.is_file():
+                        if arrived_before(item, skip_before):
+                            continue
+                        if reclassify_misplaced_file(
+                            item,
+                            config,
+                            dry_run=dry_run,
+                            batch_id=batch_id,
+                            routing_context=routing_context,
+                        ):
+                            moved += 1
     return moved
 
 
