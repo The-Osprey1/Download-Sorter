@@ -243,6 +243,9 @@ def test_files_in_a_main_folder_move_into_their_type_folder_and_undo_puts_them_b
 
 def test_files_from_before_the_users_cutoff_are_left_alone(config, downloads):
     report = _file(downloads / "Documents" / "report.pdf")
+    # Windows also records when a file was created, which a test cannot backdate,
+    # so put a real gap between making the file and the cutoff.
+    time.sleep(0.3)
     assert sorter.sort_existing_misplaced(config, batch_id="t", skip_before=time.time()) == 0
     assert report.exists()
 
