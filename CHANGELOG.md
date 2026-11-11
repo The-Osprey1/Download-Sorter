@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 * **Starting while paused no longer sorts (`watch.py`)**: the sort that runs when Download Sorter starts used to ignore Pause. It now waits until sorting is resumed.
 * **An active project no longer empties the sorted folders (`sorter.py`)**: with a project turned on, the tidy-up of the main folders treated every 3D and CAD file already filed as belonging to the project and moved it there. A project now only collects new downloads.
+* **A file that shows up at the last moment is never replaced (`safe_ops.py`)**: Download Sorter picks a free name for a file and then moves it. If another program (or a second Download Sorter) took that name in between, the move could silently replace that file. Now the move stops without touching anything, and the file is tried again a moment later under a fresh name. Undo is the same: it skips that file (the log says why), and undoing again files it under a fresh name. Moves to another drive are copied under a temporary name first and renamed into place, so a half-copied file never has the real name.
+* **A command that failed is no longer started again (`main.py`)**: when `--undo`, `--sort`, `--consolidate` or one of the window commands hit an internal error of one kind (`TypeError`), it was run a second time, and for `--undo` that could undo a second batch. It now stops, and the error is reported like any other unexpected error.
 
 ### Removed
 * The leftover folder name `xyzfiles` from the list of folders "Clean up a folder" treats as already organized (`remodel.py`). `3D Models` was already on that list.

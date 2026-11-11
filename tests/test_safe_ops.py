@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -65,7 +66,7 @@ def test_failed_disk_operation_marks_journal_aborted(tmp_path, monkeypatch):
     def boom(*_a, **_k):
         raise PermissionError("denied")
 
-    monkeypatch.setattr(safe_ops.shutil, "move", boom)
+    monkeypatch.setattr(safe_ops, "_move_without_overwriting", boom)
     with pytest.raises(PermissionError):
         safe_ops.move(src, tmp_path / "out" / "x.pdf")
     assert [r.get("action") for r in _history()] == ["planned", "aborted"]
@@ -198,6 +199,97 @@ def test_restore_never_overwrites_a_reoccupied_original(tmp_path):
     assert src.read_text() == "someone else wrote here meanwhile"
     assert restored.read_text() == "first"
     assert not dest.exists()
+
+
+# ---- a name that is taken while a move is under way ------------------------------------
+#
+# The destination name is free when it is chosen, but another program (or a second
+# Download Sorter) takes it before the move happens. Nothing may be overwritten.
+# These tests use finished_downloads so that antivirus holding a fresh file open
+# can't make the move fail as "locked" instead.
+
+def test_move_never_overwrites_a_file_that_appears_after_the_name_was_chosen(tmp_path, monkeypatch, finished_downloads):
+    src = _make(tmp_path / "in" / "report.pdf", "new download")
+    final = tmp_path / "out" / "report.pdf"
+    real_resolve = safe_ops._resolve_dest
+
+    def resolve_then_lose_the_name(dst):
+        chosen = real_resolve(dst)
+        chosen.write_text("someone else's file", encoding="utf-8")
+        return chosen
+
+    monkeypatch.setattr(safe_ops, "_resolve_dest", resolve_then_lose_the_name)
+    with pytest.raises(safe_ops.Refused) as err:
+        safe_ops.move(src, final, settle_seconds=0)
+    assert err.value.reason == "destination-exists"
+    assert final.read_text(encoding="utf-8") == "someone else's file"
+    assert src.read_text(encoding="utf-8") == "new download"
+    assert [r.get("action") for r in _history()] == ["planned", "aborted"]
+    assert safe_ops.recover_pending_journal(min_age_seconds=0) == []
+
+
+def _rename_fails_like_another_drive(monkeypatch, name):
+    """Make os.rename fail the way a move to another drive does, for the file called ``name``."""
+    real_rename = os.rename
+
+    def rename(src, dst, *args, **kwargs):
+        if Path(src).name == name and Path(dst).name == name:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_rename(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(safe_ops.os, "rename", rename)
+
+
+def test_move_to_another_drive_copies_then_renames_and_leaves_no_partial_file(tmp_path, monkeypatch, finished_downloads):
+    src = _make(tmp_path / "in" / "big.stl", "payload")
+    final = tmp_path / "out" / "big.stl"
+    _rename_fails_like_another_drive(monkeypatch, "big.stl")
+    assert safe_ops.move(src, final, settle_seconds=0) == final
+    assert final.read_text(encoding="utf-8") == "payload"
+    assert not src.exists()
+    assert [p.name for p in final.parent.iterdir()] == ["big.stl"]
+    assert [r.get("action") for r in _history()] == ["planned", None]
+
+
+def test_move_to_another_drive_never_overwrites_a_name_taken_during_the_copy(tmp_path, monkeypatch, finished_downloads):
+    src = _make(tmp_path / "in" / "big.stl", "new download")
+    final = tmp_path / "out" / "big.stl"
+    _rename_fails_like_another_drive(monkeypatch, "big.stl")
+    real_copy = safe_ops.shutil.copy2
+
+    def copy_then_lose_the_name(source, target, **kwargs):
+        result = real_copy(source, target, **kwargs)
+        final.write_text("someone else's file", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(safe_ops.shutil, "copy2", copy_then_lose_the_name)
+    with pytest.raises(safe_ops.Refused) as err:
+        safe_ops.move(src, final, settle_seconds=0)
+    assert err.value.reason == "destination-exists"
+    assert final.read_text(encoding="utf-8") == "someone else's file"
+    assert src.read_text(encoding="utf-8") == "new download"
+    assert [p.name for p in final.parent.iterdir()] == ["big.stl"]  # the partial copy is gone
+    assert [r.get("action") for r in _history()] == ["planned", "aborted"]
+
+
+def test_restore_never_overwrites_a_name_taken_after_it_was_chosen(tmp_path, monkeypatch, finished_downloads):
+    src = _make(tmp_path / "a" / "x.pdf", "first")
+    dest = safe_ops.move(src, tmp_path / "out" / "x.pdf")
+    entry = [r for r in _history() if r.get("action") is None][0]
+    real_unique = sorter.unique_destination
+
+    def unique_then_lose_the_name(directory, name):
+        chosen = real_unique(directory, name)
+        chosen.write_text("someone else's file", encoding="utf-8")
+        return chosen
+
+    monkeypatch.setattr(sorter, "unique_destination", unique_then_lose_the_name)
+    with pytest.raises(safe_ops.Refused) as err:
+        safe_ops.restore(entry)
+    assert err.value.reason == "destination-exists"
+    assert src.read_text(encoding="utf-8") == "someone else's file"
+    assert dest.read_text(encoding="utf-8") == "first"  # still where it was sorted
+    assert [r.get("action") for r in _history()][-2:] == ["planned", "aborted"]
 
 
 # ---- sorter integration --------------------------------------------------------------------------

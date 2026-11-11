@@ -56,6 +56,7 @@ Source = "https://github.com/The-Osprey1/Download-Sorter"
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0.0",
+    "pytest-timeout>=2.3.1",
     "pyinstaller>=6.0.0"
 ]
 
@@ -115,6 +116,10 @@ version = {attr = "about.__version__"}
 testpaths = ["tests", "."]
 python_files = ["test_*.py"]
 addopts = "-q"
+# A test that runs longer than this many seconds is stuck: the run is stopped and
+# shows where. Needs pytest-timeout (installed with pip install -e .[dev]).
+timeout = 300
+timeout_method = "thread"
 markers = [
     "desktop: needs a live interactive Windows desktop (real dialogs/windows); deselect with -m \"not desktop\"",
     "ntfs: needs a real NTFS volume (hardlinks, file indexes, cloud attributes)",
