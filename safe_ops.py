@@ -9,7 +9,8 @@ through this module so that all of them share the same safety rules:
   marker, must have been quiet for ``settle_seconds`` (default 3 s), and must open
   exclusively (nothing else is writing to it).
 * **Never overwrite** - an occupied destination is always resolved to a fresh
-  ``name (2).ext`` instead.
+  ``name (2).ext`` instead. If the name is taken after it was chosen, the move
+  is refused (nothing is replaced) and can be tried again with a fresh name.
 * **Write-ahead journal** - a ``planned`` record is appended to ``history.jsonl`` and
   fsynced *before* the filesystem is touched, and a ``done`` record (the classic move
   record that Undo understands) is appended and fsynced afterwards.  If the process
@@ -22,6 +23,7 @@ tests and alternate state directories keep working.
 
 from __future__ import annotations
 
+import errno
 import fnmatch
 import json
 import logging
@@ -257,6 +259,60 @@ def _resolve_dest(dst: Path) -> Path:
     return dst
 
 
+def _rename_without_overwriting(src: Path, dst: Path) -> None:
+    """``os.rename`` that never replaces ``dst``: it raises FileExistsError instead.
+
+    Windows already refuses to rename onto an existing file. Elsewhere rename
+    replaces it, so look first (best effort; this app only runs on Windows).
+    """
+    if sys.platform != "win32" and os.path.lexists(dst):
+        raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(dst))
+    os.rename(src, dst)
+
+
+def _fsync_file(path: Path) -> None:
+    """Ask the disk to store a copied file for good before the original is removed."""
+    try:
+        with open(path, "rb+") as handle:
+            os.fsync(handle.fileno())
+    except OSError:  # pragma: no cover - a precaution only
+        pass
+
+
+def _move_without_overwriting(src: Path, dst: Path) -> None:
+    """Move one file to ``dst``. Raises FileExistsError rather than replace what is there.
+
+    ``shutil.move`` can't promise that. When ``os.rename`` fails for any reason,
+    including "``dst`` already exists" on Windows, it falls back to copying, and
+    that copy silently overwrites ``dst``. A file that another program (or a
+    second Download Sorter) put there after the name was chosen would be lost.
+
+    Here the file is renamed first. If it can't be renamed (it is on another
+    drive, or a program holds it open for a moment) it is copied under a
+    temporary name next to ``dst``, flushed to disk, renamed into place (which
+    still refuses to replace anything) and only then removed from ``src``.
+    """
+    try:
+        _rename_without_overwriting(src, dst)
+        return
+    except FileExistsError:
+        raise
+    except OSError:
+        pass  # another drive, or src is briefly held open: copy it instead
+    partial = dst.with_name(f"{dst.name}.{uuid.uuid4().hex[:8]}.part")
+    try:
+        shutil.copy2(src, partial, follow_symlinks=False)
+        _fsync_file(partial)
+        _rename_without_overwriting(partial, dst)
+    except BaseException:
+        try:
+            partial.unlink()
+        except OSError:
+            pass
+        raise
+    os.unlink(src)
+
+
 def _done_record(op_id: str, batch_id: str, src: str, dest: str, op: str, undoable: bool) -> dict[str, Any]:
     record: dict[str, Any] = {
         "id": uuid.uuid4().hex,
@@ -287,8 +343,9 @@ def move(
 ) -> Path:
     """Journaled, never-overwriting move of one file.  Returns the final path.
 
-    Raises :class:`Refused` when a pre-flight check declines (nothing touched) and
-    lets ``OSError`` from the filesystem propagate (journal is marked aborted).
+    Raises :class:`Refused` when a pre-flight check declines, or when the
+    destination name is taken just before the move (nothing touched either way),
+    and lets ``OSError`` from the filesystem propagate (journal is marked aborted).
     """
     src = Path(src)
     if not skip_preflight:
@@ -318,9 +375,14 @@ def move(
                     if attempt < 3:
                         time.sleep(0.05 * (attempt + 1))
                     continue
-            shutil.move(str(src), str(final))
+            _move_without_overwriting(src, final)
             last_exc = None
             break
+        except FileExistsError:
+            # Another program took this name after it was chosen. Nothing was
+            # replaced; the caller can try again and get a fresh name.
+            _abort(op_id, "destination-appeared")
+            raise Refused("destination-exists", final)
         except (PermissionError, OSError) as exc:
             last_exc = exc
             if attempt < 3:
@@ -389,7 +451,8 @@ def quarantine(
 def restore(entry: dict[str, Any], *, settle_seconds: float = 0.0) -> Path | None:
     """Undo one recorded move: bring ``entry['dest']`` back to ``entry['src']``.
 
-    Never overwrites: an occupied original location yields a ``name (2).ext`` copy.
+    Never overwrites: an occupied original location yields a ``name (2).ext`` copy,
+    and a name taken just before the move raises :class:`Refused`.
     Returns the restored path, or ``None`` when the file is gone/refused.
     """
     dest_path = Path(entry["dest"])
@@ -410,7 +473,14 @@ def restore(entry: dict[str, Any], *, settle_seconds: float = 0.0) -> Path | Non
     final = sorter.unique_destination(target_dir, src_path.name)
     op_id = _plan("restore", dest_path, final, str(entry.get("batch_id", "")))
     try:
-        shutil.move(str(dest_path), str(final))
+        if dest_path.is_dir():
+            shutil.move(str(dest_path), str(final))  # folders: shutil.move never overwrites inside them
+        else:
+            _move_without_overwriting(dest_path, final)
+    except FileExistsError:
+        # The original spot was taken again after its name was chosen. Nothing was replaced.
+        _abort(op_id, "destination-appeared")
+        raise Refused("destination-exists", final)
     except BaseException as exc:
         if dest_path.exists() and not final.exists():
             _abort(op_id, f"{type(exc).__name__}: {exc}")

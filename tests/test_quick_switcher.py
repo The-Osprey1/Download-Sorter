@@ -16,6 +16,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 if sys.platform == "win32":
     import ctypes
     import tkinter as tk
@@ -119,51 +121,68 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
         # Must verify file exists before attempting to inject
         self.assertFalse(inject_file_into_dialog(12345, "C:/totally_nonexistent_file.xyz"))
 
+    @pytest.mark.desktop
     @unittest.skipUnless(sys.platform == "win32", "Windows Win32 dialog integration test")
     def test_live_dialog_injection_e2e(self) -> None:
         user32 = ctypes.windll.user32
+        WM_COMMAND, IDCANCEL = 0x0111, 2
+        # How long the dialog gets to open and take the file before it is cancelled.
+        # Generous: a busy CI machine can be slow to show it.
+        give_up_after = 20.0
         with tempfile.TemporaryDirectory() as td:
             sample_file = Path(td) / "E2E_Test_Model.step"
             sample_file.write_text("solid model data")
 
             chosen_result: list[str] = []
+            dialog_closed = threading.Event()
+
+            def find_test_dialog() -> int:
+                found_hwnd = 0
+
+                def enum_wnd(h, _l):
+                    nonlocal found_hwnd
+                    buf = (ctypes.c_wchar * 256)()
+                    user32.GetWindowTextW(h, buf, 256)
+                    if "Live E2E Test Dialog" in buf.value:
+                        found_hwnd = h
+                        return False
+                    return True
+
+                WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+                user32.EnumWindows(WNDENUMPROC(enum_wnd), 0)
+                return found_hwnd
 
             def background_agent() -> None:
-                deadline = time.time() + 4.0
-                while time.time() < deadline:
+                # Keeps going until the dialog has closed, so a dialog that opens late
+                # is still found, and cancels it if the file can't be put in. A modal
+                # dialog that nothing closes blocks askopenfilename() for ever, which
+                # once kept a CI job running for six hours.
+                started = time.time()
+                injected = False
+                while not dialog_closed.is_set():
                     time.sleep(0.05)
-                    found_hwnd = 0
-
-                    def enum_wnd(h, _l):
-                        nonlocal found_hwnd
-                        buf = (ctypes.c_wchar * 256)()
-                        user32.GetWindowTextW(h, buf, 256)
-                        if "Live E2E Test Dialog" in buf.value:
-                            found_hwnd = h
-                            return False
-                        return True
-
-                    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
-                    user32.EnumWindows(WNDENUMPROC(enum_wnd), 0)
-
-                    if found_hwnd and is_file_dialog(found_hwnd):
+                    dialog = find_test_dialog()
+                    if not dialog:
+                        continue
+                    if not injected and is_file_dialog(dialog):
                         time.sleep(0.08)
-                        if inject_file_into_dialog(found_hwnd, sample_file):
-                            return
-
-                # Safety fallback: dismiss dialog if test timed out
-                if found_hwnd:
-                    user32.PostMessageW(found_hwnd, 0x0111, 2, 0)  # IDCANCEL = 2
+                        injected = bool(inject_file_into_dialog(dialog, sample_file))
+                    if time.time() - started > give_up_after:
+                        user32.PostMessageW(dialog, WM_COMMAND, IDCANCEL, 0)
 
             t = threading.Thread(target=background_agent, daemon=True)
             t.start()
 
             root = tk.Tk()
             root.withdraw()
-            res = filedialog.askopenfilename(title="Live E2E Test Dialog")
+            try:
+                res = filedialog.askopenfilename(title="Live E2E Test Dialog")
+            finally:
+                dialog_closed.set()
+                root.destroy()
+            t.join(timeout=5)
             if res:
                 chosen_result.append(res)
-            root.destroy()
 
             self.assertTrue(len(chosen_result) > 0)
             self.assertEqual(Path(chosen_result[0]).resolve(), sample_file.resolve())

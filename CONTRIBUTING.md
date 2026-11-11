@@ -23,7 +23,7 @@ python -m venv .venv
 # Activate and install dependencies
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-pip install pyinstaller pytest
+pip install pyinstaller pytest pytest-timeout
 ```
 
 ---
@@ -38,6 +38,8 @@ pytest tests/ -v
 ```
 
 All 750+ tests should pass with 0 errors.
+
+Tests marked `desktop` open real Windows dialogs and need an unlocked desktop session; skip them with `pytest -m "not desktop"`. A test that runs for more than 5 minutes is stopped and the run shows where it was stuck (this needs `pytest-timeout`, installed above).
 
 ---
 

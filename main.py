@@ -185,19 +185,17 @@ def main(argv: list[str] | None = None) -> int:
             import tray
             return tray.main()
 
+        # These commands' main() functions all take their arguments. A TypeError
+        # that comes out of one is a bug inside that command, so it is not caught
+        # here: calling main() again would run the whole command a second time
+        # (for --undo, undoing another batch) and hide the first error.
         if cmd in ("--home",):
             import rules_manager
-            try:
-                return rules_manager.main(args)
-            except TypeError:
-                return rules_manager.main()
+            return rules_manager.main(args)
 
         if cmd in ("--welcome",):
             import rules_manager
-            try:
-                return rules_manager.main(args)
-            except TypeError:
-                return rules_manager.main()
+            return rules_manager.main(args)
 
         if cmd in ("--gui", "-g", "--rules"):
             import rules_manager
@@ -205,25 +203,16 @@ def main(argv: list[str] | None = None) -> int:
 
         if cmd in ("--sort", "-s", "--once"):
             import sort_once
-            try:
-                return sort_once.main(args[1:])
-            except TypeError:
-                return sort_once.main()
+            return sort_once.main(args[1:])
 
         if cmd in ("--undo", "-u"):
             import sort_undo
-            try:
-                return sort_undo.main(args[1:])
-            except TypeError:
-                return sort_undo.main()
+            return sort_undo.main(args[1:])
 
         if cmd in ("--ribbon-summary", "--ribbon"):
             import ribbon_popup
-            try:
-                forward_args = ["--summary"] + [a for a in args[1:] if a != "--summary"] if cmd == "--ribbon-summary" else args[1:]
-                return ribbon_popup.main(forward_args)
-            except TypeError:
-                return ribbon_popup.main()
+            forward_args = ["--summary"] + [a for a in args[1:] if a != "--summary"] if cmd == "--ribbon-summary" else args[1:]
+            return ribbon_popup.main(forward_args)
 
         if cmd in ("--peek", "-p"):
             import gcode_peek
@@ -247,10 +236,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if cmd in ("--consolidate", "--flatten"):
             import consolidate
-            try:
-                return consolidate.main(args[1:])
-            except TypeError:
-                return consolidate.main()
+            return consolidate.main(args[1:])
 
         if cmd in ("--remodel",):
             import watch
