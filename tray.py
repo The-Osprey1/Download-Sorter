@@ -1,4 +1,4 @@
-"""Tray icon for the download sorter: pause, sort now, undo, open folders.
+"""Tray icon for the download sorter: sort now, undo, pause, the last files filed, open folders.
 
 Run this instead of watch.py and the watcher lives inside it, so there is one
 thing to start at login and one icon to click.
@@ -88,6 +88,23 @@ def open_in_explorer(path: Path) -> None:
         logging.warning("Could not open %s: %s", path, exc)
 
 
+def reveal_in_explorer(path: Path | str) -> None:
+    """Open File Explorer with ``path`` selected (the folder it was in, if the file is gone).
+
+    The path is its own argument after "/select,". Joined into one argument
+    ("/select,C:\\a b\\c.pdf"), Windows quotes the whole thing and Explorer then
+    ignores it for any path with a space in it.
+    """
+    target = Path(path)
+    try:
+        if target.exists():
+            subprocess.Popen(["explorer.exe", "/select,", str(target)])
+        elif target.parent.exists():
+            subprocess.Popen(["explorer.exe", str(target.parent)])
+    except OSError as exc:
+        logging.warning("Could not show %s in Explorer: %s", target, exc)
+
+
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess | None:
     """Run one of the sibling command-line tools without flashing a console."""
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -146,6 +163,9 @@ def spawn_window(*args: str) -> None:
 
 TOOLTIP_MAX = 127
 
+RECENT_LIMIT = 5      # files in the "Recently sorted" menu
+RECENT_NAME_MAX = 38  # characters of a file name shown there
+
 
 
 def _count_text(count: int, noun: str) -> str:
@@ -154,6 +174,34 @@ def _count_text(count: int, noun: str) -> str:
         return f"No {noun}s"
     return f"{count} {noun}{'' if count == 1 else 's'}"
 
+
+def _menu_text(text: str) -> str:
+    """Text for a menu item. Windows reads "&" as a shortcut mark, so "Terms & Conditions" needs "&&"."""
+    return text.replace("&", "&&")
+
+
+def _shorten_name(name: str, limit: int = RECENT_NAME_MAX) -> str:
+    """Cut a long file name in the middle, so the end (its file type) stays visible."""
+    if len(name) <= limit:
+        return name
+    tail = 12
+    return f"{name[:limit - tail - 1]}…{name[-tail:]}"
+
+
+def _recent_label(record: dict) -> str:
+    """"invoice.pdf  ·  Invoices & Receipts" for one entry of the recent activity list."""
+    name = str(record.get("filename") or Path(str(record.get("dest", ""))).name)
+    folder = str(record.get("folder") or "")
+    return _menu_text(f"{_shorten_name(name)}  ·  {folder}" if folder else _shorten_name(name))
+
+
+def _reveal_action(path: str):
+    """The menu action for one file: show it in Explorer (pystray calls it with the icon and the item)."""
+    def reveal(_icon=None, _item=None) -> None:
+        reveal_in_explorer(path)
+    return reveal
+
+
 class SorterTray:
     def __init__(self, wait_for_setup: bool = False) -> None:
         self.wait_for_setup = wait_for_setup
@@ -161,6 +209,8 @@ class SorterTray:
         self.downloads = watch_root(self.config)
         self.stop_event = threading.Event()
         self.watcher_failed = False
+        self._recent_cache: tuple[object, list[dict]] | None = None
+        self._recent_lock = threading.Lock()
         self.icon = pystray.Icon(
             "download-sorter",
             icon=make_icon(is_paused(), self._held_count()),
@@ -205,6 +255,42 @@ class SorterTray:
         self.icon.title = self.tooltip()
         self.icon.update_menu()
 
+    def _recent_records(self) -> list[dict]:
+        """The last few files filed, newest first.
+
+        pystray asks for a menu's items several times each time it builds the menu,
+        and reading the history is a pass over the whole file, so the answer is kept
+        until the history file changes.
+        """
+        try:
+            stat = HISTORY_FILE.stat()
+            signature: object = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+        with self._recent_lock:
+            if self._recent_cache is not None and self._recent_cache[0] == signature:
+                return self._recent_cache[1]
+        try:
+            import config_manager
+            records = config_manager.get_recent_activity(limit=RECENT_LIMIT)
+        except Exception:
+            logging.debug("Could not read the recently sorted files", exc_info=True)
+            records = []
+        with self._recent_lock:
+            self._recent_cache = (signature, records)
+        return records
+
+    def _recent_menu_items(self) -> list[pystray.MenuItem]:
+        """The "Recently sorted" submenu: the last files filed, each one opens Explorer on it."""
+        items = []
+        for record in self._recent_records():
+            dest = str(record.get("dest") or "")
+            if dest:
+                # A file that was moved or deleted since stays listed but greyed out.
+                items.append(pystray.MenuItem(_recent_label(record), _reveal_action(dest),
+                                              enabled=Path(dest).exists()))
+        return items or [pystray.MenuItem("Nothing sorted yet", None, enabled=False)]
+
     def build_menu(self) -> pystray.Menu:
         return pystray.Menu(
             pystray.MenuItem("Open Download Sorter", self.on_open_home, default=True),
@@ -214,16 +300,19 @@ class SorterTray:
                 visible=lambda _i: watch.SETUP_PENDING.is_set(),
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(lambda _i: _count_text(moves_today(), "file") + " filed today", None, enabled=False),
-            pystray.MenuItem(lambda _i: _count_text(self._held_count(), "3MF file") + " held in Downloads",
-                             None, enabled=False, visible=lambda _i: self._held_count() > 0),
-            pystray.Menu.SEPARATOR,
+            # What you do from here most often sits together at the top.
             pystray.MenuItem("Sort Downloads now", self.on_sort_now),
             pystray.MenuItem("Undo last sort", self.on_undo),
             pystray.MenuItem(
                 lambda _i: "Resume sorting" if is_paused() else "Pause sorting",
                 self.on_toggle_pause,
             ),
+            pystray.Menu.SEPARATOR,
+            # What has happened: the last files filed, and the counts.
+            pystray.MenuItem("Recently sorted", pystray.Menu(lambda: self._recent_menu_items())),
+            pystray.MenuItem(lambda _i: _count_text(moves_today(), "file") + " filed today", None, enabled=False),
+            pystray.MenuItem(lambda _i: _count_text(self._held_count(), "3MF file") + " held in Downloads",
+                             None, enabled=False, visible=lambda _i: self._held_count() > 0),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Rules...", self.on_open_rules_manager),
             pystray.MenuItem("Clean up a folder...", self.on_remodel),
