@@ -68,6 +68,8 @@ REQUIRED_RELEASE_FILES = [
     "ui_icons.py",
     "ui_motion.py",
     "ui_style.py",
+    "ui_categories.py",
+    "ui_widgets.py",
     "quit_signal.py",
     "problem_report.py",
     "update_check.py",

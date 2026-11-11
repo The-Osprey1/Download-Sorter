@@ -5,8 +5,14 @@ look by role instead of carrying their own inline styles:
 
 * buttons: default (secondary), ``role="primary"`` (one per screen),
   ``role="ghost"`` (low-emphasis), ``role="nav"`` (sidebar)
-* frames: ``objectName="card"`` for a raised panel
-* labels: ``role="title"``, ``"section"``, ``"muted"``, ``"caption"``
+* frames: ``objectName="card"`` for a raised panel; ``tone="success"``,
+  ``"warning"``, ``"info"`` or ``"critical"`` tints it (``set_tone``), and
+  ``hero="true"`` gives the main status card its soft gradient
+* labels: ``role="title"``, ``"section"``, ``"muted"``, ``"caption"``, and
+  ``role="badge"`` with ``kind="neutral"|"success"|"info"|"warning"|"critical"``
+  (``badge()``)
+* checkboxes: ``role="switch"`` draws an on/off switch (``switch_row()``)
+* radio buttons: ``role="segment"`` draws a button-style choice
 
 All colors and sizes come from suite_theme tokens.
 """
@@ -15,14 +21,15 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import re
 import tempfile
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QObject, QSize, Qt
+from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 import ui_icons
-from suite_theme import ACCENTS, COLORS, RADII, TYPE
+from suite_theme import ACCENTS, COLORS, GRADIENT, RADII, TYPE
 
 ACCENT = ACCENTS["downloadSorter"]
 FONT = TYPE["ui"]
@@ -44,10 +51,80 @@ def _check_image() -> str:
         return ""
 
 
+@lru_cache(maxsize=1)
+def _switch_images() -> dict[str, str]:
+    """Write the on/off switch pictures to small SVG files (style sheets can only load images from files)."""
+    c = COLORS
+
+    def draw(track: str, stroke: str, knob: str, knob_x: float, ring: bool = False) -> str:
+        width = 2 if ring else 1
+        return (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="34" height="20" viewBox="0 0 34 20">'
+            f'<rect x="{width / 2}" y="{width / 2}" width="{34 - width}" height="{20 - width}"'
+            f' rx="{(20 - width) / 2}" fill="{track}" stroke="{stroke}" stroke-width="{width}"/>'
+            f'<circle cx="{knob_x}" cy="10" r="6" fill="{knob}"/></svg>'
+        )
+
+    pictures = {
+        "off": draw(c["canvas"], c["borderStrong"], c["textMuted"], 10),
+        "on": draw(ACCENT, ACCENT, c["canvas"], 24),
+        "off_focus": draw(c["canvas"], c["focus"], c["textMuted"], 10, ring=True),
+        "on_focus": draw(ACCENT, c["focus"], c["canvas"], 24, ring=True),
+        "off_disabled": draw(c["surface"], c["border"], c["textFaint"], 10),
+        "on_disabled": draw(c["successBorder"], c["successBorder"], c["textFaint"], 24),
+    }
+    try:
+        folder = Path(tempfile.gettempdir()) / "download-sorter-ui"
+        folder.mkdir(parents=True, exist_ok=True)
+        paths: dict[str, str] = {}
+        for name, body in pictures.items():
+            target = folder / f"switch-{name}.svg"
+            if not target.exists() or target.read_text(encoding="utf-8") != body:
+                target.write_text(body, encoding="utf-8")
+            paths[name] = target.as_posix()
+        return paths
+    except OSError:
+        return {}
+
+
+def _switch_rules() -> str:
+    images = _switch_images()
+    if not images:  # no temp folder to write to: a plain pill without the knob still reads as on/off
+        return (
+            'QCheckBox[role="switch"]::indicator { width: 34px; height: 20px; border-radius: 10px;'
+            f' border: 1px solid {COLORS["borderStrong"]}; background: {COLORS["canvas"]}; }}\n'
+            f'QCheckBox[role="switch"]::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}\n'
+        )
+    rules = (
+        'QCheckBox[role="switch"] { spacing: 0; }\n'
+        'QCheckBox[role="switch"]::indicator { width: 34px; height: 20px; border: none;'
+        ' border-radius: 0; background: transparent; }\n'
+    )
+    for state, name in (
+        ("unchecked", "off"), ("checked", "on"),
+        ("unchecked:focus", "off_focus"), ("checked:focus", "on_focus"),
+        ("unchecked:disabled", "off_disabled"), ("checked:disabled", "on_disabled"),
+    ):
+        rules += (f'QCheckBox[role="switch"]::indicator:{state} {{ border: none; background: transparent;'
+                  f' image: url({images[name]}); }}\n')
+    return rules
+
+
+def _qt_gradient(css: str) -> str:
+    """Turn a CSS token like "linear-gradient(180deg, <top> 0%, <bottom> 100%)" into a Qt style sheet gradient."""
+    stops = re.findall(r"(#[0-9A-Fa-f]{6})\s+(\d+(?:\.\d+)?)%", css)
+    if len(stops) < 2:
+        return COLORS["surface"]
+    body = ", ".join(f"stop:{float(position) / 100:.2f} {color}" for color, position in stops)
+    return f"qlineargradient(x1:0, y1:0, x2:0, y2:1, {body})"
+
+
 def stylesheet() -> str:
     c = COLORS
     check = _check_image()
     check_rule = f"image: url({check});" if check else ""
+    switch_rules = _switch_rules()
+    hero_bg = _qt_gradient(GRADIENT["surfaceCard"])
     return f"""
     QWidget {{
         color: {c['text']};
@@ -69,8 +146,24 @@ def stylesheet() -> str:
     QLabel[role="title"] {{ font-size: 20px; font-weight: 600; }}
     QLabel[role="section"] {{ font-size: 14px; font-weight: 600; }}
     QLabel[role="muted"] {{ color: {c['textMuted']}; }}
-    QLabel[role="caption"] {{ color: {c['textFaint']}; font-size: 12px; }}
+    /* captions are small, so they use the muted color (6:1 on surface); textFaint is only for disabled text */
+    QLabel[role="caption"] {{ color: {c['textMuted']}; font-size: 12px; }}
     QLabel[role="mono"] {{ font-family: '{MONO}'; }}
+
+    /* small rounded tags: Learned, Left alone, ... */
+    QLabel[role="badge"] {{
+        color: {c['textMuted']};
+        background: {c['surfaceRaised']};
+        border: 1px solid {c['border']};
+        border-radius: 4px;
+        padding: 2px 8px;
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QLabel[role="badge"][kind="success"] {{ color: {c['success']}; background: {c['successSubtle']}; border-color: {c['successBorder']}; }}
+    QLabel[role="badge"][kind="info"] {{ color: {c['info']}; background: {c['infoSubtle']}; border-color: {c['infoBorder']}; }}
+    QLabel[role="badge"][kind="warning"] {{ color: {c['warning']}; background: {c['warningSubtle']}; border-color: {c['warningBorder']}; }}
+    QLabel[role="badge"][kind="critical"] {{ color: {c['critical']}; background: {c['criticalSubtle']}; border-color: {c['criticalBorder']}; }}
 
     /* ---- panels ---- */
     QFrame#card {{
@@ -78,6 +171,11 @@ def stylesheet() -> str:
         border: 1px solid {c['border']};
         border-radius: {RADII['card']}px;
     }}
+    QFrame#card[hero="true"] {{ background: {hero_bg}; }}
+    QFrame#card[tone="success"] {{ background: {c['successSubtle']}; border-color: {c['successBorder']}; }}
+    QFrame#card[tone="warning"] {{ background: {c['warningSubtle']}; border-color: {c['warningBorder']}; }}
+    QFrame#card[tone="info"] {{ background: {c['infoSubtle']}; border-color: {c['infoBorder']}; }}
+    QFrame#card[tone="critical"] {{ background: {c['criticalSubtle']}; border-color: {c['criticalBorder']}; }}
     QFrame#sidebar {{
         background: {c['surface']};
         border-right: 1px solid {c['border']};
@@ -128,6 +226,7 @@ def stylesheet() -> str:
         color: {c['text']};
     }}
     QToolButton::menu-indicator {{ image: none; width: 0; }}
+    QToolButton[role="ghost"] {{ padding: 0; }}  /* icon-only: the usual padding would squash the icon */
     QPushButton[role="nav"] {{
         background: transparent;
         border: none;
@@ -185,6 +284,31 @@ def stylesheet() -> str:
     }}
     QTableWidget::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; {check_rule} }}
 
+    /* keyboard focus ring on checkboxes and radio buttons */
+    QCheckBox::indicator:unchecked:focus, QCheckBox::indicator:checked:focus {{ border-color: {c['focus']}; }}
+    QRadioButton::indicator:unchecked:focus {{ border-color: {c['focus']}; }}
+
+    /* switch: a checkbox drawn as an on/off toggle */
+    {switch_rules}
+    /* segment: a radio button drawn as a button, for "pick one of a few" */
+    QRadioButton[role="segment"] {{
+        background: {c['surfaceRaised']};
+        border: 1px solid {c['border']};
+        border-radius: {RADII['control']}px;
+        color: {c['textMuted']};
+        font-weight: 600;
+        padding: 6px 14px;
+        spacing: 0;
+    }}
+    QRadioButton[role="segment"]::indicator,
+    QRadioButton[role="segment"]::indicator:checked,
+    QRadioButton[role="segment"]::indicator:hover {{
+        width: 0px; height: 0px; border: none; background: transparent; image: none;
+    }}
+    QRadioButton[role="segment"]:hover {{ background: {c['surfaceHover']}; border-color: {c['borderStrong']}; color: {c['text']}; }}
+    QRadioButton[role="segment"]:checked {{ background: {c['successSubtle']}; border-color: {ACCENT}; color: {ACCENT}; }}
+    QRadioButton[role="segment"]:focus {{ border-color: {c['focus']}; }}
+
     /* ---- tables and lists ---- */
     QTableWidget, QListWidget, QTreeWidget {{
         background: {c['surface']};
@@ -197,6 +321,7 @@ def stylesheet() -> str:
         outline: none;
     }}
     QTableWidget::item, QListWidget::item {{ padding: 6px 8px; border-bottom: 1px solid {c['surfaceRaised']}; }}
+    QTableWidget::item:hover, QListWidget::item:hover {{ background: {c['surfaceRaised']}; }}
     QHeaderView {{ background: transparent; }}
     QHeaderView::section {{
         background: {c['surface']};
@@ -210,6 +335,9 @@ def stylesheet() -> str:
     QTableCornerButton::section {{ background: {c['surface']}; border: none; }}
     QScrollArea {{ background: transparent; border: none; }}
     QScrollArea > QWidget > QWidget {{ background: transparent; }}
+    QProgressBar {{ background: {c['surfaceHover']}; border: none; border-radius: 2px; text-align: center; }}
+    QProgressBar::chunk {{ background: {ACCENT}; border-radius: 2px; }}
+    QProgressBar[tone="info"]::chunk {{ background: {c['info']}; }}
 
     /* ---- tabs (underline style) ---- */
     QTabWidget::pane {{ border: none; top: -1px; }}
@@ -332,6 +460,73 @@ def status_dot(color: str, size: int = 8) -> QLabel:
 def set_status_dot(dot: QLabel, color: str) -> None:
     size = dot.width()
     dot.setStyleSheet(f"background: {color}; border-radius: {size // 2}px;")
+
+
+def badge(text: str, kind: str = "neutral", parent: QWidget | None = None) -> QLabel:
+    """A small rounded tag ("Learned", "Left alone"). ``kind``: neutral, success, info, warning or critical."""
+    tag = QLabel(text, parent)
+    tag.setProperty("role", "badge")
+    tag.setProperty("kind", kind)
+    tag.setTextFormat(Qt.TextFormat.PlainText)
+    return tag
+
+
+def set_tone(widget: QWidget, tone: str | None) -> None:
+    """Tint a card: ``tone`` is success, warning, info, critical, or None for the plain card."""
+    widget.setProperty("tone", tone or "")
+    polish(widget)
+
+
+class _ClickToToggle(QObject):
+    """Lets a click on a row's text flip its switch, like clicking the label beside a checkbox."""
+
+    def __init__(self, switch: QCheckBox) -> None:
+        super().__init__(switch)
+        self._switch = switch
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.MouseButtonRelease and self._switch.isEnabled():
+            self._switch.click()
+            return True
+        return False
+
+
+def switch_row(title: str, description: str = "", parent: QWidget | None = None) -> tuple[QWidget, QCheckBox]:
+    """A settings row: title and one-line description on the left, an on/off switch on the right.
+
+    Returns ``(row, switch)``; the switch is an ordinary ``QCheckBox``, so code
+    reads and connects it like any checkbox. It takes keyboard focus with Tab
+    only, which keeps the focus ring for keyboard users.
+    """
+    row = QWidget(parent)
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 6, 0, 6)
+    layout.setSpacing(16)
+
+    text = QVBoxLayout()
+    text.setSpacing(2)
+    title_label = label(title)
+    text.addWidget(title_label)
+    description_label = None
+    if description:
+        description_label = label(description, "muted", wrap=True)
+        text.addWidget(description_label)
+    layout.addLayout(text, 1)
+
+    switch = QCheckBox()
+    switch.setProperty("role", "switch")
+    switch.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+    switch.setCursor(Qt.CursorShape.PointingHandCursor)
+    switch.setAccessibleName(title)
+    if description:
+        switch.setAccessibleDescription(description)
+    layout.addWidget(switch, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    toggler = _ClickToToggle(switch)
+    for text_label in (title_label, description_label):
+        if text_label is not None:
+            text_label.installEventFilter(toggler)
+    return row, switch
 
 
 def polish(widget: QWidget) -> None:

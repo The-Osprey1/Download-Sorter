@@ -101,6 +101,8 @@ py-modules = [
     "ui_icons",
     "ui_motion",
     "ui_style",
+    "ui_categories",
+    "ui_widgets",
     "quit_signal",
     "update_check",
     "updater",

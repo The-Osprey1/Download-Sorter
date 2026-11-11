@@ -122,30 +122,8 @@ BATCH_GAP_SECONDS = 4.0      # this long without a new file ends the burst
 BATCH_IDLE_CLOSE_MS = 6000   # the batch ribbon closes this long after the last file
 BATCH_POLL_MS = 300
 
-# Category color map aligned with the shared design tokens
-CATEGORY_COLORS: dict[str, str] = {
-    "step": "#69E6AD",         # 3D / CAD: Suite mint
-    "stl": "#69E6AD",
-    "3mf": "#69E6AD",
-    "obj": "#69E6AD",
-    "cad": "#69E6AD",
-    "3d models": "#69E6AD",
-    "gcode": "#D74A4A",        # CNC / GCode: HaasStudio red
-    "print files": "#E8833A",  # Slicer: PrintLibrary orange
-    "pdfs": "#FA7183",         # PDFs: Critical coral red
-    "school": "#61A5FF",       # Documents: Suite blue
-    "documents": "#61A5FF",
-    "word": "#61A5FF",
-    "text": "#8B94A7",
-    "spreadsheets": "#69E6AD", # Excel / CSV: Green
-    "images": "#A855F7",       # Purple / Violet
-    "videos": "#EC4899",       # Pink / Magenta
-    "audio": "#8B5CF6",        # Indigo
-    "installers": "#F43F5E",   # Rose
-    "archives": "#06B6D4",     # Cyan
-    "code": "#F5AD62",         # Warning amber / Gold
-    "other": "#8B94A7",        # Muted slate
-}
+# Category colors and the file-kind rules are shared with the Qt window (ui_categories.py).
+from ui_categories import CATEGORY_COLORS, category_info  # noqa: E402,F401
 
 # Fallback text glyphs when Pillow is not available
 CATEGORY_GLYPHS: dict[str, str] = {
@@ -202,65 +180,7 @@ def add_to_recent_docs(path: str | Path) -> None:
 
 def get_category_info(dest_path: Path, folder_disp: str) -> tuple[str, str]:
     """Return (category_type, accent_color) based on file extension and folder context."""
-    folder_lower = folder_disp.lower()
-    ext = dest_path.suffix.lower()
-
-    # Direct extension mappings (primary precision)
-    if ext in (".step", ".stp", ".stl", ".3mf", ".obj", ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".dwg", ".dxf"):
-        return "cad", "#69E6AD"
-    if ext in (".nc", ".tap", ".ngc"):
-        return "cnc", "#D74A4A"
-    if ext in (".gcode", ".bgcode"):
-        return "print", "#E8833A"
-    if ext == ".pdf":
-        return "pdf", "#FA7183"
-    if ext in (".doc", ".docx", ".odt", ".rtf", ".txt", ".md"):
-        return "doc", "#61A5FF"
-    if ext in (".xls", ".xlsx", ".csv", ".ods"):
-        return "sheet", "#69E6AD"
-    if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"):
-        return "image", "#A855F7"
-    if ext in (".mp4", ".mov", ".mkv", ".avi", ".webm"):
-        return "video", "#EC4899"
-    if ext in (".mp3", ".wav", ".flac", ".m4a", ".aac"):
-        return "audio", "#8B5CF6"
-    if ext in (".zip", ".rar", ".7z", ".tar", ".gz"):
-        return "archive", "#06B6D4"
-    if ext in (".exe", ".msi", ".msix"):
-        return "installer", "#F43F5E"
-    if ext in (".py", ".js", ".ts", ".html", ".css", ".json", ".cpp", ".cs", ".rs", ".go", ".c", ".h"):
-        return "code", "#F5AD62"
-
-    # Destination folder keyword matches
-    for key, color in CATEGORY_COLORS.items():
-        if key in folder_lower:
-            if key in ("step", "stl", "3mf", "obj", "cad", "3d models"):
-                return "cad", color
-            if key == "gcode":
-                return "cnc", color
-            if key == "print files":
-                return "print", color
-            if key == "pdfs":
-                return "pdf", color
-            if key in ("school", "documents", "word", "text"):
-                return "doc", color
-            if key == "spreadsheets":
-                return "sheet", color
-            if key == "images":
-                return "image", color
-            if key == "videos":
-                return "video", color
-            if key == "audio":
-                return "audio", color
-            if key == "archives":
-                return "archive", color
-            if key == "installers":
-                return "installer", color
-            if key == "code":
-                return "code", color
-            return "default", color
-
-    return "default", DEFAULT_ACCENT
+    return category_info(dest_path, folder_disp)
 
 
 def get_accent_color(dest_path: Path, folder_disp: str) -> str:

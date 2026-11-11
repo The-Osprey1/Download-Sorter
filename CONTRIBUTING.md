@@ -43,6 +43,20 @@ Tests marked `desktop` open real Windows dialogs and need an unlocked desktop se
 
 ---
 
+## 🖼️ Seeing the Windows
+
+`tools/render_screens.py` draws every page offscreen with made-up data and saves PNG files. It never reads your own settings, history or folders.
+
+```powershell
+.\.venv\Scripts\python.exe tools\render_screens.py --out C:\temp\shots
+# Only some pages, at 150% display scale and the smallest window size:
+.\.venv\Scripts\python.exe tools\render_screens.py --out C:\temp\shots --only home,rules --scale 1.5 --min
+```
+
+Run it before and after a change to the windows, and attach the images to the pull request.
+
+---
+
 ## 📚 Contributing New Rule Presets
 
 Have an awesome rule category that would help others (e.g. specialized engineering software, audio production, photography, video editing)?
