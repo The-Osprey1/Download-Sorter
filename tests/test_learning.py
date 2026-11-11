@@ -211,12 +211,15 @@ def test_user_placed_file_stays_protected_after_edits(downloads, config):
     assert sorter.is_restored_by_undo(dest)
 
 
-def test_new_downloads_into_a_subfolder_are_still_rescued(downloads, config):
-    """A browser saving straight into an old subfolder is a creation, not a user move."""
+def test_a_file_saved_into_a_folder_you_made_stays_there(downloads, config):
+    """Nothing is taken out of a folder the user made, however the file got there."""
     handler = watch.DownloadsHandler(downloads, config)
     f = _old_file(downloads / "OldFolder" / "report.pdf")
     handler.on_created(type("E", (), {"is_directory": False, "src_path": str(f)})())
-    assert f in watch.PENDING_MISPLACED
+    assert f not in watch.PENDING_MISPLACED
+    assert f not in watch.PENDING_DOWNLOADS
+    assert sorter.reclassify_misplaced_file(f, config) is None
+    assert f.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +263,7 @@ def test_learning_from_moves_and_logging_guesses(downloads, learning_on, sites):
     watch._handle_post_move(dest, downloads, learning_on)
     sorted_rec = learning.read_log()[-1]
     assert sorted_rec["kind"] == "sorted"
-    assert sorted_rec["rules_put_it_in"] == "Documents"
+    assert sorted_rec["rules_put_it_in"] == "Documents\\PDF"
     assert sorted_rec["would_suggest"][0]["folder"] == "Banking"
 
     rep = learning.report()

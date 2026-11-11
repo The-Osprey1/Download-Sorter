@@ -66,10 +66,10 @@ def test_consolidate_dry_run_leaves_disk_untouched(mock_downloads: Path):
     # Ensure source files still exist at their original locations
     assert (mock_downloads / "Documents" / "PDFs" / "annual_report.pdf").exists()
     assert (mock_downloads / "Spreadsheets" / "budget.xlsx").exists()
-    assert not (mock_downloads / "Documents" / "annual_report.pdf").exists()
+    assert not (mock_downloads / "Documents" / "PDF" / "annual_report.pdf").exists()
 
 
-def test_consolidate_flattens_nested_and_legacy_folders(mock_downloads: Path):
+def test_consolidate_files_old_folders_into_the_two_tier_layout(mock_downloads: Path):
     config = sorter.DEFAULT_CONFIG.copy()
     config["watch"] = {"folder": str(mock_downloads)}
 
@@ -79,22 +79,21 @@ def test_consolidate_flattens_nested_and_legacy_folders(mock_downloads: Path):
         dry_run=False,
     )
 
-    assert res["moved"] >= 5
-    # Documents flattened
-    assert (mock_downloads / "Documents" / "annual_report.pdf").exists()
-    assert (mock_downloads / "Documents" / "essay.docx").exists()
-    assert (mock_downloads / "Documents" / "budget.xlsx").exists()
-    assert (mock_downloads / "Documents" / "loose_doc.pdf").exists()
+    # essay.docx and benchy.stl already sit in the folder for their kind
+    assert res["moved"] == 4
+    # Each kind of document in its own folder
+    assert (mock_downloads / "Documents" / "PDF" / "annual_report.pdf").exists()
+    assert (mock_downloads / "Documents" / "Word" / "essay.docx").exists()
+    assert (mock_downloads / "Documents" / "Spreadsheets" / "budget.xlsx").exists()
+    assert (mock_downloads / "Documents" / "PDF" / "loose_doc.pdf").exists()
 
-    # 3D Models flattened
-    assert (mock_downloads / "3D Models" / "benchy.stl").exists()
-    assert (mock_downloads / "3D Models" / "part.gcode").exists()
+    # 3D files in the folder for their kind
+    assert (mock_downloads / "3D Models" / "STL" / "benchy.stl").exists()
+    assert (mock_downloads / "3D Models" / "G-code" / "part.gcode").exists()
 
-    # Emptied subfolders removed
+    # Emptied old folders removed
     assert not (mock_downloads / "Documents" / "PDFs").exists()
-    assert not (mock_downloads / "Documents" / "Word").exists()
     assert not (mock_downloads / "Spreadsheets").exists()
-    assert not (mock_downloads / "3D Models" / "STL").exists()
     assert not (mock_downloads / "Code" / "Gcode").exists()
 
     # Protected folders preserved
@@ -119,12 +118,12 @@ def test_consolidate_collision_resolution(tmp_path: Path):
     assert res["moved"] == 2
 
     # One is report.pdf, the other is report (2).pdf
-    assert (downloads / "Documents" / "report.pdf").exists()
-    alt_file = downloads / "Documents" / "report (2).pdf"
+    assert (downloads / "Documents" / "PDF" / "report.pdf").exists()
+    alt_file = downloads / "Documents" / "PDF" / "report (2).pdf"
     assert alt_file.exists()
 
     contents = {
-        (downloads / "Documents" / "report.pdf").read_text(encoding="utf-8"),
+        (downloads / "Documents" / "PDF" / "report.pdf").read_text(encoding="utf-8"),
         alt_file.read_text(encoding="utf-8"),
     }
     assert contents == {"CONTENT_A", "CONTENT_B"}
@@ -147,7 +146,7 @@ def test_consolidate_exact_duplicate_quarantined(tmp_path: Path):
     assert res["moved"] == 1
     assert res["duplicates"] == 1
 
-    assert (downloads / "Documents" / "dup.pdf").exists()
+    assert (downloads / "Documents" / "PDF" / "dup.pdf").exists()
     # Duplicate moved to _Duplicates (under YYYY-MM)
     dup_files = list((downloads / "_Duplicates").rglob("dup*.pdf"))
     assert len(dup_files) == 1
@@ -169,13 +168,13 @@ def test_consolidate_undo_restores_original_locations(mock_downloads: Path, monk
     )
 
     batch_id = res["batch_id"]
-    assert (mock_downloads / "Documents" / "annual_report.pdf").exists()
+    assert (mock_downloads / "Documents" / "PDF" / "annual_report.pdf").exists()
 
     # Now execute undo
     active = sort_undo.get_active_moves(sort_undo.load_history())
     targets = [rec for rec in reversed(active) if rec.get("batch_id") == batch_id]
     undone = sort_undo.undo_moves(targets)
-    assert undone >= 5
+    assert undone == 4
 
     # Original files should be back in their original subfolders!
     assert (mock_downloads / "Documents" / "PDFs" / "annual_report.pdf").exists()
@@ -257,6 +256,6 @@ def test_old_folders_are_found_whatever_their_capitals(tmp_path: Path):
 
     consolidate.consolidate_downloads(target_root=downloads, config=config)
 
-    assert (downloads / "Documents" / "budget.xlsx").exists()
+    assert (downloads / "Documents" / "Spreadsheets" / "budget.xlsx").exists()
     assert not (downloads / "SPREADSHEETS").exists()
     assert not (downloads / "code" / "HAAS").exists()

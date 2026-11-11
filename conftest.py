@@ -106,6 +106,34 @@ def isolate_sorter_state(tmp_path, monkeypatch):
     watch.WAKE_EVENT.clear()
 
 
+@pytest.fixture(autouse=True)
+def only_test_folders_collect_files(monkeypatch):
+    """Keep the folders in the real Downloads of whoever runs the tests out of them.
+
+    A folder the user made collects files named after it (sorter.my_folders). A
+    test that sorts with the default settings would otherwise look at the real
+    Downloads folder of this PC, and a folder there called "Benchy" would change
+    where "benchy.stl" goes. Only folders inside the tests' temporary area count.
+    """
+    import tempfile
+
+    import sorter
+
+    real = sorter.my_folders
+    temp_root = Path(tempfile.gettempdir()).resolve()
+
+    def my_folders(config, root=None):
+        try:
+            target = Path(root) if root is not None else sorter.watch_root(config)
+        except Exception:
+            return []
+        if not sorter.is_under(Path(target), temp_root):
+            return []
+        return real(config, root)
+
+    monkeypatch.setattr(sorter, "my_folders", my_folders)
+
+
 @pytest.fixture
 def finished_downloads(monkeypatch):
     """Treat every existing file as finished downloading.

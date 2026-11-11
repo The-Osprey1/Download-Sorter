@@ -1200,7 +1200,7 @@ class HomeDashboardWidget(QWidget):
         records: list[dict[str, Any]] = []
         if hasattr(suite_data, "get_recent_activity"):
             try:
-                records = suite_data.get_recent_activity(limit=25)
+                records = self._label_folders(suite_data.get_recent_activity(limit=25))
             except Exception:
                 records = []
 
@@ -1254,6 +1254,25 @@ class HomeDashboardWidget(QWidget):
                     text = f"Filed {len(fresh)} new files. {self._folder_breakdown(fresh)}"
                 self._banner.show_message(text.strip(), "success", "Undo", self.undo_last)
                 self.refresh_waiting()
+
+    def _label_folders(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Name each file's folder from Downloads down: "Documents\\PDF", not just "PDF"."""
+        root = None
+        if sorter and hasattr(sorter, "watch_root"):
+            try:
+                root = Path(sorter.watch_root(self._config))
+            except Exception:
+                root = None
+        if root is None:
+            return records
+        for rec in records:
+            try:
+                parts = Path(str(rec.get("dest") or "")).parent.relative_to(root).parts
+            except (ValueError, OSError):
+                continue
+            if parts:
+                rec["folder"] = "\\".join(parts)
+        return records
 
     @staticmethod
     def _folder_breakdown(records: list[dict[str, Any]], shown: int = 3) -> str:
@@ -1538,8 +1557,8 @@ class HomeDashboardWidget(QWidget):
             batch: list[dict[str, Any]] = []
             if hasattr(suite_data, "get_recent_activity"):
                 try:
-                    batch = [r for r in suite_data.get_recent_activity(limit=max(count, 25) + 25)
-                             if r.get("batch_id") == batch_id]
+                    recent = self._label_folders(suite_data.get_recent_activity(limit=max(count, 25) + 25))
+                    batch = [r for r in recent if r.get("batch_id") == batch_id]
                 except Exception:
                     batch = []
             noun = "file" if count == 1 else "files"
@@ -1744,11 +1763,32 @@ class SettingsWidget(QWidget):
         downloads.addWidget(self._chk_unpack)
         downloads.addWidget(ui_style.label("The original zip file is kept in the Archives folder.", "muted", wrap=True))
 
+        self._option_checks: dict[tuple[str, str], QCheckBox] = {}
+        folders = self._section(
+            layout, "Folders",
+            "Both on unless you turn them off. Nothing is ever taken out of a folder you made.",
+        )
+        for key, text, tip in (
+            (("type_folders", "enabled"),
+             "Inside each main folder, give every kind of file its own folder (Documents\\PDF, 3D Models\\STL)",
+             "Turn this off to keep files directly in the main folder (Documents, 3D Models...)."),
+            (("my_folders", "enabled"),
+             "Put files named after one of my folders into that folder "
+             "(“flanged_mace_v3.f3d” goes to 3D Models\\Flanged Mace)",
+             "Make a folder in Downloads, or inside a main folder such as 3D Models, and name it "
+             "after your project. New files with that name in theirs land there. Folders with "
+             "general names like “New folder” or “Old” are never used for this."),
+        ):
+            chk = QCheckBox(text)
+            chk.setToolTip(tip)
+            chk.toggled.connect(lambda checked, k=key: self._on_option_toggled(k, checked))
+            folders.addWidget(chk)
+            self._option_checks[key] = chk
+
         extras = self._section(
             layout, "Extra options",
             "All off unless you turn them on. Undo puts files back with their old names.",
         )
-        self._option_checks: dict[tuple[str, str], QCheckBox] = {}
         for key, text in (
             (("photos", "by_month"), "Put pictures into a folder for each month (Images\\2026-11), "
                                      "by the date a photo was taken"),
@@ -1841,7 +1881,8 @@ class SettingsWidget(QWidget):
         for (block_name, key), chk in self._option_checks.items():
             block = self._config.get(block_name)
             chk.blockSignals(True)
-            chk.setChecked(bool(block.get(key)) if isinstance(block, dict) else False)
+            on_by_default = block_name in ("type_folders", "my_folders")
+            chk.setChecked(bool(block.get(key, on_by_default)) if isinstance(block, dict) else on_by_default)
             chk.blockSignals(False)
         days = _storage_sense_days()
         if days:

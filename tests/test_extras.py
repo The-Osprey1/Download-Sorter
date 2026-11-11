@@ -96,7 +96,7 @@ def test_course_websites_starter_files_by_site(downloads, config, monkeypatch):
     other = _old(downloads / "flyer.pdf")
 
     assert sorter.evaluate_routing(handout.name, new, file_path=handout)["destination"] == "Documents\\School"
-    assert sorter.evaluate_routing(other.name, new, file_path=other)["destination"] == "Documents"
+    assert sorter.evaluate_routing(other.name, new, file_path=other)["destination"] == "Documents\\PDF"
 
 
 # ---------------------------------------------------------------------------
@@ -243,9 +243,9 @@ def test_pictures_by_month_uses_the_date_taken(downloads, config):
     assert sorter.move_file(shot, config, check_age=False).parent.name == "2023-11"
 
 
-def test_pictures_stay_flat_unless_turned_on(downloads, config):
+def test_pictures_go_by_kind_unless_months_are_turned_on(downloads, config):
     photo = _old(downloads / "a.jpg")
-    assert sorter.move_file(photo, config, check_age=False).parent == downloads / "Images"
+    assert sorter.move_file(photo, config, check_age=False).parent == downloads / "Images" / "JPG"
 
 
 def test_consolidate_keeps_month_folders(downloads, config):
@@ -269,12 +269,12 @@ def test_rule_words_at_the_top_of_a_pdf(downloads, config):
     invoice = _old(downloads / "document (3).pdf", _pdf("INVOICE #4471 from Example Shop"))
     letter = _old(downloads / "letter.pdf", _pdf("Dear student, welcome back"))
 
-    assert sorter.evaluate_routing(invoice.name, config, file_path=invoice)["destination"] == "Documents"
+    assert sorter.evaluate_routing(invoice.name, config, file_path=invoice)["destination"] == "Documents\\PDF"
     config["pdf_text"]["enabled"] = True
     result = sorter.evaluate_routing(invoice.name, config, file_path=invoice)
     assert result["destination"] == "Invoices"
     assert "top of the PDF" in result["matched_trigger"]
-    assert sorter.evaluate_routing(letter.name, config, file_path=letter)["destination"] == "Documents"
+    assert sorter.evaluate_routing(letter.name, config, file_path=letter)["destination"] == "Documents\\PDF"
 
 
 def test_unreadable_or_large_pdfs_are_skipped(downloads, config):
@@ -313,19 +313,19 @@ def test_undo_puts_the_old_name_back(downloads, config):
 
     dest = sorter.move_file(original, config, batch_id="r1", check_age=False)
 
-    assert dest == downloads / "Documents" / "Lab Report.docx"
+    assert dest == downloads / "Documents" / "Word" / "Lab Report.docx"
     assert sort_undo.main(["--batch", "r1"]) == 0
     assert original.exists() and not dest.exists()
 
 
 def test_a_renamed_duplicate_is_still_recognized(downloads, config):
     config["rename"] = {"tidy": True, "add_date": False}
-    _old(downloads / "Documents" / "Lab Report.docx", "same")
+    _old(downloads / "Documents" / "Word" / "Lab Report.docx", "same")
     again = _old(downloads / "Lab_Report (1).docx", "same")
 
     sorter.move_file(again, config, batch_id="r2", check_age=False)
 
-    assert not (downloads / "Documents" / "Lab Report (2).docx").exists()
+    assert not (downloads / "Documents" / "Word" / "Lab Report (2).docx").exists()
     assert (downloads / "_Duplicates").exists()
 
 
@@ -341,9 +341,14 @@ def test_settings_extra_options_save(qapp, monkeypatch):
     widget = onboarding.SettingsWidget(config=sorter.get_default_config())
     try:
         checks = widget._option_checks
-        assert set(checks) == {("photos", "by_month"), ("pdf_text", "enabled"), ("rename", "tidy"),
-                               ("rename", "add_date"), ("cleanup", "enabled")}
-        assert not any(c.isChecked() for c in checks.values()), "all off by default"
+        layout = {("type_folders", "enabled"), ("my_folders", "enabled")}
+        assert set(checks) == layout | {("photos", "by_month"), ("pdf_text", "enabled"), ("rename", "tidy"),
+                                        ("rename", "add_date"), ("cleanup", "enabled")}
+        assert all(checks[key].isChecked() for key in layout), "the folder layout is on by default"
+        assert not any(c.isChecked() for key, c in checks.items() if key not in layout), "extras are off by default"
+        checks[("type_folders", "enabled")].setChecked(False)
+        assert saved[-1]["type_folders"]["enabled"] is False
+        assert saved[-1]["my_folders"]["enabled"] is True
         checks[("photos", "by_month")].setChecked(True)
         assert saved[-1]["photos"]["by_month"] is True
         checks[("rename", "add_date")].setChecked(True)

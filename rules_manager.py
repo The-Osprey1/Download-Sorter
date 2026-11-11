@@ -893,6 +893,7 @@ SANDBOX_BADGES: dict[str, tuple[str, str, str]] = {
     "fallback": ("No rule matched", COLORS["warning"], COLORS["warningSubtle"]),
     "ignored": ("Skipped", COLORS["critical"], COLORS["criticalSubtle"]),
     "active_project": ("Project mode", COLORS["warning"], COLORS["warningSubtle"]),
+    "my_folder": ("Your folder", COLORS["info"], COLORS["infoSubtle"]),
     "makerworld": ("MakerWorld", COLORS["info"], COLORS["infoSubtle"]),
     "gcode_sniffer": ("G-code check", COLORS["info"], COLORS["infoSubtle"]),
 }

@@ -152,8 +152,8 @@ def test_applying_the_ticked_folders(downloads, config):
     assert route("Invoice_99.pdf") == "Invoices"
     assert route("Invoices March.pdf") == "Invoices"
     assert route("IME4030_homework.pdf") == "IME 4030"
-    assert route("song2.mp3") == "Music"
-    assert route("Personal_Statement.pdf") == "Documents"
+    assert route("song2.mp3") == "Music\\MP3"
+    assert route("Personal_Statement.pdf") == "Documents\\PDF"
     assert route("setup.exe") == "Other"
     assert config["keyword_rules"][-1]["name"] == "Band", "the original config is not changed"
 
@@ -215,7 +215,7 @@ def test_a_rule_can_require_the_website(downloads, config, sites):
     sites[from_bank.name] = "yourbank.com"
 
     assert sorter.evaluate_routing(from_bank.name, config, file_path=from_bank)["destination"] == "Banking"
-    assert sorter.evaluate_routing(personal.name, config, file_path=personal)["destination"] == "Documents"
+    assert sorter.evaluate_routing(personal.name, config, file_path=personal)["destination"] == "Documents\\PDF"
 
 
 def test_a_website_only_rule(downloads, config, sites):

@@ -68,7 +68,7 @@ def test_file_reached_through_another_spelling_is_sorted(two_spellings):
     dest = sorter.move_file(report, cfg)
 
     assert dest is not None, "a file directly in Downloads was skipped"
-    assert (real / "Documents" / "report.pdf").exists()
+    assert (real / "Documents" / "PDF" / "report.pdf").exists()
 
 
 def test_3mf_reached_through_another_spelling_is_held(two_spellings):

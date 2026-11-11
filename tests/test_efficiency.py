@@ -101,7 +101,7 @@ def test_compiled_context_avoids_active_project_disk_read(monkeypatch):
 
     result = sorter.evaluate_routing("part.stl", config, routing_context=context)
 
-    assert result["destination"] == "3D Models"
+    assert result["destination"] == "3D Models\\STL"
 
 
 def test_config_deletion_keeps_last_valid_configuration(tmp_path):
@@ -138,7 +138,7 @@ def test_event_driven_watcher_moves_new_file_and_stops_promptly(tmp_path, monkey
     time.sleep(0.15)
     incoming = downloads / "new-report.pdf"
     incoming.write_text("report", encoding="utf-8")
-    destination = downloads / "Documents" / incoming.name
+    destination = downloads / "Documents" / "PDF" / incoming.name
 
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline and not destination.exists():

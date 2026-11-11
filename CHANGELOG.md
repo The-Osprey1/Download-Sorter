@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+* **Two-level folders are the default (`sorter.py`, Settings)**: inside a main folder, each kind of file now gets its own folder, so `Documents\PDF` holds only PDFs, `3D Models\STL` only STL files, `CAD\Fusion 360` only Fusion files. Rare kinds of file, and the small Installers and Archives folders, stay one level deep. A rule that already points deeper (`Documents\Invoices & Receipts`) or outside Downloads is used exactly as written. This applies to everyone, including settings saved by older versions. Turn it off in **Settings → Folders**, or rename a folder with `"type_folders": {"names": {".pdf": "PDFs"}}` in the settings file.
+* **Files already in a main folder are moved into the folder for their kind**: the first time Download Sorter starts with this version, files sitting directly in `Documents`, `3D Models` and the other main folders move into their type folder. This is one batch of its own with its own ribbon, so a single **Undo last sort** puts them all back, and files Undo put back stay put. Files you moved somewhere yourself, files from before a "don't organize existing files" choice, and files in your own folders are not touched. Nothing moves while sorting is paused.
+* **Nothing is taken out of a folder you made (`sorter.py`, `watch.py`)**: a file saved, unzipped or dragged into your own folder inside Downloads stays there. Before, a recognised file one level deep in such a folder was treated as misplaced and moved to its category, which pulled apart archives extracted into Downloads. Only Download Sorter's own folders (main folders, type folders and rule folders) are tidied.
+* **Consolidate (`--consolidate`) files into the two-level layout** instead of flattening everything into the main folders.
+
+### Added
+* **A folder you make collects files named after it (`sorter.py`)**: create `3D Models\Flanged Mace` or `Downloads\Flanged Mace`, and new downloads with that name in theirs (`flanged_mace_v1.f3d`, `Flanged Mace v2.step`, `FlangedMace-v3.stl`) go there, every version kept. A folder inside 3D Models or CAD takes 3D and CAD files of any kind, so one project keeps its `.f3d`, `.step` and `.stl` together; a folder at the top of Downloads takes any kind of file. The longest matching folder name wins, name rules still win over folders, and folders with general names (`New folder`, `Old`, `Parts`, `2024`) never collect files. Turn it off in **Settings → Folders**, or stop one folder with `"my_folders": {"skip": ["3D Models\\Old"]}` or a `.download-sorter-keep` file inside it. The Rules page's **Try a filename** shows a "Your folder" badge when a folder matches.
+
+### Fixed
+* **Starting while paused no longer sorts (`watch.py`)**: the sort that runs when Download Sorter starts used to ignore Pause. It now waits until sorting is resumed.
+* **An active project no longer empties the sorted folders (`sorter.py`)**: with a project turned on, the tidy-up of the main folders treated every 3D and CAD file already filed as belonging to the project and moved it there. A project now only collects new downloads.
+
+### Removed
+* The leftover folder name `xyzfiles` from the list of folders "Clean up a folder" treats as already organized (`remodel.py`). `3D Models` was already on that list.
+
+---
+
 ## [2.3.0] - 2026-11-09
 
 ### Added

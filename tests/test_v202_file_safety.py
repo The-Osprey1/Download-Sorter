@@ -80,12 +80,12 @@ def _hold_state() -> dict:
 # ---------------------------------------------------------------------------
 
 def test_duplicate_is_quarantined_not_deleted_and_undo_restores_it(downloads, config):
-    _make(downloads / "Documents" / "report.pdf", b"%PDF identical")
+    _make(downloads / "Documents" / "PDF" / "report.pdf", b"%PDF identical")
     dup = _make(downloads / "report.pdf", b"%PDF identical")
 
     result = sorter.move_file(dup, config, batch_id="dup1", check_age=False)
 
-    assert result == downloads / "Documents" / "report.pdf"
+    assert result == downloads / "Documents" / "PDF" / "report.pdf"
     assert not dup.exists()
     parked = list((downloads / sorter.DUPLICATES_DIR_NAME).rglob("report.pdf"))
     assert len(parked) == 1, "duplicate must be kept in _Duplicates, not deleted"

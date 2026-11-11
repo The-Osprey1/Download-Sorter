@@ -56,10 +56,10 @@ def _folder_moves(result: dict) -> list[dict]:
 
 def test_dry_run_lists_every_file_in_the_folder(engine, root):
     files = {
-        "Mixed Stuff/report.pdf": "Documents/report.pdf",
-        "Mixed Stuff/photo.jpg": "Images/photo.jpg",
-        "Mixed Stuff/clip.mp4": "Videos/clip.mp4",
-        "Mixed Stuff/Sub/budget.xlsx": "Documents/budget.xlsx",
+        "Mixed Stuff/report.pdf": "Documents/PDF/report.pdf",
+        "Mixed Stuff/photo.jpg": "Images/JPG/photo.jpg",
+        "Mixed Stuff/clip.mp4": "Videos/MP4/clip.mp4",
+        "Mixed Stuff/Sub/budget.xlsx": "Documents/Spreadsheets/budget.xlsx",
     }
     for rel in files:
         _write(root / rel, rel)
@@ -77,10 +77,10 @@ def test_dry_run_lists_every_file_in_the_folder(engine, root):
 
 def test_apply_moves_every_file_and_undo_puts_them_all_back(engine, root):
     files = {
-        "Mixed Stuff/report.pdf": "Documents/report.pdf",
-        "Mixed Stuff/photo.jpg": "Images/photo.jpg",
-        "Mixed Stuff/clip.mp4": "Videos/clip.mp4",
-        "Mixed Stuff/Sub/budget.xlsx": "Documents/budget.xlsx",
+        "Mixed Stuff/report.pdf": "Documents/PDF/report.pdf",
+        "Mixed Stuff/photo.jpg": "Images/JPG/photo.jpg",
+        "Mixed Stuff/clip.mp4": "Videos/MP4/clip.mp4",
+        "Mixed Stuff/Sub/budget.xlsx": "Documents/Spreadsheets/budget.xlsx",
     }
     for rel in files:
         _write(root / rel, rel)
@@ -107,10 +107,10 @@ def test_skipped_files_stay_put_and_never_take_another_files_name(engine, root):
     engine.apply(plan, card_overrides=_organize_every_folder(plan))
 
     assert not report.exists()
-    assert (root / "Documents/report.pdf").read_text(encoding="utf-8") == "the real report"
+    assert (root / "Documents/PDF/report.pdf").read_text(encoding="utf-8") == "the real report"
     assert lock.read_text(encoding="utf-8") == "office lock file"
     assert partial.read_text(encoding="utf-8") == "half a download"
-    pdfs = sorted(p.name for p in (root / "Documents").glob("report*.pdf"))
+    pdfs = sorted(p.name for p in (root / "Documents/PDF").glob("report*.pdf"))
     assert pdfs == ["report.pdf"], "nothing else may be moved in under the report's name"
 
 
@@ -121,7 +121,7 @@ def test_same_name_in_two_folders_keeps_both(engine, root):
     plan = _plan(engine, root)
     engine.apply(plan, card_overrides=_organize_every_folder(plan))
 
-    texts = sorted(p.read_text(encoding="utf-8") for p in (root / "Documents").glob("notes*.txt"))
+    texts = sorted(p.read_text(encoding="utf-8") for p in (root / "Documents/Text").glob("notes*.txt"))
     assert texts == ["recipe notes", "trip notes"]
 
 
@@ -133,7 +133,7 @@ def test_folder_whose_files_are_all_in_subfolders(engine, root):
     result = engine.apply(_plan(engine, root))
 
     assert len(_folder_moves(result)) == 2
-    assert sorted(p.read_text(encoding="utf-8") for p in (root / "Documents").glob("*.pdf")) == ["a", "b"]
+    assert sorted(p.read_text(encoding="utf-8") for p in (root / "Documents/PDF").glob("*.pdf")) == ["a", "b"]
 
 
 @pytest.mark.parametrize("name", ["New folder", "New folder (2)", "Misc", "Old Downloads",

@@ -40,24 +40,33 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
   ![New files appear on the Home page a few seconds after they're filed](docs/images/home-live.gif)
 
-- **Files land in folders inside Downloads**, for example:
+- **Files land in folders inside Downloads, two levels deep**: a main folder, then a folder for each kind of file. For example:
 
   ```text
   Downloads/
-    ├── Documents/   (PDF, Word, text, spreadsheets, presentations, e-books,
-    │                 plus folders from your profile, like Invoices & Receipts)
-    ├── Images/
-    ├── Videos/
-    ├── Audio/
+    ├── Documents/
+    │     ├── PDF/              (only PDFs)
+    │     ├── Word/
+    │     ├── Spreadsheets/
+    │     └── Invoices & Receipts/   (folders from your rules sit here too)
+    ├── Images/      (JPG, PNG, GIF, Vector)
+    ├── Videos/      (MP4, MOV, MKV)
+    ├── Audio/       (MP3, WAV, FLAC)
     ├── Archives/    (zip, 7z, rar ...)
     ├── Installers/  (exe, msi, msix)
-    ├── 3D Models/   (STL, 3MF, STEP, CAD, G-code ...)
+    ├── 3D Models/
+    │     ├── STL/
+    │     ├── 3MF/
+    │     ├── G-code/
+    │     └── Flanged Mace/     (a folder you made: see below)
+    ├── CAD/         (STEP, Fusion 360, SolidWorks ...)
     ├── Code/
     └── Other/       (anything no rule matched)
   ```
 
-  You can change where things go on the **Rules** page, and test a file name with **Try a filename** before saving.
-- **Files you move yourself stay where you put them.** If you drag a sorted file into your own folder inside Downloads, Download Sorter leaves it there.
+  Kinds of file that are rare, and small folders like Installers and Archives, stay one level deep. You can change where things go on the **Rules** page, and test a file name with **Try a filename** before saving. To keep everything one level deep, turn off "give every kind of file its own folder" in **Settings**.
+- **Make a folder for a project and its files find it.** Create a folder inside a main folder (`3D Models\Flanged Mace`) or at the top of Downloads (`Downloads\Flanged Mace`) and name it after your project. From then on, any new download with that name in its name goes there: `flanged_mace_v1.f3d`, `Flanged Mace v2.step`, `FlangedMace-v3.stl`. Every version is kept; none is overwritten. A folder inside 3D Models or CAD takes 3D and CAD files, a folder at the top of Downloads takes any kind of file. Folders with general names (`New folder`, `Old`, `Parts`) are never used for this.
+- **Nothing is ever taken out of a folder you made.** Files you save, unzip or drag into your own folder inside Downloads stay there. Download Sorter only tidies its own folders: the main folders and the folders for each kind of file.
 - **Extra options in Settings**, all off until you turn them on: pictures in a folder per month, rule words found at the top of PDFs, tidier names or the date in front (Undo restores the old name), and old installers and zips to the Recycle Bin once a day. Settings also warns you if Windows Storage Sense is set to delete old files in Downloads, which would include your sorted files.
 - **It learns from your moves, and asks first.** After you've moved 3 similar files into one folder, a ribbon asks “Put files like this in Banking?”. **Yes** adds a rule you can see and change on the Rules page; **No** means it won't ask again. It never moves a file on a guess. You can turn learning off in Settings.
 
@@ -78,16 +87,18 @@ flowchart TD
         R1{"1. Active project on,<br/>and a CAD / 3D file?"} -- "Yes" --> D1["The project's folder"]
         R1 -- "No" --> R2{"2. Name matches a word rule?<br/>e.g. 'invoice', a course code, site,<br/>or top of PDF if enabled"}
         R2 -- "Yes" --> D2["That rule's folder<br/>(e.g. Documents/Invoices & Receipts)"]
-        R2 -- "No" --> R3{"3. G-code? Look inside:<br/>Haas CNC or 3D printer"}
-        R3 -- "Yes" --> D3["3D Models or Code/Haas"]
-        R3 -- "No" --> R4{"4. 3MF from MakerWorld?"}
+        R2 -- "No" --> RF{"3. Named after a folder<br/>you made? e.g. 'Flanged Mace'"}
+        RF -- "Yes" --> DF["Your folder<br/>(3D Models/Flanged Mace)"]
+        RF -- "No" --> R3{"4. G-code? Look inside:<br/>Haas CNC or 3D printer"}
+        R3 -- "Yes" --> D3["3D Models/G-code<br/>or 3D Models/CNC"]
+        R3 -- "No" --> R4{"5. 3MF from MakerWorld?"}
         R4 -- "Yes" --> D4["3D Models/MakerWorld/<br/>Designer/Model"]
-        R4 -- "No" --> R5{"5. Known file type?<br/>121 types: .pdf, .jpg, .stl ..."}
-        R5 -- "Yes" --> D5["Its folder: Documents, Images,<br/>Videos, Audio, Archives,<br/>Installers, 3D Models, CAD, Code<br/>(pictures by month, if on)"]
+        R4 -- "No" --> R5{"6. Known file type?<br/>121 types: .pdf, .jpg, .stl ..."}
+        R5 -- "Yes" --> D5["Its main folder, then the folder<br/>for its kind: Documents/PDF,<br/>Images/JPG, 3D Models/STL ...<br/>(pictures by month, if on)"]
         R5 -- "No" --> D6["Other"]
     end
 
-    D1 & D2 & D3 & D4 & D5 & D6 --> H{"A 3MF your slicer may<br/>still have open?"}
+    D1 & D2 & DF & D3 & D4 & D5 & D6 --> H{"A 3MF your slicer may<br/>still have open?"}
     H -- "Yes" --> H2(["Held in Downloads for up to 7 days<br/>(File now / Keep here ribbon options)"])
     H -- "No" --> E{"Same name already there,<br/>and exactly the same file?"}
     E -- "Yes" --> E2["Route to _Duplicates<br/>(quarantined, not deleted)"]
@@ -104,13 +115,14 @@ flowchart TD
 **In words:**
 
 1. **Wait until the download is finished.** Browsers write to `.crdownload` or `.part` files first, and big files take a while. Download Sorter waits until the file has stopped changing for 3 seconds and no other program has it open.
-2. **Skip what it shouldn't touch:** files you moved yourself, files you just undid, folders with a `.download-sorter-keep` file, OneDrive files that aren't on your PC yet, and temporary files like `~$report.docx`.
+2. **Skip what it shouldn't touch:** anything inside a folder you made, files you moved yourself, files you just undid, folders with a `.download-sorter-keep` file, OneDrive files that aren't on your PC yet, and temporary files like `~$report.docx`.
 3. **Pick the folder.** The rules are checked in order and the first match wins:
    - an **active project**, for CAD and 3D files, when you've turned one on;
    - **word rules**, which look for whole words in the file name, so "statement" alone doesn't send your personal statement to Invoices. They come from your folders at setup, from ready-made starter rules, or from rules you said **Yes** to when it learned from your moves. A rule can also require the website a file came from;
+   - **a folder you made**, when the file is named after it (see "Make a folder for a project" above);
    - the **G-code check**, which looks inside `.nc`/`.gcode` files to tell a Haas CNC program from a 3D printer file;
    - **MakerWorld 3MF files**, filed by designer and model name;
-   - the **file type**: 121 extensions mapped to the main folders;
+   - the **file type**: 121 extensions mapped to the main folders, and inside a main folder to the folder for that kind of file (`Documents\PDF`);
    - otherwise **Other**.
 4. **3MF hold.** A 3MF file you just downloaded may be open in your slicer, so it stays in Downloads for up to 7 days. The ribbon offers **File now** and **Keep here**.
 5. **Duplicates.** If a file with the same name is already in the destination folder and the two are identical (checked byte by byte), the new copy goes to `_Duplicates` instead of becoming `report (2).pdf`.
