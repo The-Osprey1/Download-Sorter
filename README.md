@@ -36,7 +36,7 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 - **Setup starts from your own folders.** The first welcome step shows the folders already in your Downloads folder (like `Invoices` or `IME 4030`) and offers to keep filing matching files into them. If there are none yet, you tick the kinds of files you want sorted.
 - **Nothing moves until you finish the welcome steps.** If you chose to sort the files already in Downloads, that first sort counts as one batch, so a single **Undo last sort** puts everything back.
 - **New downloads are filed a few seconds after they finish.** Half-finished downloads are left alone.
-- **The Home page shows each file as it's filed**, with where it went and an Undo button:
+- **The Home page shows each file as it's filed**, with where it went and how long ago. The **...** at the end of a row fixes a mistake (see [Undo](#undo-updates-uninstalling-and-help)):
 
   ![New files appear on the Home page a few seconds after they're filed](docs/images/home-live.gif)
 
@@ -163,6 +163,7 @@ All the source code is in this repository, and the installer is built from it by
 ## Undo, updates, uninstalling and help
 
 - **Undo:** click **Undo last sort** on Home, or right-click the tray icon (near the clock) and choose **Undo last sort**.
+- **Fix one file:** on Home, click the **...** at the end of its row. **Put back where it was** undoes just that file. **Move to...** files it in a folder you pick, and Download Sorter notes that you chose it. **Always file like this...** opens the rule editor filled in from the file; the new rule goes first, so it wins.
 - **Pause:** use **Pause sorting** on Home, or the tray icon.
 - **Updates:** when a new version is out, Home shows "Download Sorter X is available". Click **Download and install**: it downloads in the app (with progress), checks the file against the release's published checksum, then **Restart and install** closes Download Sorter for a few seconds and opens it again. Your rules and settings are kept. (Versions before 2.2 open the download page instead; download and run the installer once.)
 - **Uninstall:** go to Windows Settings, then Apps, then Installed apps, then Download Sorter, then Uninstall. It asks whether to also delete your rules and history.

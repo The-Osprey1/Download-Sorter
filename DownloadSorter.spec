@@ -58,6 +58,7 @@ hidden_imports = [
     'ui_style',
     'ui_categories',
     'ui_widgets',
+    'refile',
     'quit_signal',
     'problem_report',
     'update_check',

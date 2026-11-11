@@ -87,6 +87,7 @@ py-modules = [
     "main",
     "problem_report",
     "quick_switcher",
+    "refile",
     "remodel",
     "ribbon_popup",
     "rules_manager",

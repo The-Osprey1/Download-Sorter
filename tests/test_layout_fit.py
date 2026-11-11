@@ -5,13 +5,12 @@ page asks for more room than that (a longer list, one more row), Qt quietly
 makes the window bigger, and on a small or highly scaled screen the buttons end
 up below the edge. These checks measure with a real font (Qt's offscreen
 platform has none, which would draw every letter as a wide box) and fail when a
-page outgrows its window.
+page outgrows its window. (The ``real_font`` fixture is in conftest.py.)
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -26,21 +25,6 @@ import sorter
 MAIN_LIMIT = (1000, 640)
 WIZARD_LIMIT = (720, 640)
 SIDEBAR_WIDTH = 216
-
-
-@pytest.fixture(scope="module")
-def real_font(qapp):
-    """Load Segoe UI so text is measured the way it will be drawn."""
-    from PySide6.QtGui import QFontDatabase
-
-    fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
-    files = [fonts / name for name in ("segoeui.ttf", "segoeuib.ttf", "seguisb.ttf")]
-    if not all(path.exists() for path in files):
-        pytest.skip("Segoe UI isn't installed, so text can't be measured")
-    ids = [QFontDatabase.addApplicationFont(str(path)) for path in files]
-    yield
-    for font_id in ids:
-        QFontDatabase.removeApplicationFont(font_id)
 
 
 def _config(downloads: Path) -> dict:

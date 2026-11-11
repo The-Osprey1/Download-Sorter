@@ -75,6 +75,7 @@ import rules_manager  # noqa: E402
 import sorter  # noqa: E402
 import ui_motion  # noqa: E402
 import ui_style  # noqa: E402
+import ui_widgets  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # sample data
@@ -211,6 +212,15 @@ class Shooter:
         flag = "" if (widget.width(), widget.height()) == size else f"  (window grew to {widget.width()}x{widget.height()})"
         print(f"  {name}: {size[0]}x{size[1]}{flag}")
 
+    def shoot_popup(self, widget: QWidget, name: str) -> None:
+        """Save a window that sizes itself (a menu), without resizing it."""
+        self.settle()
+        path = self.out / f"{name}.png"
+        saved = widget.grab().save(str(path))
+        self.manifest.append({"name": name, "file": path.name, "saved": bool(saved),
+                              "actual": [widget.width(), widget.height()]})
+        print(f"  {name}: {widget.width()}x{widget.height()}")
+
     def write_manifest(self) -> None:
         (self.out / "manifest.json").write_text(json.dumps(self.manifest, indent=2), encoding="utf-8")
 
@@ -240,6 +250,14 @@ def render_home(shooter: Shooter, size: tuple[int, int], cfg: dict) -> None:
     window = new_window("home")
     shooter.settle(20)  # lets the background "files waiting" count arrive
     shooter.shoot(window, "home_running", size, page_hints(window))
+
+    from PySide6.QtCore import QPoint
+
+    button = window._home_widget._activity_table.cellWidget(1, 3).findChild(ui_widgets.RowMenuButton)
+    menu = button.menu()
+    menu.popup(button.mapToGlobal(QPoint(-170, button.height())))
+    shooter.shoot_popup(menu, "home_row_menu")
+    menu.hide()
 
     sorter.is_paused = lambda: True
     window._home_widget.refresh_status()
@@ -276,6 +294,12 @@ def render_rules(shooter: Shooter, size: tuple[int, int]) -> None:
     window._sandbox._input.setText("")
     window._tabs.setCurrentWidget(window._extension_table)
     shooter.shoot(window, "rules_file_types", size)
+
+    # The window's own signals: a message under the top edge, and dots on the sidebar.
+    window._set_dirty(True)
+    window._on_update_available(True)
+    window.notify("Added 3 rules. Click Save changes to keep them.", "success", timeout_ms=0)
+    shooter.shoot(window, "shell_notice_and_dots", size)
     close(window)
 
 

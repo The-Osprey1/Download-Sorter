@@ -518,8 +518,8 @@ class TestRecentActivityFeedAndExplorerReveal:
             row24_file = widget._activity_table.item(24, 0).text()
             assert row24_file == "file_24.pdf"
 
-            # Verify action button in column 3
-            btn_action = widget._activity_table.cellWidget(0, 3)
+            # Verify the "Show in folder" button in column 3 (the cell also holds the "..." menu button)
+            btn_action = widget._activity_table.cellWidget(0, 3).findChild(QPushButton)
             assert isinstance(btn_action, QPushButton)
             assert btn_action.toolTip() == "Show in folder"
         finally:
@@ -613,8 +613,8 @@ class TestRecentActivityFeedAndExplorerReveal:
             widget.show()
             qapp.processEvents()
 
-            btn_row_0 = widget._activity_table.cellWidget(0, 3)
-            btn_row_1 = widget._activity_table.cellWidget(1, 3)
+            btn_row_0 = widget._activity_table.cellWidget(0, 3).findChild(QPushButton)
+            btn_row_1 = widget._activity_table.cellWidget(1, 3).findChild(QPushButton)
 
             btn_row_0.click()
             qapp.processEvents()
@@ -629,7 +629,11 @@ class TestRecentActivityFeedAndExplorerReveal:
             qapp.processEvents()
 
     def test_show_in_folder_existing_file_with_spaces_and_special_chars(self, qapp, tmp_path, monkeypatch, mock_config):
-        """Show in folder calls explorer with /select,<path> on existing files with spaces and special chars."""
+        """Show in folder gives explorer the path as its own argument after /select, (spaces and special chars).
+
+        Joined into one argument ("/select,C:\\a b\\c.pdf"), Windows quotes the whole thing and Explorer
+        ignores the request when the path has a space in it.
+        """
         special_dir = tmp_path / "My Downloads & Projects #1 [2026]"
         special_dir.mkdir(parents=True, exist_ok=True)
         special_file = special_dir / "Invoice, Statement & Receipt (Final) Über.pdf"
@@ -644,7 +648,9 @@ class TestRecentActivityFeedAndExplorerReveal:
 
             mock_popen.assert_called_once()
             args = mock_popen.call_args[0][0]
-            assert args == ["explorer.exe", f"/select,{special_file}"]
+            assert args == ["explorer.exe", "/select,", str(special_file)]
+            # What Windows is actually given: "/select," on its own, then the quoted path.
+            assert subprocess.list2cmdline(args) == f'explorer.exe /select, "{special_file}"'
         finally:
             widget.close()
             widget.deleteLater()

@@ -180,6 +180,10 @@ def stylesheet() -> str:
         background: {c['surface']};
         border-right: 1px solid {c['border']};
     }}
+    /* chip: a small clickable status area (the sidebar's "Sorting is on") */
+    QFrame[role="chip"] {{ background: transparent; border: 1px solid transparent; border-radius: {RADII['control']}px; }}
+    QFrame[role="chip"]:hover {{ background: {c['surfaceHover']}; }}
+    QFrame[role="chip"]:focus {{ border-color: {c['focus']}; }}
     QFrame#divider {{
         background: {c['border']};
         max-height: 1px;

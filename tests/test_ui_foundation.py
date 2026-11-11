@@ -253,3 +253,48 @@ def test_row_menu_button_builds_its_menu_from_actions(qapp):
     assert [a.isEnabled() for a in actions if not a.isSeparator()] == [True, True, False]
     actions[1].trigger()
     assert called == ["move"]
+
+
+def test_clickable_frame_reacts_to_a_click_and_to_the_keyboard(qapp):
+    frame = ui_widgets.ClickableFrame()
+    frame.resize(80, 30)
+    frame.show()
+    seen: list[str] = []
+    frame.clicked.connect(lambda: seen.append("clicked"))
+    assert frame.focusPolicy() == Qt.FocusPolicy.TabFocus
+
+    QTest.mouseClick(frame, Qt.MouseButton.LeftButton)
+    QTest.keyClick(frame, Qt.Key.Key_Space)
+    QTest.keyClick(frame, Qt.Key.Key_Return)
+    QTest.keyClick(frame, Qt.Key.Key_A)
+
+    assert seen == ["clicked"] * 3
+    frame.close()
+
+
+def test_notice_bar_takes_no_room_until_it_has_something_to_say(qapp):
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    bar = ui_widgets.NoticeBar(host)
+    layout.addWidget(bar)
+    host.show()
+    qapp.processEvents()
+    assert not bar.isVisible() and bar.sizeHint().height() > 0
+
+    clicked: list[int] = []
+    bar.show_message("Saved.", "success", "Open", lambda: clicked.append(1))
+    qapp.processEvents()
+    assert bar.isVisible() and bar.banner.text() == "Saved."
+
+    bar.banner._action_btn.click()
+    assert clicked == [1] and not bar.isVisible()
+    host.close()
+
+
+def test_padded_icon_is_the_size_of_the_other_icons_in_its_column(qapp):
+    from PySide6.QtCore import QSize
+
+    icon = ui_widgets.padded_icon("folder", size=28)
+    assert not icon.isNull()
+    assert icon.actualSize(QSize(28, 28)) == QSize(28, 28)
+    assert not ui_widgets.category_tile_icon("pdf").isNull()

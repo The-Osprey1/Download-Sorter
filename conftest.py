@@ -151,6 +151,26 @@ def finished_downloads(monkeypatch):
     monkeypatch.setattr(sorter, "is_file_locked", lambda path: False)
 
 
+@pytest.fixture(scope="module")
+def real_font(qapp):
+    """Load Segoe UI, so text is measured the way it will be drawn.
+
+    Qt's offscreen platform has no fonts: without this every letter is a wide
+    box, and anything that checks whether text fits would measure wrongly.
+    Loaded for the requesting test module only, then unloaded again.
+    """
+    from PySide6.QtGui import QFontDatabase
+
+    fonts = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+    files = [fonts / name for name in ("segoeui.ttf", "segoeuib.ttf", "seguisb.ttf")]
+    if not all(path.exists() for path in files):
+        pytest.skip("Segoe UI isn't installed, so text can't be measured")
+    ids = [QFontDatabase.addApplicationFont(str(path)) for path in files]
+    yield
+    for font_id in ids:
+        QFontDatabase.removeApplicationFont(font_id)
+
+
 @pytest.fixture(scope="session")
 def qapp():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

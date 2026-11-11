@@ -1,4 +1,5 @@
-"""Small reusable widgets: a step indicator, file-kind tiles and the "..." row menu.
+"""Small reusable widgets: a step indicator, file-kind tiles, the "..." row menu,
+a clickable frame and the window's message bar.
 
 They sit on top of ui_style / ui_icons / ui_categories and use only suite_theme
 colors, so every page that needs one looks the same.
@@ -9,12 +10,13 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Callable, Iterable, Sequence
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QLabel, QMenu, QSizePolicy, QToolButton, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 import ui_categories
 import ui_icons
+import ui_motion
 from suite_theme import ACCENTS, COLORS, RADII
 
 ACCENT = ACCENTS["downloadSorter"]
@@ -145,6 +147,31 @@ def _tile_pixmap(kind: str, size: int, ratio: float) -> QPixmap:
     return pixmap
 
 
+@lru_cache(maxsize=64)
+def _padded_pixmap(name: str, color: str | None, glyph: int, size: int, ratio: float) -> QPixmap:
+    pixmap = QPixmap(int(size * ratio), int(size * ratio))
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.drawPixmap(QPointF((size - glyph) / 2, (size - glyph) / 2), ui_icons.pixmap(name, color, glyph, ratio))
+    painter.end()
+    return pixmap
+
+
+def padded_icon(name: str, color: str | None = None, glyph: int = 16, size: int = 28) -> QIcon:
+    """A small icon centered in a larger transparent square.
+
+    A table has one icon size for every cell; this keeps a 16 px glyph looking
+    16 px in a column whose other icons are 28 px tiles.
+    """
+    return QIcon(_padded_pixmap(name, color, glyph, size, 2.0))
+
+
+def category_tile_icon(kind: str, size: int = 28) -> QIcon:
+    """The same tile as an icon, for list and table cells."""
+    return QIcon(_tile_pixmap(kind, size, 2.0))
+
+
 def category_tile(kind: str, size: int = 28, parent: QWidget | None = None) -> QLabel:
     """A rounded tile with the icon for a kind of file, tinted in that kind's color."""
     tile = QLabel(parent)
@@ -181,11 +208,79 @@ class RowMenuButton(QToolButton):
     def set_actions(self, actions: Sequence["MenuEntry | None"]) -> None:
         """Rebuild the menu. ``None`` adds a separator."""
         self._menu.clear()
-        for entry in actions:
-            if entry is None:
-                self._menu.addSeparator()
-                continue
-            text, icon_name, callback, enabled = entry
-            action = self._menu.addAction(ui_icons.icon(icon_name) if icon_name else QIcon(), text)
-            action.setEnabled(bool(enabled))
-            action.triggered.connect(lambda _checked=False, run=callback: run())
+        fill_menu(self._menu, actions)
+
+
+def fill_menu(menu: QMenu, actions: Sequence["MenuEntry | None"]) -> None:
+    """Add ``(text, icon name or None, callback, enabled)`` entries to a menu; ``None`` is a separator."""
+    for entry in actions:
+        if entry is None:
+            menu.addSeparator()
+            continue
+        text, icon_name, callback, enabled = entry
+        action = menu.addAction(ui_icons.icon(icon_name) if icon_name else QIcon(), text)
+        action.setEnabled(bool(enabled))
+        action.triggered.connect(lambda _checked=False, run=callback: run())
+
+
+# ---------------------------------------------------------------------------
+# a frame that acts like a button
+# ---------------------------------------------------------------------------
+
+class ClickableFrame(QFrame):
+    """A frame you can click, or focus and press Enter or Space. Style it with ``role="chip"``."""
+
+    clicked = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            self.clicked.emit()
+            return
+        super().keyPressEvent(event)
+
+
+# ---------------------------------------------------------------------------
+# the window's message bar
+# ---------------------------------------------------------------------------
+
+class NoticeBar(QWidget):
+    """A message bar for a whole window: a ``ui_motion.Banner`` that takes no room while it is empty."""
+
+    def __init__(self, parent: QWidget | None = None, margins: tuple[int, int, int, int] = (32, 16, 32, 0)) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(*margins)
+        layout.setSpacing(0)
+        self.banner = ui_motion.Banner(self)
+        layout.addWidget(self.banner)
+        self.banner.installEventFilter(self)
+        self.setVisible(False)
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.banner and event.type() in (QEvent.Type.Show, QEvent.Type.Hide):
+            self.setVisible(self.banner.isVisible())
+        return False
+
+    def show_message(
+        self,
+        text: str,
+        kind: str = "info",
+        action_text: str = "",
+        action: Callable[[], None] | None = None,
+        timeout_ms: int = 7000,
+    ) -> None:
+        self.setVisible(True)  # first: a banner inside a hidden bar could never become visible
+        self.banner.show_message(text, kind, action_text, action, timeout_ms)
+
+    def dismiss(self) -> None:
+        self.banner.dismiss()
