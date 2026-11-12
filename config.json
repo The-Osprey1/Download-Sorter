@@ -124,15 +124,29 @@
         ".stl",
         ".3mf",
         ".obj",
-        ".step",
-        ".stp",
-        ".iges",
-        ".igs",
         ".3ds",
         ".fbx",
         ".blend",
         ".glb",
         ".gltf",
+        ".gcode",
+        ".bgcode",
+        ".nc",
+        ".tap",
+        ".ngc",
+        ".gco",
+        ".g"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "CAD & Engineering",
+      "folder": "CAD",
+      "extensions": [
+        ".step",
+        ".stp",
+        ".iges",
+        ".igs",
         ".f3d",
         ".f3z",
         ".ipt",
@@ -141,14 +155,7 @@
         ".sldasm",
         ".slddrw",
         ".dwg",
-        ".dxf",
-        ".gcode",
-        ".bgcode",
-        ".nc",
-        ".tap",
-        ".ngc",
-        ".gco",
-        ".g"
+        ".dxf"
       ],
       "enabled": true
     },
@@ -288,8 +295,11 @@
     "max_held": 15,
     "slicers": [
       "bambu-studio.exe",
+      "bambu-studio-worker.exe",
       "orca-slicer.exe",
-      "prusa-slicer.exe"
+      "prusa-slicer.exe",
+      "cura.exe",
+      "chitubox.exe"
     ]
   },
   "mirror": {
@@ -301,5 +311,40 @@
     "active_folder_days": 14,
     "desktop_min_age_days": 30
   },
-  "makerworld_destination": "3D Models"
+  "makerworld_destination": "3D Models\\MakerWorld",
+  "downloads_dir": "${USERPROFILE}\\Downloads",
+  "learning": {
+    "enabled": true,
+    "suggest": true
+  },
+  "cleanup": {
+    "enabled": false,
+    "days": 30,
+    "folders": [
+      "Installers",
+      "Archives"
+    ]
+  },
+  "photos": {
+    "by_month": false
+  },
+  "pdf_text": {
+    "enabled": false,
+    "max_mb": 10
+  },
+  "rename": {
+    "tidy": false,
+    "add_date": false
+  },
+  "update_check": {
+    "enabled": true
+  },
+  "type_folders": {
+    "enabled": true,
+    "names": {}
+  },
+  "my_folders": {
+    "enabled": true,
+    "skip": []
+  }
 }

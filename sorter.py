@@ -43,6 +43,13 @@ DEFAULT_SETTLE_SECONDS = 3.0
 
 MAKERWORLD_FOLDER = "3D Models\\MakerWorld"
 
+# Slicers whose running copy keeps a held .3mf in place (hold_manager). Shared by the
+# defaults below and hold_manager so the two lists cannot drift apart.
+DEFAULT_SLICERS: list[str] = [
+    "bambu-studio.exe", "bambu-studio-worker.exe", "orca-slicer.exe", "prusa-slicer.exe",
+    "cura.exe", "chitubox.exe",
+]
+
 # Release 2.x feature blocks (schema_version 2).  Every block carries its own
 # on/off switch so any feature can be disabled without touching the others.
 V2_DEFAULTS: dict = {
@@ -63,7 +70,7 @@ V2_DEFAULTS: dict = {
         "extensions": [".3mf"],
         "hold_days": 7,
         "max_held": 15,
-        "slicers": ["bambu-studio.exe", "orca-slicer.exe", "prusa-slicer.exe"],
+        "slicers": list(DEFAULT_SLICERS),
     },
     "mirror": {"enabled": False},
     # Learning from how the user organizes files: it keeps score of its guesses and,
@@ -687,6 +694,13 @@ def remember_user_placed(path: Path) -> None:
         "restored_at": datetime.now(timezone.utc).isoformat(),
     }
     _save_restored(data)
+
+
+def forget_restored(path: Path) -> None:
+    """Drop the Undo mark once the file has been filed on purpose (e.g. by Consolidate)."""
+    data = _load_restored()
+    if data.pop(failure_key(Path(path)), None) is not None:
+        _save_restored(data)
 
 
 def is_restored_by_undo(path: Path) -> bool:
@@ -2287,7 +2301,8 @@ def move_file(
                 "Exact duplicate already exists at %s; moved download %s to %s",
                 primary_target, path.name, parked,
             )
-            return primary_target
+            # Report where the duplicate went, not the file it matched.
+            return parked
         except safe_ops.Refused as refusal:
             logging.debug("Left duplicate %s alone: %s", path.name, refusal.reason)
             return None

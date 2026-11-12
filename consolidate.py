@@ -153,7 +153,7 @@ def consolidate_downloads(
             if entry.is_file():
                 candidates.append(entry)
 
-    # 2. Subfolders inside target flat categories (e.g. Documents\PDFs, 3D Models\STL, Images\Photos)
+    # 2. Subfolders inside the main folders (e.g. Documents\PDF, 3D Models\STL, Images\Photos)
     by_month = sorter._option(config, "photos", "by_month")
     for cat_name in FLAT_CATEGORIES_TO_CONSOLIDATE:
         cat_dir = resolve_category_dir(root, cat_name)
@@ -281,15 +281,14 @@ def consolidate_downloads(
 
             # Clear hold or restored flag if the file had one
             try:
-                import held_files
-                held_files.release(file_path)
-            except Exception:
-                pass
+                import hold_manager
+                hold_manager.remove_held(file_path)
+            except Exception as exc:
+                logging.debug("Could not clear hold for %s: %s", file_path.name, exc)
             try:
-                import restored_files
-                restored_files.remove_restored(file_path)
-            except Exception:
-                pass
+                sorter.forget_restored(file_path)
+            except Exception as exc:
+                logging.debug("Could not clear Undo mark for %s: %s", file_path.name, exc)
 
         except Exception as exc:
             logging.warning("Could not consolidate %s: %s", file_path.name, exc)
@@ -299,7 +298,7 @@ def consolidate_downloads(
     if remove_empty and not dry_run:
         category_set = {c.lower() for c in collect_category_folders(config)}
 
-        # 1. Clean subfolders inside flat categories
+        # 1. Clean subfolders inside the main folders
         for cat_name in FLAT_CATEGORIES_TO_CONSOLIDATE:
             cat_dir = resolve_category_dir(root, cat_name)
             if not cat_dir.exists() or not cat_dir.is_dir():
@@ -358,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
             handlers=[logging.StreamHandler()],
         )
     parser = argparse.ArgumentParser(
-        description="Consolidate nested subfolders and legacy categories into official flat categories."
+        description="Consolidate nested subfolders and legacy categories into the two-level folder layout (Documents, then a folder per kind of file)."
     )
     parser.add_argument("--version", action="version", version=about.version_string())
     parser.add_argument(
@@ -410,14 +409,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print(f"\n[DRY-RUN] Simulated consolidation: Would move {moved} file(s), quarantine {dups} duplicate(s).")
     else:
-        print(f"Consolidated {moved} file(s) into flat categories, quarantined {dups} duplicate(s), cleaned {dirs} empty folder(s). [Batch: {batch}]")
+        print(f"Consolidated {moved} file(s) into the two-level folders, quarantined {dups} duplicate(s), cleaned {dirs} empty folder(s). [Batch: {batch}]")
         if moved > 0 or dups > 0:
             print("Tip: To undo this consolidation, run: DownloadSorter --undo")
 
     if args.notify:
         try:
             import ribbon_popup
-            msg = f"Consolidated {moved} file(s) into flat categories." if moved > 0 else "Downloads is already consolidated."
+            msg = f"Consolidated {moved} file(s) into the two-level folders." if moved > 0 else "Downloads is already consolidated."
             ribbon_popup.notify_summary("Downloads Consolidated", msg, accent="#69E6AD")
         except Exception:
             pass

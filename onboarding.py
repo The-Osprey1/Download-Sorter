@@ -1247,8 +1247,10 @@ class HomeDashboardWidget(QWidget):
         moves_today = 0
         if sorter and hasattr(sorter, "IncrementalHistoryReader") and hasattr(sorter, "HISTORY_FILE"):
             try:
-                reader = sorter.IncrementalHistoryReader(sorter.HISTORY_FILE)
-                moves_today = reader.moves_today()
+                # Keep one reader so each poll reads only the lines added since the last one.
+                if getattr(self, "_history_reader", None) is None:
+                    self._history_reader = sorter.IncrementalHistoryReader(sorter.HISTORY_FILE)
+                moves_today = self._history_reader.moves_today()
             except Exception:
                 pass
         previous = self._moves_today if self._moves_today is not None else moves_today

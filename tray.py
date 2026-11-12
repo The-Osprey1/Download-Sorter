@@ -395,15 +395,13 @@ class SorterTray:
                 self.notify(tail[-1] if tail else "Nothing to undo.")
         threading.Thread(target=work, daemon=True).start()
 
+    # These windows stay open as long as the user likes, so they are spawned rather than
+    # run as a child process: run_script() has a 5-minute timeout that would kill them.
     def on_open_rules_manager(self, _icon=None, _item=None) -> None:
-        def work() -> None:
-            run_script("rules_manager.py")
-        threading.Thread(target=work, daemon=True).start()
+        spawn_window("rules_manager.py")
 
     def on_remodel(self, _icon=None, _item=None) -> None:
-        def work() -> None:
-            run_script("rules_manager.py", "--tab", "remodel")
-        threading.Thread(target=work, daemon=True).start()
+        spawn_window("rules_manager.py", "--tab", "remodel")
 
     def on_open_downloads(self, _icon=None, _item=None) -> None:
         self.current_config()

@@ -146,6 +146,15 @@ def test_storage_sense_downloads_setting(monkeypatch, values, expected):
     assert config_manager.storage_sense_downloads_days() == expected
 
 
+def _close_widget(qapp, widget) -> None:
+    from PySide6.QtCore import QEvent
+
+    widget.close()
+    widget.deleteLater()
+    qapp.processEvents()
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+
+
 def test_settings_warns_about_storage_sense(qapp, monkeypatch):
     onboarding = pytest.importorskip("onboarding")
     monkeypatch.setattr(onboarding.suite_data, "storage_sense_downloads_days", lambda: 30)
@@ -157,7 +166,7 @@ def test_settings_warns_about_storage_sense(qapp, monkeypatch):
         widget.refresh_data()
         assert widget._storage_sense_lbl.isHidden()
     finally:
-        widget.close()
+        _close_widget(qapp, widget)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +226,7 @@ def test_finish_asks_before_the_first_sort(qapp, monkeypatch, downloads, config,
         assert dlg._chk_sort_now.isChecked()
         dlg._on_finish_clicked()
     finally:
-        dlg.close()
+        _close_widget(qapp, dlg)
 
     assert [src.name for src, _dest in asked[0]] == ["photo.jpg"]
     assert ("skip_files_before" in saved[-1]) is (not answer), "Not now leaves existing files alone"
@@ -354,4 +363,4 @@ def test_settings_extra_options_save(qapp, monkeypatch):
         checks[("rename", "add_date")].setChecked(True)
         assert saved[-1]["rename"] == {"tidy": False, "add_date": True}
     finally:
-        widget.close()
+        _close_widget(qapp, widget)

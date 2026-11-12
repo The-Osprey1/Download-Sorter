@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import html
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -1032,8 +1033,8 @@ def generate_html_receipt(manifest: dict[str, Any], output_path: Path | str) -> 
         rows_html.append(f"""
         <tr>
             <td>{badge}</td>
-            <td class="file-path">{src}</td>
-            <td class="file-path">{dest}</td>
+            <td class="file-path">{html.escape(str(src))}</td>
+            <td class="file-path">{html.escape(str(dest))}</td>
         </tr>
         """)
 
@@ -1043,8 +1044,8 @@ def generate_html_receipt(manifest: dict[str, Any], output_path: Path | str) -> 
         rows_html.append(f"""
         <tr>
             <td><span class="badge badge-info">Protected</span></td>
-            <td class="file-path">{p}</td>
-            <td class="file-path text-muted">Kept untouched: {r}</td>
+            <td class="file-path">{html.escape(str(p))}</td>
+            <td class="file-path text-muted">Kept untouched: {html.escape(str(r))}</td>
         </tr>
         """)
 

@@ -33,7 +33,7 @@ SCHEMA = 1
 STATE_NAME = "held_files.json"
 DEFAULT_HOLD_DAYS = 7
 DEFAULT_MAX_HELD = 15
-DEFAULT_SLICERS = ["bambu-studio.exe", "bambu-studio-worker.exe", "orca-slicer.exe", "prusa-slicer.exe"]
+DEFAULT_SLICERS = list(sorter.DEFAULT_SLICERS)
 
 _THREAD_LOCK = threading.RLock()
 

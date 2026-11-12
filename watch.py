@@ -834,13 +834,18 @@ def _publish_folder_state(folders: FolderWatches, on_sorted: Callable[[int], Non
 
 
 def _run_daily_cleanup(config: dict) -> None:
-    """Old installers and zips to the Recycle Bin, if turned on (clean_old.auto_cleanup)."""
+    """Old installers and zips to the Recycle Bin, if turned on (clean_old.auto_cleanup),
+    and quarantine batches past their window (clean_old.expire_quarantine)."""
     try:
         import clean_old
         result = clean_old.auto_cleanup(config)
     except Exception:
         logging.exception("Daily clean-up failed")
         return
+    try:
+        clean_old.expire_quarantine(config)
+    except Exception:
+        logging.exception("Quarantine expiry failed")
     if result and result["count"] and config.get("notifications", True):
         try:
             import ribbon_popup

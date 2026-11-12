@@ -53,19 +53,30 @@ def send_to_recycle_bin(path: Path) -> bool:
         return False
 
 
+def arrival_time(stat: os.stat_result) -> float:
+    """When the file arrived here: the earlier of its creation time (st_ctime on Windows)
+    and its last-modified time. An edit moves mtime forward, so it never resets the clock
+    (mtime alone did that). A copy that keeps an old modified time still counts from that time."""
+    return min(stat.st_ctime, stat.st_mtime)
+
+
 def find_old_files(target_dir: Path, min_age_days: float) -> list[tuple[Path, float, int]]:
-    """Return list of (file_path, age_days, size_bytes) for files older than min_age_days."""
+    """Return list of (file_path, age_days, size_bytes) for files that arrived more than
+    min_age_days ago. Looks inside the two-level folders too (Installers\\PDF and so on)."""
     if not target_dir.exists():
         return []
     cutoff_seconds = min_age_days * 86400
     now = time.time()
     candidates: list[tuple[Path, float, int]] = []
 
-    for item in target_dir.iterdir():
-        if item.is_file():
+    for root, dirs, files in os.walk(target_dir):
+        # Never reach into quarantine or staging folders; they are managed elsewhere.
+        dirs[:] = [d for d in dirs if not d.startswith((".", "_"))]
+        for name in files:
+            item = Path(root) / name
             try:
                 stat = item.stat()
-                age = now - stat.st_mtime
+                age = now - arrival_time(stat)
                 if age >= cutoff_seconds:
                     candidates.append((item, round(age / 86400, 1), stat.st_size))
             except OSError:
@@ -185,3 +196,55 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+QUARANTINE_STATE = "quarantine_expiry.json"
+
+
+def expire_quarantine(config: dict, now: float | None = None) -> int:
+    """Once a day: send `_Remodel Quarantine` batches older than remodel.quarantine_days
+    to the Recycle Bin. Clean-up moves a duplicate or a tidied file there so Undo can bring
+    it back; after that window the batch is no longer needed, and it goes to the Recycle
+    Bin (restorable), never straight to deletion. Returns how many batches were sent.
+    """
+    import json
+    import sorter
+
+    if sys.platform != "win32" or not isinstance(config, dict):
+        return 0
+    remodel = config.get("remodel") if isinstance(config.get("remodel"), dict) else {}
+    if not remodel.get("enabled", True):
+        return 0
+    now = time.time() if now is None else now
+    state_file = Path(sorter.LOG_DIR) / QUARANTINE_STATE
+    try:
+        last = float(json.loads(state_file.read_text(encoding="utf-8")).get("last_run", 0))
+    except (OSError, ValueError, AttributeError):
+        last = 0.0
+    if 0 <= now - last < CLEANUP_EVERY_SECONDS:
+        return 0
+
+    days = max(1.0, float(remodel.get("quarantine_days", 30) or 30))
+    downloads = watch_root(config)
+    sent = 0
+    # Batches may be under the Downloads folder (duplicates) or next to a cleaned folder.
+    for base in {downloads, *(folder_path(downloads, f) for f in ("Documents", "3D Models"))}:
+        quarantine = base / "_Remodel Quarantine"
+        if not quarantine.is_dir():
+            continue
+        for batch in quarantine.iterdir():
+            if not batch.is_dir():
+                continue
+            try:
+                age_days = (now - arrival_time(batch.stat())) / 86400
+            except OSError:
+                continue
+            if age_days >= days and send_to_recycle_bin(batch):
+                sent += 1
+                logging.info("Quarantine batch past %d days sent to the Recycle Bin: %s", days, batch)
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(json.dumps({"last_run": now, "count": sent}), encoding="utf-8")
+    except OSError:
+        pass
+    return sent
