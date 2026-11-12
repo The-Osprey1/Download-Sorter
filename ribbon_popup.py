@@ -903,6 +903,26 @@ class RibbonPopup:
             self.undo_btn.bind("<Leave>", self.on_leave)
             pills = [self.jump_btn, self.undo_btn]
 
+            # A sorted .3mf can be opened in Bambu Studio from here: Bambu then remembers
+            # the sorted path in its Recently Opened list from the start.
+            self.open_bambu_btn = None
+            if self.dest_path.suffix.lower() == ".3mf" and self._bambu_available():
+                self.open_bambu_btn = tk.Label(
+                    self.bottom_row,
+                    text="Open in Bambu ›",
+                    font=(FONT_FAMILY, 8, "bold"),
+                    fg=ACTION_COLOR,
+                    bg=SURFACE_RAISED,
+                    cursor="hand2",
+                    padx=int(6 * scale),
+                    pady=int(1 * scale),
+                )
+                self.open_bambu_btn.pack(side="right", padx=(0, pill_gap))
+                self.open_bambu_btn.bind("<Button-1>", lambda e: (self._on_open_in_bambu(), "break")[1])
+                self.open_bambu_btn.bind("<Enter>", self.on_enter)
+                self.open_bambu_btn.bind("<Leave>", self.on_leave)
+                pills.append(self.open_bambu_btn)
+
         # The text goes in last: Tk lays out in packing order, so a long folder name can
         # only squeeze the text and never push a pill out of view.
         self.action_lbl.pack(side="left")
@@ -937,7 +957,7 @@ class RibbonPopup:
         room = (
             row_width
             - sum(pill.winfo_reqwidth() for pill in pills)
-            - pill_gap          # between the pills
+            - pill_gap * max(0, len(pills) - 1)  # between the pills
             - int(6 * scale)    # between the text and the first pill
             - text_padding
         )
@@ -1088,6 +1108,23 @@ class RibbonPopup:
             return
         _spawn(_app_command("--undo", "--file", str(self.dest_path), "--quiet-toast"))
         self.close()
+
+    @staticmethod
+    def _bambu_available() -> bool:
+        try:
+            import bambu_recent
+            return bambu_recent.bambu_exe() is not None
+        except Exception:
+            return False
+
+    def _on_open_in_bambu(self) -> None:
+        try:
+            import bambu_recent
+            bambu_recent.open_in_bambu(self.dest_path)
+        except Exception as exc:
+            print(f"Could not open in Bambu Studio: {exc}", file=sys.stderr)
+        finally:
+            self.close()
 
     def on_click(self, _event=None) -> None:
         """Trigger reveal in File Explorer and play a fast exit dismiss animation."""
@@ -1930,6 +1967,61 @@ def notify_suggestion(suggestion_id: str) -> None:
     _spawn(_ribbon_command("--suggest", str(suggestion_id)))
 
 
+class BambuPromptRibbonPopup(SummaryRibbonPopup):
+    """One-time opt-in prompt before Download Sorter touches BambuStudio.conf."""
+
+    TIMEOUT_MS = 20000
+
+    def __init__(self, source_path: str = "", dest_path: str = "", enable_animation: bool = True) -> None:
+        self.source_path = source_path
+        self.dest_path = dest_path
+        super().__init__(
+            title="Update Bambu Studio's Recent list?",
+            message="Keep Bambu's Recently Opened pointing at moved .3mf files (makes a backup first).",
+            accent=ACTION_COLOR,
+            timeout_ms=self.TIMEOUT_MS,
+            enable_animation=enable_animation,
+        )
+        self.action_labels: list[tk.Label] = []
+        for text, handler in (("No", self.no), ("Yes", self.yes)):
+            label = tk.Label(
+                self.top_row, text=text, font=(FONT_FAMILY, 9, "bold"),
+                fg=ACTION_COLOR, bg=BG_COLOR, cursor="hand2", padx=int(6 * self.scale),
+            )
+            label.pack(side="right")
+            label.bind("<Button-1>", lambda _e, h=handler: (h(), "break")[1])
+            label.bind("<Enter>", self.on_enter)
+            label.bind("<Leave>", self.on_leave)
+            self.action_labels.append(label)
+
+    def _set_hover_state(self, hovered: bool) -> None:
+        super()._set_hover_state(hovered)
+        bg = HOVER_BG if hovered else BG_COLOR
+        for label in getattr(self, "action_labels", []):
+            label.config(bg=bg)
+
+    def yes(self) -> None:
+        import bambu_recent
+        bambu_recent.save_preference(True, asked=True)
+        if self.source_path and self.dest_path:
+            bambu_recent.record_move(self.source_path, self.dest_path)
+        self.close()
+        notify_summary(
+            "Bambu Studio recent list enabled",
+            "Moved .3mf files will stay updated in Bambu's Recently Opened (change in Settings).",
+        )
+
+    def no(self) -> None:
+        import bambu_recent
+        bambu_recent.save_preference(False, asked=True)
+        self.close()
+
+
+def notify_bambu_prompt(source: Path, dest: Path) -> None:
+    """Offer once to keep Bambu Studio's Recently Opened list pointing at moved .3mf files."""
+    _spawn(_ribbon_command("--bambu-prompt", "--bambu-source", str(source), "--bambu-dest", str(dest)))
+
+
 def notify_summary(
     title: str,
     message: str,
@@ -1983,6 +2075,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ribbon-summary", "--summary", dest="summary", action="store_true", help="Display summary toast.")
     parser.add_argument("--batch", action="store_true", help="Show the ribbon that counts a big batch of files.")
     parser.add_argument("--suggest", type=str, default="", help="Ask whether to add a learned rule (its id).")
+    parser.add_argument("--bambu-prompt", action="store_true", help="Offer once to enable Bambu recent-list updates.")
+    parser.add_argument("--bambu-source", type=str, default="", help="Original .3mf path for --bambu-prompt.")
+    parser.add_argument("--bambu-dest", type=str, default="", help="Moved .3mf path for --bambu-prompt.")
     parser.add_argument("--title", type=str, default="Download Sorter", help="Summary notification title.")
     parser.add_argument("--message", type=str, default="", help="Summary notification message.")
     parser.add_argument("--accent", type=str, default="#69E6AD", help="Accent hex color.")
@@ -1992,7 +2087,9 @@ def main(argv: list[str] | None = None) -> int:
     enable_anim = not args.no_anim
 
     try:
-        if args.suggest:
+        if args.bambu_prompt:
+            popup = BambuPromptRibbonPopup(args.bambu_source, args.bambu_dest, enable_animation=enable_anim)
+        elif args.suggest:
             popup = SuggestionRibbonPopup(args.suggest, enable_animation=enable_anim)
         elif args.batch:
             popup = BatchRibbonPopup(enable_animation=enable_anim)

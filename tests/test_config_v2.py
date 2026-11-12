@@ -23,7 +23,7 @@ def test_defaults_fill_missing_blocks_and_keep_unknown_keys():
     assert cfg["schema_version"] == 2
     assert cfg["my_custom_key"] == {"keep": "me"}
     assert cfg["batch_handoff"]["enabled"] is True
-    assert cfg["hold"]["enabled"] is True
+    assert cfg["hold"]["enabled"] is False  # off by default since 2.5.0
     assert cfg["remodel"]["enabled"] is True
     assert cfg["mirror"]["enabled"] is False
 
@@ -93,7 +93,7 @@ def test_loading_a_v1_file_returns_v2_view_without_touching_disk(tmp_path):
     target.write_text(json.dumps(_v1_config()), encoding="utf-8")
     before = target.read_text(encoding="utf-8")
     cfg = config_manager.load_sorter_config(target)
-    assert cfg["schema_version"] == 2 and cfg["hold"]["enabled"] is True
+    assert cfg["schema_version"] == 2 and cfg["hold"]["enabled"] is False
     assert target.read_text(encoding="utf-8") == before
 
 

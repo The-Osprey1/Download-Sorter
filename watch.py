@@ -287,13 +287,42 @@ class DocumentsHandler(FileSystemEventHandler):
             self._queue(event.src_path)
 
 
+_BAMBU_PROMPTED_SESSION = False
+
+
 def _handle_post_move(
     dest: Path,
     target_root: Path,
     config: dict,
     batch_id: str | None = None,
+    source: Path | None = None,
 ) -> None:
     """Notify user via ribbon popup and record recent file for quick switcher, gated by config."""
+    global _BAMBU_PROMPTED_SESSION
+    if source is not None and dest.suffix.lower() == ".3mf":
+        try:
+            import bambu_recent
+            if bambu_recent.is_enabled(config):
+                bambu_recent.record_move(source, dest, config=config)
+            elif (
+                not _BAMBU_PROMPTED_SESSION
+                and bambu_recent.should_ask(config)
+                and config.get("ribbon_enabled", True)
+                and config.get("notifications", True)
+            ):
+                _BAMBU_PROMPTED_SESSION = True
+                from ribbon_popup import notify_bambu_prompt
+                notify_bambu_prompt(source, dest)
+        except Exception as err:
+            logging.debug("Bambu recent-file note skipped: %s", err)
+        try:
+            import kits
+            from gcode_peek import parse_3mf
+            meta = parse_3mf(dest)
+            if meta.get("is_makerworld"):
+                kits.remember_model(meta.get("makerworld_meta", {}).get("model_id"), dest.parent.name)
+        except Exception as err:
+            logging.debug("Kit index note skipped: %s", err)
     if config.get("ribbon_enabled", True) and config.get("notifications", True):
         try:
             from ribbon_popup import notify_file_moved
@@ -353,7 +382,7 @@ def _drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    _handle_post_move(dest, target_root, config, batch_id=batch_id)
+                    _handle_post_move(dest, target_root, config, batch_id=batch_id, source=path)
                 elif (
                     path.exists()
                     and path.is_file()
@@ -394,7 +423,7 @@ def _drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    _handle_post_move(dest, target_root, config, batch_id=batch_id)
+                    _handle_post_move(dest, target_root, config, batch_id=batch_id, source=path)
             except Exception:
                 logging.exception("Failed relocating %s", path)
 
@@ -417,7 +446,7 @@ def _drain(
                 )
                 if dest is not None:
                     moved_count += 1
-                    _handle_post_move(dest, target_root, config, batch_id=batch_id)
+                    _handle_post_move(dest, target_root, config, batch_id=batch_id, source=path)
             except Exception:
                 logging.exception("Failed auto-correcting misplaced file for %s", path)
 
@@ -453,7 +482,7 @@ def process_hold_releases(config: dict, target_root: Path) -> int:
         hold_manager.remove_held(src)
         moved += 1
         try:
-            _handle_post_move(final, target_root, config, batch_id="hold_release")
+            _handle_post_move(final, target_root, config, batch_id="hold_release", source=src)
         except Exception:
             logging.exception("Post-move handling failed for %s", final)
     return moved
@@ -1000,6 +1029,11 @@ def run(
                 last_heartbeat = time.monotonic()
                 if not setup_pending and not is_paused() and not folders.root_missing:
                     _run_daily_cleanup(config)
+                try:
+                    import bambu_recent
+                    bambu_recent.apply_pending(config=config)
+                except Exception:
+                    logging.exception("Bambu recent-file update failed")
             if changed:
                 config = new_config
                 routing_context = reloader.routing_context

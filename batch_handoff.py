@@ -283,6 +283,10 @@ def record_recent_file(
             pass
 
 
+THREE_D_EXTENSIONS = (".3mf", ".stl", ".step", ".stp", ".f3d", ".f3z")
+THREE_D_MAX_AGE_SEC = 12 * 3600.0
+
+
 def get_recent_file(max_age_sec: float = 300.0) -> dict | None:
     """Latest recorded file (legacy shape) plus ``items``/``batch_id``/``batch_count``."""
     state = read_state()
@@ -294,7 +298,12 @@ def get_recent_file(max_age_sec: float = 300.0) -> dict | None:
         age = time.time() - float(latest["timestamp"])
     except (TypeError, ValueError, KeyError):
         return None
-    if age > max_age_sec:
+    # 3D files are opened in a slicer or CAD app hours after they arrive, so they stay
+    # offered for much longer than other downloads.
+    limit = max_age_sec
+    if str(latest.get("path", "")).lower().endswith(THREE_D_EXTENSIONS):
+        limit = max(max_age_sec, THREE_D_MAX_AGE_SEC)
+    if age > limit:
         return None
     data = dict(latest)
     data["age_sec"] = age

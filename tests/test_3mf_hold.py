@@ -197,8 +197,9 @@ class TestMakerWorldAndSecurity(unittest.TestCase):
         )
         self.assertEqual(res["match_type"], "makerworld")
         self.assertIn("MakerWorld", res["destination"])
-        self.assertIn("DevynFidel", res["destination"])
-        self.assertIn("Articulated Dragon", res["destination"])
+        # The fixture's model header has no Title, so the file name names the folder.
+        self.assertIn("makerworld_model", res["destination"])
+        self.assertNotIn("DevynFidel", res["destination"])  # one folder per model by default
 
     def test_bambu_local_project_not_makerworld(self) -> None:
         local_fixture = self.fixtures_dir / "bambu_local_project.3mf"

@@ -66,7 +66,7 @@ V2_DEFAULTS: dict = {
         "stage_prune_hours": 24,
     },
     "hold": {
-        "enabled": True,
+        "enabled": False,  # a .3mf goes straight into its model folder (see bambu_recent)
         "extensions": [".3mf"],
         "hold_days": 7,
         "max_held": 15,
@@ -84,6 +84,7 @@ V2_DEFAULTS: dict = {
     # tidier file names (Undo always puts the old name back).
     "photos": {"by_month": False},
     "pdf_text": {"enabled": False, "max_mb": 10},
+    "bambu_recent": {"enabled": False, "asked": False},
     "rename": {"tidy": False, "add_date": False},
     # Once a day, ask GitHub which version is newest (see update_check.py).
     "update_check": {"enabled": True},
@@ -1121,6 +1122,9 @@ def is_managed_path(path: Path, root: Path, folders: list[str]) -> bool:
     return any(top.lower() == split_folder(folder)[0].lower() for folder in folders)
 
 
+KIT_FILE_EXTENSIONS = frozenset({".stl", ".step", ".stp", ".pdf"})
+
+
 def sanitize_folder_segment(name: str) -> str:
     cleaned = re.sub(r'[<>:"/\\|?*]', '_', str(name or "")).strip(" .")
     return cleaned if cleaned else "Unknown"
@@ -1891,11 +1895,22 @@ def evaluate_routing(
                 from gcode_peek import parse_3mf
                 meta_3mf = parse_3mf(p_file)
                 if meta_3mf.get("is_makerworld"):
+                    import kits
                     mw = meta_3mf.get("makerworld_meta", {})
                     author = sanitize_folder_segment(mw.get("designer") or "MakerWorld")
-                    model_title = sanitize_folder_segment(mw.get("title") or p_file.stem)
                     base_mw = config.get("makerworld_destination") or MAKERWORLD_FOLDER
-                    mw_dest = f"{base_mw}\\{author}\\{model_title}"
+                    # One folder per model (its Title); a folder already holding it is reused.
+                    model_title = kits.existing_folder(
+                        watch_root(config) / base_mw.strip("\\"),
+                        sanitize_folder_segment(mw.get("title") or p_file.stem),
+                    )
+                    indexed = kits.folder_for_model(mw.get("model_id"), watch_root(config) / base_mw.strip("\\"))
+                    if indexed and not config.get("makerworld_by_designer"):
+                        model_title = indexed
+                    if config.get("makerworld_by_designer"):
+                        mw_dest = f"{base_mw}\\{author}\\{model_title}"
+                    else:
+                        mw_dest = f"{base_mw}\\{model_title}"
                     rule_trace.append({
                         "tier": "makerworld",
                         "status": "matched",
@@ -1914,6 +1929,30 @@ def evaluate_routing(
                     }
             except Exception as exc:
                 logging.debug("MakerWorld 3MF check error: %s", exc)
+
+    # --- Tier 3.6: the other files of a MakerWorld model (STL, STEP, guide PDF) ---
+    # Named after the model page they were downloaded from, so they land in the same kit
+    # folder as the .3mf. Name rules above still win; this is only for files with no rule.
+    if ext in KIT_FILE_EXTENSIONS and file_path is not None and config.get("makerworld_kits", True):
+        import kits
+        found = kits.model_from_file(Path(file_path))
+        if found:
+            _model_id, slug_title = found
+            base_mw = config.get("makerworld_destination") or MAKERWORLD_FOLDER
+            kit_name = kits.existing_folder(
+                watch_root(config) / base_mw.strip("\\"), sanitize_folder_segment(slug_title)
+            )
+            kit_dest = f"{base_mw}\\{kit_name}"
+            rule_trace.append({"tier": "makerworld_kit", "status": "matched", "destination": kit_dest})
+            return {
+                "destination": kit_dest,
+                "match_type": "makerworld_kit",
+                "winning_rule": f"MakerWorld model ({kit_name})",
+                "matched_trigger": f"downloaded from MakerWorld model '{kit_name}'",
+                "is_active_project": False,
+                "sniffer_details": None,
+                "rule_trace": rule_trace,
+            }
 
     # --- Tier 4: Extension Rules (R1) ---
     for rule_index, rule in enumerate(config.get("extension_rules", [])):

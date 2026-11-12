@@ -41,6 +41,13 @@ MAX_THUMBNAIL_DIM = 1024
 _PARSED_3MF_CACHE: dict[tuple[str, int, float], dict] = {}
 
 
+MODEL_ENTRY = "3d/3dmodel.model"
+# Full-XML validation of the model file only up to this size; bigger models (multi-plate
+# projects with a lot of mesh) are checked by their header only, never decompressed whole.
+MAX_FULL_MODEL_VALIDATE_BYTES = 32 * 1024 * 1024
+MODEL_HEADER_BYTES = 512 * 1024
+
+
 def _validate_zip_safety(z: zipfile.ZipFile) -> None:
     infolist = z.infolist()
     if len(infolist) > MAX_ZIP_ENTRIES:
@@ -54,9 +61,35 @@ def _validate_zip_safety(z: zipfile.ZipFile) -> None:
             raise ValueError(f"Path traversal detected in 3MF archive: {name}")
         if os.path.isabs(name) or (len(name) > 1 and name[1] == ":"):
             raise ValueError(f"Absolute path detected in 3MF archive: {name}")
+        # The model's mesh is read only as a bounded header (see _read_model_fields), so it
+        # does not count toward the size limit; that is what lets large kits be inspected.
+        if info.filename.replace("\\", "/").lower() == MODEL_ENTRY:
+            continue
         total_uncompressed += info.file_size
         if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
             raise ValueError(f"Exceeded max uncompressed size: {total_uncompressed} > {MAX_UNCOMPRESSED_BYTES}")
+
+
+_MODEL_META_RE = re.compile(r'<metadata\s+name="([^"]+)"[^>]*>([^<]*)</metadata>', re.IGNORECASE)
+
+
+def _read_model_fields(z: zipfile.ZipFile, model_name: str) -> dict[str, str]:
+    """The <metadata name="..."> fields at the top of 3D/3dmodel.model (DesignModelId, Title,
+    Designer, Application, ...). Only the leading bytes are read: the fields come before the
+    mesh (<resources>), so the rest of the file is never decompressed."""
+    import html as html_lib
+
+    with z.open(model_name) as handle:
+        head = handle.read(MODEL_HEADER_BYTES)
+    cut = head.find(b"<resources")
+    if cut > 0:
+        head = head[:cut]
+    text = head.decode("utf-8", errors="ignore")
+    return {
+        m.group(1): html_lib.unescape(m.group(2).strip())
+        for m in _MODEL_META_RE.finditer(text)
+        if m.group(2).strip()
+    }
 
 
 def _safe_read_thumbnail(z: zipfile.ZipFile, thumb_name: str) -> tuple[bytes | None, str | None]:
@@ -122,6 +155,10 @@ def _parse_3mf_worker(path: Path) -> dict:
             names = z.namelist()
             names_lower = {n.lower(): n for n in names}
 
+            # How many plates the project has, and which printer it was sliced for (for search).
+            meta["plate_count"] = sum(
+                1 for n in names_lower if re.fullmatch(r"metadata/plate_\d+\.json", n)
+            ) or None
             # Check for thumbnails
             for candidate in [
                 "Metadata/plate_1.png",
@@ -138,12 +175,18 @@ def _parse_3mf_worker(path: Path) -> dict:
                         meta["thumbnail_data"] = thumb_data
                         break
 
-            # 3D Model XML inspection via defusedxml
-            for model_name in ["3d/3dmodel.model", "3D/3dmodel.model"]:
-                if model_name in names:
+            # 3D Model: its <metadata> header (MakerWorld ids, title, designer, Application).
+            model_fields: dict[str, str] = {}
+            model_name = names_lower.get(MODEL_ENTRY)
+            if model_name:
+                try:
+                    model_fields = _read_model_fields(z, model_name)
+                except Exception as head_err:
+                    meta["error"] = f"Malformed 3MF XML: {head_err}"
+                # Small models are also checked as whole XML, as before.
+                if z.getinfo(model_name).file_size <= MAX_FULL_MODEL_VALIDATE_BYTES:
                     try:
-                        raw_xml = z.read(model_name)
-                        SafeET.fromstring(raw_xml)
+                        SafeET.fromstring(z.read(model_name))
                     except Exception as xml_err:
                         meta["error"] = f"Malformed 3MF XML: {xml_err}"
 
@@ -158,6 +201,19 @@ def _parse_3mf_worker(path: Path) -> dict:
             profile_title = ""
             designer = ""
             profile_cover = ""
+            model_title = ""
+            application = model_fields.get("Application", "")
+            if model_fields:
+                design_model_id = model_fields.get("DesignModelId", "")
+                design_profile_id = model_fields.get("DesignProfileId", "")
+                designer = model_fields.get("Designer", "")
+                model_title = model_fields.get("Title", "")
+                profile_title = model_fields.get("ProfileTitle", "")
+            # Current Bambu Studio writes its version here even when the slice info says only "slicer".
+            if application.lower().startswith("bambustudio"):
+                meta["slicer"] = "Bambu Studio"
+                if "-" in application and not meta["slicer_version"]:
+                    meta["slicer_version"] = application.split("-", 1)[1]
 
             if "Metadata/slice_info.config" in names:
                 slice_info = z.read("Metadata/slice_info.config").decode("utf-8", errors="ignore")
@@ -173,7 +229,8 @@ def _parse_3mf_worker(path: Path) -> dict:
                                 meta["slicer"] = "OrcaSlicer"
                             elif "bambustudio" in v.lower():
                                 meta["slicer"] = "Bambu Studio"
-                            else:
+                            elif v and v.lower() != "slicer":
+                                # "slicer" is only a generic label; the Application field names the app.
                                 meta["slicer"] = v
                         elif k.lower() == "x-bbl-client-version":
                             meta["slicer_version"] = v
@@ -238,6 +295,8 @@ def _parse_3mf_worker(path: Path) -> dict:
                         profile_title = str(cfg["profile_title"])
                     if "designer" in cfg:
                         designer = str(cfg["designer"])
+                    if "printer_model" in cfg and cfg["printer_model"]:
+                        meta["printer"] = str(cfg["printer_model"])
                     if "profile_cover" in cfg:
                         profile_cover = str(cfg["profile_cover"])
                 except Exception:
@@ -263,12 +322,15 @@ def _parse_3mf_worker(path: Path) -> dict:
 
             meta["is_makerworld"] = is_makerworld
             if is_makerworld:
-                clean_title = profile_title or path.stem
+                # The folder is named after the model (Title), not the print profile
+                # ("0.2mm layer, 3 walls, 15% infill"), which is kept as metadata only.
+                clean_title = model_title or path.stem
                 clean_designer = designer or "MakerWorld"
                 meta["makerworld_meta"] = {
                     "model_id": design_model_id,
                     "profile_id": design_profile_id,
                     "title": clean_title,
+                    "profile_title": profile_title,
                     "designer": clean_designer,
                     "origin": origin or "makerworld.com",
                     "cover_image": profile_cover,
