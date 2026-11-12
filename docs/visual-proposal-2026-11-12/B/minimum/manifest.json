@@ -1,0 +1,538 @@
+[
+  {
+    "name": "home_running",
+    "file": "home_running.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      889,
+      505
+    ],
+    "pages": {
+      "home": [
+        721,
+        396
+      ],
+      "rules": [
+        721,
+        509
+      ],
+      "cleanup": [
+        518,
+        429
+      ],
+      "settings": [
+        132,
+        120
+      ]
+    }
+  },
+  {
+    "name": "home_long_paths",
+    "file": "home_long_paths.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      889,
+      505
+    ]
+  },
+  {
+    "name": "home_row_menu",
+    "file": "home_row_menu.png",
+    "saved": true,
+    "actual": [
+      195,
+      151
+    ]
+  },
+  {
+    "name": "home_paused",
+    "file": "home_paused.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      889,
+      505
+    ]
+  },
+  {
+    "name": "home_off",
+    "file": "home_off.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      889,
+      505
+    ]
+  },
+  {
+    "name": "home_empty",
+    "file": "home_empty.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      889,
+      581
+    ]
+  },
+  {
+    "name": "rules_name_rules",
+    "file": "rules_name_rules.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      907,
+      505
+    ]
+  },
+  {
+    "name": "rules_sandbox_match",
+    "file": "rules_sandbox_match.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      907,
+      505
+    ]
+  },
+  {
+    "name": "rules_sandbox_nomatch",
+    "file": "rules_sandbox_nomatch.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      907,
+      505
+    ]
+  },
+  {
+    "name": "rules_file_types",
+    "file": "rules_file_types.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      907,
+      505
+    ]
+  },
+  {
+    "name": "shell_notice_and_dots",
+    "file": "shell_notice_and_dots.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      907,
+      567
+    ]
+  },
+  {
+    "name": "cleanup_empty",
+    "file": "cleanup_empty.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      889,
+      505
+    ]
+  },
+  {
+    "name": "cleanup_scanned",
+    "file": "cleanup_scanned.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      889,
+      505
+    ]
+  },
+  {
+    "name": "settings",
+    "file": "settings.png",
+    "saved": true,
+    "asked": [
+      900,
+      640
+    ],
+    "actual": [
+      900,
+      640
+    ],
+    "min_hint": [
+      889,
+      505
+    ]
+  },
+  {
+    "name": "settings_full",
+    "file": "settings_full.png",
+    "saved": true,
+    "asked": [
+      900,
+      1900
+    ],
+    "actual": [
+      900,
+      1900
+    ],
+    "min_hint": [
+      889,
+      505
+    ]
+  },
+  {
+    "name": "wizard_with_folders_step1",
+    "file": "wizard_with_folders_step1.png",
+    "saved": true,
+    "asked": [
+      720,
+      640
+    ],
+    "actual": [
+      720,
+      640
+    ],
+    "min_hint": [
+      574,
+      615
+    ],
+    "step_hints": [
+      [
+        569,
+        393
+      ],
+      [
+        470,
+        359
+      ],
+      [
+        451,
+        349
+      ]
+    ]
+  },
+  {
+    "name": "wizard_with_folders_step2",
+    "file": "wizard_with_folders_step2.png",
+    "saved": true,
+    "asked": [
+      720,
+      640
+    ],
+    "actual": [
+      720,
+      640
+    ],
+    "min_hint": [
+      577,
+      617
+    ],
+    "step_hints": [
+      [
+        68,
+        68
+      ],
+      [
+        470,
+        359
+      ],
+      [
+        292,
+        361
+      ]
+    ]
+  },
+  {
+    "name": "wizard_with_folders_step3",
+    "file": "wizard_with_folders_step3.png",
+    "saved": true,
+    "asked": [
+      720,
+      640
+    ],
+    "actual": [
+      720,
+      640
+    ],
+    "min_hint": [
+      576,
+      617
+    ],
+    "step_hints": [
+      [
+        68,
+        68
+      ],
+      [
+        470,
+        359
+      ],
+      [
+        292,
+        361
+      ]
+    ]
+  },
+  {
+    "name": "wizard_no_folders_step1",
+    "file": "wizard_no_folders_step1.png",
+    "saved": true,
+    "asked": [
+      720,
+      640
+    ],
+    "actual": [
+      720,
+      640
+    ],
+    "min_hint": [
+      574,
+      615
+    ],
+    "step_hints": [
+      [
+        569,
+        382
+      ],
+      [
+        470,
+        359
+      ],
+      [
+        451,
+        349
+      ]
+    ]
+  },
+  {
+    "name": "wizard_no_folders_step2",
+    "file": "wizard_no_folders_step2.png",
+    "saved": true,
+    "asked": [
+      720,
+      640
+    ],
+    "actual": [
+      720,
+      640
+    ],
+    "min_hint": [
+      577,
+      617
+    ],
+    "step_hints": [
+      [
+        68,
+        68
+      ],
+      [
+        470,
+        359
+      ],
+      [
+        292,
+        361
+      ]
+    ]
+  },
+  {
+    "name": "wizard_no_folders_step3",
+    "file": "wizard_no_folders_step3.png",
+    "saved": true,
+    "asked": [
+      720,
+      640
+    ],
+    "actual": [
+      720,
+      640
+    ],
+    "min_hint": [
+      576,
+      617
+    ],
+    "step_hints": [
+      [
+        68,
+        68
+      ],
+      [
+        470,
+        359
+      ],
+      [
+        292,
+        361
+      ]
+    ]
+  },
+  {
+    "name": "dialog_rule_editor",
+    "file": "dialog_rule_editor.png",
+    "saved": true,
+    "asked": [
+      540,
+      489
+    ],
+    "actual": [
+      540,
+      489
+    ],
+    "min_hint": [
+      483,
+      489
+    ]
+  },
+  {
+    "name": "dialog_rule_library",
+    "file": "dialog_rule_library.png",
+    "saved": true,
+    "asked": [
+      620,
+      540
+    ],
+    "actual": [
+      620,
+      540
+    ],
+    "min_hint": [
+      388,
+      224
+    ]
+  },
+  {
+    "name": "dialog_unsaved_changes",
+    "file": "dialog_unsaved_changes.png",
+    "saved": true,
+    "asked": [
+      326,
+      123
+    ],
+    "actual": [
+      326,
+      123
+    ],
+    "min_hint": [
+      326,
+      123
+    ]
+  },
+  {
+    "name": "banners",
+    "file": "banners.png",
+    "saved": true,
+    "asked": [
+      720,
+      300
+    ],
+    "actual": [
+      720,
+      300
+    ],
+    "min_hint": [
+      365,
+      283
+    ]
+  },
+  {
+    "name": "roles",
+    "file": "roles.png",
+    "saved": true,
+    "asked": [
+      1160,
+      940
+    ],
+    "actual": [
+      1160,
+      940
+    ],
+    "min_hint": [
+      1144,
+      856
+    ]
+  }
+]

@@ -1,0 +1,62 @@
+[
+  {
+    "direction": "A",
+    "variant": "standard",
+    "returncode": 0
+  },
+  {
+    "direction": "A",
+    "variant": "minimum",
+    "returncode": 0
+  },
+  {
+    "direction": "A",
+    "variant": "scale150",
+    "returncode": 0
+  },
+  {
+    "direction": "A",
+    "variant": "scale200",
+    "returncode": 0
+  },
+  {
+    "direction": "A",
+    "variant": "minimum150",
+    "returncode": 0
+  },
+  {
+    "direction": "A",
+    "variant": "minimum200",
+    "returncode": 0
+  },
+  {
+    "direction": "B",
+    "variant": "standard",
+    "returncode": 0
+  },
+  {
+    "direction": "B",
+    "variant": "minimum",
+    "returncode": 0
+  },
+  {
+    "direction": "B",
+    "variant": "scale150",
+    "returncode": 0
+  },
+  {
+    "direction": "B",
+    "variant": "scale200",
+    "returncode": 0
+  },
+  {
+    "direction": "B",
+    "variant": "minimum150",
+    "returncode": 0
+  },
+  {
+    "direction": "B",
+    "variant": "minimum200",
+    "returncode": 0
+  }
+]
