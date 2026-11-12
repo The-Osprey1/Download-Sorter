@@ -105,6 +105,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='DownloadSorter.ico',
+    version='build/file_version_info.txt',
 )
 
 # 2. Console Executable (Native console streams, ideal for CLI, context menus, CI/CD, piping)
@@ -125,6 +126,7 @@ exe_cli = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='DownloadSorter.ico',
+    version='build/file_version_info.txt',
 )
 
 coll = COLLECT(

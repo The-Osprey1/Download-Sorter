@@ -1,0 +1,17 @@
+# Winget installer manifest template (RFC/issue #9). Fill in the URL and SHA256 of the published
+# setup file for the release, then submit to microsoft/winget-pkgs. Placeholders are in <angle brackets>.
+PackageIdentifier: DevynFidel.DownloadSorter
+PackageVersion: <VERSION>
+InstallerType: inno
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+InstallerLocale: en-US
+Installers:
+  - Architecture: x64
+    InstallerUrl: <RELEASE_URL_TO_DownloadSorter-Setup-vVERSION-windows-x64.exe>
+    InstallerSha256: <SHA256_OF_THE_SETUP_EXE>
+ManifestType: installer
+ManifestVersion: 1.6.0
