@@ -37,6 +37,14 @@ def widget(qapp, downloads):
     qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
 
 
+def _dispose(qapp, widget) -> None:
+    from PySide6.QtCore import QEvent
+    widget.close()
+    widget.deleteLater()
+    qapp.processEvents()
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+
+
 def _saved() -> dict:
     return config_manager.load_sorter_config()
 
@@ -70,7 +78,7 @@ def test_the_older_downloads_dir_key_does_not_shadow_the_new_folder(qapp, tmp_pa
         page.set_watch_folder(str(other))
         assert sorter.same_folder(sorter.watch_root(_saved()), other)
     finally:
-        page.close()
+        _dispose(qapp, page)
 
 
 def test_a_missing_folder_is_refused_and_nothing_is_saved(widget, tmp_path, downloads):
@@ -115,7 +123,7 @@ def test_a_folder_that_went_missing_is_said_on_the_page(qapp, tmp_path):
         assert not page._watch_folder_note.isHidden()
         assert "not found" in page._watch_folder_note.text()
     finally:
-        page.close()
+        _dispose(qapp, page)
 
 
 # ---- your own names for type folders ----
@@ -164,7 +172,7 @@ def test_saved_names_are_shown_when_the_page_opens(qapp):
         assert page._type_names_edit.text() == ".stl = Prints"
         assert page._skip_folders_edit.text() == "3D Models\\Old"
     finally:
-        page.close()
+        _dispose(qapp, page)
 
 
 # ---- folders left out ----
@@ -218,7 +226,7 @@ def test_days_outside_the_range_in_the_file_do_not_break_the_page(qapp):
         assert page._sweep_days_spin.value() == 7
         assert page._hold_days_spin.value() == 60
     finally:
-        page.close()
+        _dispose(qapp, page)
 
 
 def test_the_new_boxes_have_names_for_screen_readers(widget):
