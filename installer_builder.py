@@ -151,6 +151,7 @@ namespace DownloadSorterInstaller
             bool silent = false;
             bool update = false;
             bool noShortcuts = false;
+            bool noRegistry = false;
             string customDir = null;
 
             for (int i = 0; i < args.Length; i++)
@@ -179,6 +180,15 @@ namespace DownloadSorterInstaller
                          string.Equals(a, "/noshortcuts", StringComparison.OrdinalIgnoreCase))
                 {
                     noShortcuts = true;
+                }
+                else if (string.Equals(a, "/NO-REGISTRY", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a, "--no-registry", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a, "/noregistry", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Copy the files only: no "Installed apps" entry. The entry is one per
+                    // user, so a test (or a portable copy) that registered itself would
+                    // replace the one of the copy that is really installed.
+                    noRegistry = true;
                 }
                 else if (a.StartsWith("/D=", StringComparison.OrdinalIgnoreCase) ||
                          a.StartsWith("-D=", StringComparison.OrdinalIgnoreCase) ||
@@ -209,12 +219,12 @@ namespace DownloadSorterInstaller
                         bool hasDesktop = !noShortcuts && File.Exists(Path.Combine(desktopDir, "Download Sorter.lnk"));
                         string smPrograms = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs");
                         bool hasStartMenu = !noShortcuts && File.Exists(Path.Combine(smPrograms, "Download Sorter.lnk"));
-                        PerformInstall(targetDir, hasDesktop, hasStartMenu);
+                        PerformInstall(targetDir, hasDesktop, hasStartMenu, !noRegistry);
                         Relaunch(targetDir);
                     }
                     else
                     {
-                        PerformInstall(targetDir, !noShortcuts, !noShortcuts);
+                        PerformInstall(targetDir, !noShortcuts, !noShortcuts, !noRegistry);
                     }
                     return 0;
                 }
@@ -357,7 +367,7 @@ namespace DownloadSorterInstaller
             try { Process.Start(exe, "--home"); } catch { }  // and the window, so the user sees it is back
         }
 
-        public static void PerformInstall(string targetDir, bool createDesktop, bool createStartMenu)
+        public static void PerformInstall(string targetDir, bool createDesktop, bool createStartMenu, bool registerUninstall = true)
         {
             if (!Directory.Exists(targetDir))
             {
@@ -430,7 +440,10 @@ namespace DownloadSorterInstaller
             }
 
             CreateShortcuts(targetDir, createDesktop, createStartMenu);
-            RegisterUninstall(targetDir);
+            if (registerUninstall)
+            {
+                RegisterUninstall(targetDir);
+            }
         }
 
         private static void CreateShortcuts(string targetDir, bool desktop, bool startMenu)

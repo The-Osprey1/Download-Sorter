@@ -712,7 +712,7 @@ def test_find_csc_compiler():
         assert csc_path.name.lower() == "csc.exe"
 
 
-def test_build_csharp_installer_and_silent_extract(tmp_path):
+def test_build_csharp_installer_and_silent_extract(tmp_path, registry_scratch):
     """Verify C# WinForms setup compilation and unattended silent extraction with /S."""
     from installer_builder import build_csharp_installer, find_csc_compiler
 
@@ -738,13 +738,18 @@ def test_build_csharp_installer_and_silent_extract(tmp_path):
     assert installer_path.exists(), "build_csharp_installer failed to output setup executable"
     assert installer_path.stat().st_size > 1024, "Compiled installer executable suspiciously small"
 
-    # Execute silent installation with /S /D=<tmp_target> /NO-SHORTCUTS
+    # Execute silent installation with /S /D=<tmp_target> /NO-SHORTCUTS /NO-REGISTRY. The setup is
+    # its own process, so nothing here can redirect what it writes: without /NO-REGISTRY it replaced
+    # the real "Installed apps" entry of whatever copy was installed with this fake 2.1.0.
+    uninstall_entry = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\DownloadSorter"
+    entry_before = registry_scratch.real(uninstall_entry)
     install_target = tmp_path / "installed_app"
-    cmd = [str(installer_path), "/S", "/NO-SHORTCUTS", f"/D={install_target}"]
+    cmd = [str(installer_path), "/S", "/NO-SHORTCUTS", "/NO-REGISTRY", f"/D={install_target}"]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, f"Silent install failed with code {proc.returncode}: {proc.stderr} {proc.stdout}"
     assert (install_target / "DownloadSorter.exe").exists(), "Payload DownloadSorter.exe not extracted"
     assert (install_target / "about.py").exists(), "Payload about.py not extracted"
+    assert registry_scratch.real(uninstall_entry) == entry_before, "the test's setup replaced the real Installed-apps entry"
 
 
 # ============================================================================
