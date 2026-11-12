@@ -771,6 +771,22 @@ def load_config() -> dict:
         return get_default_config()
 
 
+def read_saved_config() -> dict | None:
+    """The saved settings, or None when they cannot be read right now.
+
+    ``load_config`` answers with the default settings when the file is missing, half-written or
+    not a dictionary. That is right for a first start, and wrong for something that has settings
+    in hand and only wants to see whether they changed: the default settings name another folder
+    and other rules. It keeps what it has, as the watcher does with a settings file it cannot parse.
+    """
+    try:
+        with CONFIG_PATH.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+        return apply_v2_defaults(data) if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 def collect_category_folders(config: dict) -> list[str]:
     folders: list[str] = []
     for rule in config.get("keyword_rules", []):

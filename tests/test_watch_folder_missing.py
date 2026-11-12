@@ -722,10 +722,16 @@ def test_the_tray_tooltip_says_the_watch_folder_is_missing():
         watch.WATCH_FOLDER_MISSING.clear()
 
 
+def _save_settings(config: dict) -> None:
+    """Save settings to the file the tray reads, the way the window does."""
+    sorter.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    sorter.CONFIG_PATH.write_text(json.dumps(config), encoding="utf-8")
+
+
 def test_sort_now_from_the_tray_says_when_the_folder_is_missing(tmp_path, monkeypatch):
     icon = tray.SorterTray()
     missing = tmp_path / "Inbox"
-    icon.config = make_config(missing)
+    _save_settings(make_config(missing))  # settings that name a folder that is not there
     said, messages, sorted_calls = threading.Event(), [], []
     icon.notify = lambda message, title="Download Sorter": (messages.append(message), said.set())
     monkeypatch.setattr(tray, "sort_existing", lambda *args, **kwargs: sorted_calls.append(args) or 0)
@@ -743,13 +749,14 @@ def test_open_downloads_from_the_tray_says_when_the_folder_is_missing(tmp_path, 
     opened, messages = [], []
     monkeypatch.setattr(tray, "open_in_explorer", opened.append)
     icon.notify = lambda message, title="Download Sorter": messages.append(message)
-    icon.downloads = tmp_path / "Inbox"
+    missing = tmp_path / "Inbox"
+    _save_settings(make_config(missing))  # settings that name a folder that is not there
 
     icon.on_open_downloads()
 
-    assert opened == [] and len(messages) == 1 and str(icon.downloads) in messages[0]
+    assert opened == [] and len(messages) == 1 and str(missing.resolve()) in messages[0]
 
-    icon.downloads.mkdir()
+    missing.mkdir()
     icon.on_open_downloads()
 
-    assert opened == [icon.downloads]
+    assert opened == [missing.resolve()]

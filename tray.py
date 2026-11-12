@@ -30,6 +30,7 @@ from sorter import (
     SERVICE_DISABLED_FILE,
     is_paused,
     load_config,
+    read_saved_config,
     set_paused,
     setup_logging,
     sort_existing,
@@ -218,6 +219,20 @@ class SorterTray:
             menu=self.build_menu(),
         )
 
+    def current_config(self) -> dict:
+        """The settings as they are saved now, for what a menu item is about to do.
+
+        The tray starts with Windows and runs for days, while the window saves changes to the file. It
+        used to keep the settings it started with, so after a change of folder Sort Downloads now and
+        Open Downloads still used the old one. When the file cannot be read right now (it is being
+        written), the settings the tray has stay.
+        """
+        saved = read_saved_config()
+        if saved is not None:
+            self.config = saved
+            self.downloads = watch_root(saved)
+        return self.config
+
     # ---- presentation ----
 
     def _held_count(self) -> int:
@@ -357,13 +372,14 @@ class SorterTray:
 
     def on_sort_now(self, _icon=None, _item=None) -> None:
         def work() -> None:
-            root = watch_root(self.config)
+            config = self.current_config()
+            root = watch_root(config)
             if not root.is_dir():
                 self.notify(f"The folder to sort was not found: {root}")
                 return
             batch_id = uuid.uuid4().hex[:8]
-            moved = sort_existing(self.config, batch_id=batch_id)
-            moved += sort_existing_documents(self.config, batch_id=batch_id)
+            moved = sort_existing(config, batch_id=batch_id)
+            moved += sort_existing_documents(config, batch_id=batch_id)
             self.refresh()
             self.notify(f"Filed {_count_text(moved, 'file')}." if moved else "Nothing needed sorting.")
         threading.Thread(target=work, daemon=True).start()
@@ -390,6 +406,7 @@ class SorterTray:
         threading.Thread(target=work, daemon=True).start()
 
     def on_open_downloads(self, _icon=None, _item=None) -> None:
+        self.current_config()
         if not self.downloads.exists():
             self.notify(f"The folder was not found: {self.downloads}")
             return
