@@ -360,7 +360,8 @@ def test_settings_extra_options_save(qapp, monkeypatch):
         }
         new_install_on = {("photos", "split_by_kind"), ("shelf", "enabled")}
         assert set(checks) == layout | {("photos", "by_month"), ("pdf_text", "enabled"), ("rename", "tidy"),
-                                        ("rename", "add_date"), ("cleanup", "enabled")} | experimental
+                                        ("rename", "add_date"), ("cleanup", "enabled"),
+                                        ("hold", "enabled")} | experimental
         assert all(checks[key].isChecked() for key in layout), "the folder layout is on by default"
         assert all(checks[key].isChecked() for key in new_install_on)
         assert not any(c.isChecked() for key, c in checks.items() if key not in layout | new_install_on), (
