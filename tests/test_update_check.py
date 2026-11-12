@@ -359,3 +359,74 @@ def test_fetch_includes_the_installer_files(monkeypatch):
     release = update_check.fetch_latest()
     assert release["installer_name"] == "DownloadSorter-Setup-v9.0.0-windows-x64.exe"
     assert release["checksums_url"] == prefix + "checksums.txt"
+
+
+def test_force_check_ignores_cooldown_and_disabled_setting(checks_on):
+    calls: list[int] = []
+    # Even with auto-check disabled and a recent check timestamp, force=True queries GitHub.
+    cfg = {"update_check": {"enabled": False}}
+    assert update_check.check(cfg, now=1_000_000, fetch=_fake_fetch("v99.0.0", calls)) is None
+    assert calls == []
+
+    rel = update_check.check(cfg, now=1_000_001, fetch=_fake_fetch("v99.0.0", calls), force=True)
+    assert rel is not None and rel["version"] == "v99.0.0"
+    assert len(calls) == 1
+
+    # Immediate second forced check ignores the 24-hour cooldown.
+    rel2 = update_check.check(cfg, now=1_000_002, fetch=_fake_fetch("v99.1.0", calls), force=True)
+    assert rel2 is not None and rel2["version"] == "v99.1.0"
+    assert len(calls) == 2
+
+
+def test_settings_manual_check_for_updates_button(qapp, monkeypatch):
+    import time
+    pytest.importorskip("PySide6")
+    import onboarding
+
+    widget = onboarding.SettingsWidget(config={})
+    try:
+        assert widget._btn_check_updates.text() == "Check for updates"
+        assert widget._btn_view_update.isHidden() is True
+
+        # 1. Newer version available
+        seen_ready: list[dict] = []
+        widget.update_ready.connect(seen_ready.append)
+        monkeypatch.setattr(
+            update_check, "check",
+            lambda cfg, force=False: {"version": "v99.0.0", "url": "https://github.com/x"} if force else None,
+        )
+        widget.check_for_updates_now()
+        deadline = time.monotonic() + 3.0
+        while widget._checking_updates and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        qapp.processEvents()
+        assert "99.0.0" in widget._lbl_update_status.text()
+        assert widget._btn_view_update.isHidden() is False
+        assert widget._btn_check_updates.isEnabled() is True
+        assert len(seen_ready) == 1
+
+        # 2. Up to date
+        monkeypatch.setattr(update_check, "check", lambda cfg, force=False: None)
+        widget.check_for_updates_now()
+        deadline = time.monotonic() + 3.0
+        while widget._checking_updates and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        qapp.processEvents()
+        assert "up to date" in widget._lbl_update_status.text().lower()
+        assert widget._btn_view_update.isHidden() is True
+
+        # 3. Error reaching GitHub
+        def broken(*_a, **_kw):
+            raise OSError("offline")
+        monkeypatch.setattr(update_check, "check", broken)
+        widget.check_for_updates_now()
+        deadline = time.monotonic() + 3.0
+        while widget._checking_updates and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        qapp.processEvents()
+        assert "could not reach" in widget._lbl_update_status.text().lower()
+    finally:
+        _close_widget(qapp, widget)

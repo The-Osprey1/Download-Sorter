@@ -455,17 +455,20 @@ class SorterTray:
     def check_for_update(self) -> None:
         """Once a day at most: mention a newer version, once per version."""
         def work() -> None:
-            try:
-                import update_check
-                release = update_check.check(self.config)
-                if release and update_check.should_notify(release):
-                    self.notify(
-                        f"Version {update_check.display_version(release)} is available. "
-                        "Open Download Sorter to download it."
-                    )
-                    self.refresh()
-            except Exception:
-                logging.debug("Update check failed", exc_info=True)
+            import update_check
+            while True:
+                try:
+                    release = update_check.check(self.config)
+                    if release and update_check.should_notify(release):
+                        self.notify(
+                            f"Version {update_check.display_version(release)} is available. "
+                            "Open Download Sorter to download it."
+                        )
+                        self.refresh()
+                except Exception:
+                    logging.debug("Update check failed", exc_info=True)
+                if self.stop_event.wait(update_check.CHECK_EVERY_SECONDS):
+                    break
         threading.Thread(target=work, daemon=True, name="sorter-update-check").start()
 
     def on_quit_requested(self) -> None:

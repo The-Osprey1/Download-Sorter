@@ -170,6 +170,20 @@ def main(argv: list[str] | None = None) -> int:
                 pass
         return 0
 
+    if cmd in ("--check-update", "--check-updates"):
+        import update_check
+        print(f"Checking for updates (current version: {about.__version__})...")
+        rel = update_check.check(None, force=True)
+        if rel:
+            v = update_check.display_version(rel)
+            print(f"Download Sorter {v} is available!")
+            print(f"Release page: {rel.get('url')}")
+            if rel.get("installer_url"):
+                print(f"Installer: {rel.get('installer_url')}")
+            return 0
+        print(f"Download Sorter is up to date (version {about.__version__}).")
+        return 0
+
     orig_argv = sys.argv
     try:
         # For commands where the command name is itself an option argument (like --dialog),

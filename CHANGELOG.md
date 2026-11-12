@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.6.1] - 2026-11-12
+
+### Added
+* **Manual "Check for updates" button (`onboarding.py`, `main.py`, `update_check.py`)**: **Settings → About** now has a **Check for updates** button that queries GitHub immediately (even when the daily automatic check is turned off), shows whether a newer version is available or you're up to date, and links directly to **View update on Home** (or the release page when running from source). Clicking Refresh on **Home** also checks for updates, and `--check-update` works from the command line.
+
+### Fixed
+* **Background tray re-checks daily while running (`tray.py`)**: the tray icon now re-checks for updates every 24 hours while running instead of only once at startup.
+
 ## [2.6.0] - 2026-11-12
 
 ### Added
