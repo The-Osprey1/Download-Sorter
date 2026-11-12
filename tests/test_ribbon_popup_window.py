@@ -109,11 +109,7 @@ class RibbonGraphicsAndAnimationTests(unittest.TestCase):
 
     def test_dismiss_active_ribbons_signal(self) -> None:
         test_file = Path("C:/Downloads/Part.step")
-        mock_tk = MagicMock()
-        mock_tk.winfo_id.return_value = 0
-        mock_tk.winfo_fpixels.return_value = 96.0
-        with patch("ribbon_popup.tk.Tk", return_value=mock_tk), \
-             patch.object(RibbonPopup, "_build_ui"), \
+        with patch.object(RibbonPopup, "_build_ui"), \
              patch.object(RibbonPopup, "_schedule_dismiss"):
             popup = RibbonPopup(test_file, enable_animation=False)
             self.assertFalse(popup.is_closing)
@@ -128,23 +124,19 @@ class RibbonGraphicsAndAnimationTests(unittest.TestCase):
     def test_ribbon_popup_held_mode_styling_and_tags(self) -> None:
         test_file = Path("C:/Downloads/Model.3mf")
         planned = Path("C:/Downloads/3D Models/Model.3mf")
+        popup = RibbonPopup(test_file, enable_animation=False, is_held=True, planned_dest=planned)
         try:
-            popup = RibbonPopup(test_file, enable_animation=False, is_held=True, planned_dest=planned)
             self.assertTrue(popup.is_held)
             # Eyebrow text must show 3MF HOLD
-            self.assertIn("3MF HOLD", popup.tag_lbl.cget("text"))
+            self.assertIn("3MF HOLD", popup.tag_lbl.text())
             # File now button must exist and have high contrast
             self.assertTrue(hasattr(popup, "file_now_btn"))
-            self.assertEqual(popup.file_now_btn.cget("fg"), "#0B0D12")
+            self.assertEqual(popup.file_now_btn.property("fg_color"), "#0B0D12")
             # Keep here button must exist and have surfaceRaised styling
             self.assertTrue(hasattr(popup, "keep_here_btn"))
-            self.assertEqual(popup.keep_here_btn.cget("bg"), "#171B24")
-            popup.root.destroy()
-        except Exception:
-            # Fallback for headless environments without GUI display / Tcl init
-            source = (Path(__file__).resolve().parent.parent / "ribbon_popup.py").read_text(encoding="utf-8")
-            self.assertIn("3MF HOLD", source)
-            self.assertIn('COLORS.get("canvas", "#0B0D12")', source)
+            self.assertEqual(popup.keep_here_btn.property("bg_color"), "#171B24")
+        finally:
+            popup.close()
 
     def test_notify_file_held_command_line(self) -> None:
         from unittest.mock import patch

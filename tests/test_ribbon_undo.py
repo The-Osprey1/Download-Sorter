@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import sys
 import time
-import tkinter as tk
 from pathlib import Path
 
 import pytest
@@ -388,74 +387,59 @@ DISPLAY_SCALES = [96, 120, 144, 168, 192]  # 100%, 125%, 150%, 175%, 200%
 
 
 @pytest.fixture
-def make_ribbon(tmp_path, monkeypatch):
+def make_ribbon(tmp_path, monkeypatch, qapp, real_font):
     """Build a RibbonPopup at a given DPI. Its side effects stay out of the real temp files."""
+    from PySide6.QtCore import QEvent
+
     monkeypatch.setattr(ribbon_popup, "SLOTS_FILE", tmp_path / "slots.json")
     monkeypatch.setattr(ribbon_popup, "SLOTS_LOCK", tmp_path / "slots.lock")
     monkeypatch.setattr(ribbon_popup, "RIBBON_DISMISS_FILE", tmp_path / "dismiss.json")
     monkeypatch.setattr(ribbon_popup, "add_to_recent_docs", lambda path: None)
     quick_switcher = pytest.importorskip("quick_switcher")
     monkeypatch.setattr(quick_switcher, "record_recent_file", lambda *args, **kwargs: None)
-    # The ribbon's category icon is a PhotoImage, which Tk puts in the process's default
-    # root (the first one made). A root that an earlier test left open would be that root,
-    # and its images do not exist in the ribbon's own: "image pyimage70 doesn't exist".
-    monkeypatch.setattr(tk, "_default_root", None)
 
-    real_tk = tk.Tk
     built: list = []
 
     def build(dest: Path, dpi: int = 96, held: bool = False):
-        def tk_at_dpi():
-            root = real_tk()
-            root.tk.call("tk", "scaling", dpi / 72.0)
-            return root
-
-        monkeypatch.setattr(ribbon_popup.tk, "Tk", tk_at_dpi)
-        for _attempt in range(3):
-            try:
-                popup = ribbon_popup.RibbonPopup(
-                    dest, tmp_path / "Downloads", enable_animation=False,
-                    is_held=held, planned_dest=dest if held else None,
-                )
-                break
-            except tk.TclError as exc:
-                # Inside a pytest run, Tk now and then fails to start ("Can't find a usable
-                # init.tcl", for a file that is there) and starts fine a moment later. The
-                # ribbon itself is not affected: 150 ribbons in a row outside pytest never fail.
-                error = exc
-                time.sleep(0.3)
-        else:
-            if "display" in str(error).lower():
-                pytest.skip(f"no display to open a Tk window on: {error}")
-            raise error  # a skip would quietly drop these tests from the run
+        monkeypatch.setattr(ribbon_popup, "_get_display_dpi", lambda _w=None: float(dpi))
+        popup = ribbon_popup.RibbonPopup(
+            dest, tmp_path / "Downloads", enable_animation=False,
+            is_held=held, planned_dest=dest if held else None,
+        )
+        popup.root.show()
+        qapp.processEvents()
         built.append(popup)
-        popup.root.update()
         return popup
 
     yield build
     for popup in built:
         try:
-            popup.root.destroy()
-        except tk.TclError:
+            popup.root.close()
+            popup.root.deleteLater()
+            qapp.processEvents()
+            qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        except Exception:
             pass
         ribbon_popup.release_slot(popup.slot, popup.pid)
 
 
 def _widgets(widget):
+    from PySide6.QtWidgets import QWidget
+
     yield widget
-    for child in widget.winfo_children():
-        yield from _widgets(child)
+    for child in widget.findChildren(QWidget):
+        yield child
 
 
 def test_a_single_file_ribbon_has_undo_next_to_jump_to_file(tmp_path, make_ribbon):
     popup = make_ribbon(tmp_path / "Downloads" / "Documents" / "PDF" / "a.pdf")
 
-    assert popup.undo_btn.cget("text") == "Undo"
-    assert popup.jump_btn.cget("text") == "Jump to File ›"
-    undo_right = popup.undo_btn.winfo_x() + popup.undo_btn.winfo_width()
-    assert undo_right <= popup.jump_btn.winfo_x(), "Undo is left of Jump to File, not on top of it"
-    assert popup.jump_btn.winfo_x() - undo_right < popup.jump_btn.winfo_width() / 2, "side by side"
-    assert popup.undo_btn.winfo_y() == popup.jump_btn.winfo_y()
+    assert popup.undo_btn.text() == "Undo"
+    assert popup.jump_btn.text() == "Jump to File ›"
+    undo_right = popup.undo_btn.x() + popup.undo_btn.width()
+    assert undo_right <= popup.jump_btn.x(), "Undo is left of Jump to File, not on top of it"
+    assert popup.jump_btn.x() - undo_right < popup.jump_btn.width() / 2, "side by side"
+    assert popup.undo_btn.y() == popup.jump_btn.y()
     assert not hasattr(popup, "file_now_btn") and not hasattr(popup, "keep_here_btn")
 
 
@@ -464,10 +448,10 @@ def test_a_held_ribbon_has_plain_text_buttons_and_no_undo(tmp_path, make_ribbon)
 
     assert popup.is_held
     assert not hasattr(popup, "undo_btn"), "a held file has not been filed, so there is nothing to undo"
-    assert popup.file_now_btn.cget("text") == "File now"
-    assert popup.keep_here_btn.cget("text") == "Keep here"
-    assert popup.file_now_btn.cget("fg") == "#0B0D12", "dark text on the mint button, for contrast"
-    assert popup.keep_here_btn.cget("bg") == "#171B24"
+    assert popup.file_now_btn.text() == "File now"
+    assert popup.keep_here_btn.text() == "Keep here"
+    assert popup.file_now_btn.property("fg_color") == "#0B0D12", "dark text on the mint button, for contrast"
+    assert popup.keep_here_btn.property("bg_color") == "#171B24"
 
 
 @pytest.mark.parametrize("held", [False, True])
@@ -475,16 +459,15 @@ def test_no_ribbon_text_is_an_emoji(tmp_path, make_ribbon, held):
     popup = make_ribbon(tmp_path / "Downloads" / "Documents" / "PDF" / "a.3mf", held=held)
 
     for widget in _widgets(popup.root):
-        try:
-            text = str(widget.cget("text"))
-        except tk.TclError:
+        if not hasattr(widget, "text"):
             continue
+        text = str(widget.text())
         assert not any(ord(char) >= 0x1F000 for char in text), f"emoji in {text!r}"
     if held:
-        assert popup.file_now_btn.cget("text").isascii() and popup.keep_here_btn.cget("text").isascii()
+        assert popup.file_now_btn.text().isascii() and popup.keep_here_btn.text().isascii()
 
 
-def test_clicking_undo_starts_the_undo_command_and_closes_the_ribbon(tmp_path, make_ribbon, monkeypatch):
+def test_clicking_undo_starts_the_undo_command_and_closes_the_ribbon(tmp_path, make_ribbon, monkeypatch, qapp):
     spawned: list[list[str]] = []
     monkeypatch.setattr(ribbon_popup, "_spawn", spawned.append)
     opened: list = []
@@ -492,8 +475,8 @@ def test_clicking_undo_starts_the_undo_command_and_closes_the_ribbon(tmp_path, m
     dest = tmp_path / "Downloads" / "Documents" / "PDF" / "a b, c.pdf"
     popup = make_ribbon(dest)
 
-    popup.undo_btn.event_generate("<Button-1>")
-    popup.root.update()
+    popup.undo_btn.click()
+    qapp.processEvents()
 
     assert spawned == [ribbon_popup._app_command("--undo", "--file", str(dest.resolve()), "--quiet-toast")]
     assert popup.is_closing
@@ -511,7 +494,7 @@ def test_a_second_click_while_the_ribbon_slides_out_does_not_undo_twice(tmp_path
     assert len(spawned) == 1
 
 
-def test_a_ribbon_undo_puts_the_file_back_end_to_end(tmp_path, make_ribbon, monkeypatch, toasts):
+def test_a_ribbon_undo_puts_the_file_back_end_to_end(tmp_path, make_ribbon, monkeypatch, toasts, qapp):
     original, filed = _filed(tmp_path, "Lab Report.docx", folder="Documents\\Word")
     other_original, other_filed = _filed(tmp_path, "notes.txt", folder="Documents")
     spawned: list[list[str]] = []
@@ -519,8 +502,8 @@ def test_a_ribbon_undo_puts_the_file_back_end_to_end(tmp_path, make_ribbon, monk
     monkeypatch.setattr(sys, "frozen", False, raising=False)
     popup = make_ribbon(filed)
 
-    popup.undo_btn.event_generate("<Button-1>")
-    popup.root.update()
+    popup.undo_btn.click()
+    qapp.processEvents()
 
     # What the new process would run: <python> main.py --undo --file <path> --quiet-toast
     assert len(spawned) == 1 and spawned[0][2] == "--undo"
@@ -547,21 +530,22 @@ def test_the_bottom_row_fits_at_every_display_scale(tmp_path, make_ribbon, folde
     popup = make_ribbon(tmp_path / "Downloads" / folder / "a.pdf", dpi=dpi)
 
     row = popup.bottom_row
-    assert row.winfo_reqwidth() <= row.winfo_width(), "the bottom row asks for more than it gets"
+    assert row.sizeHint().width() <= row.width(), "the bottom row asks for more than it gets"
     for pill in (popup.jump_btn, popup.undo_btn):
-        assert pill.winfo_width() >= pill.winfo_reqwidth(), f"{pill.cget('text')!r} is cut off"
+        assert pill.width() >= pill.sizeHint().width(), f"{pill.text()!r} is cut off"
     label = popup.action_lbl
-    assert label.winfo_width() >= label.winfo_reqwidth(), f"{label.cget('text')!r} is cut off"
-    assert label.winfo_x() + label.winfo_width() <= popup.undo_btn.winfo_x(), "text runs into Undo"
+    assert label.width() >= label.sizeHint().width(), f"{label.text()!r} is cut off"
+    assert label.x() + label.width() <= popup.undo_btn.x(), "text runs into Undo"
     # ... and all of it is inside the ribbon itself
-    ribbon_right = popup.root.winfo_rootx() + popup.root.winfo_width()
-    assert popup.jump_btn.winfo_rootx() + popup.jump_btn.winfo_width() <= ribbon_right
+    ribbon_right = popup.root.mapToGlobal(popup.root.rect().topRight()).x() + 1
+    jump_right = popup.jump_btn.mapToGlobal(popup.jump_btn.rect().topRight()).x() + 1
+    assert jump_right <= ribbon_right
 
 
 def test_the_ribbon_is_360_px_wide_at_100_percent(tmp_path, make_ribbon):
     popup = make_ribbon(tmp_path / "Downloads" / "Documents" / "PDF" / "a.pdf", dpi=96)
 
-    assert popup.root.winfo_width() == ribbon_popup.BASE_WIDTH == 360
+    assert popup.root.width() == ribbon_popup.BASE_WIDTH == 360
 
 
 @pytest.mark.parametrize("dpi", DISPLAY_SCALES)
@@ -571,14 +555,14 @@ def test_the_held_ribbon_buttons_are_fully_visible_at_every_display_scale(tmp_pa
     popup = make_ribbon(tmp_path / "Downloads" / "Model.3mf", dpi=dpi, held=True)
 
     for pill in (popup.file_now_btn, popup.keep_here_btn):
-        assert pill.winfo_width() >= pill.winfo_reqwidth(), f"{pill.cget('text')!r} is cut off"
+        assert pill.width() >= pill.sizeHint().width(), f"{pill.text()!r} is cut off"
     label = popup.action_lbl
-    assert label.winfo_width() >= label.winfo_reqwidth()
-    assert label.winfo_x() + label.winfo_width() <= popup.keep_here_btn.winfo_x()
-    assert label.cget("text").startswith("Hold") or label.cget("text").startswith("Held")
+    assert label.width() >= label.sizeHint().width()
+    assert label.x() + label.width() <= popup.keep_here_btn.x()
+    assert label.text().startswith("Hold") or label.text().startswith("Held")
 
 
 def test_short_folders_are_written_out_in_full(tmp_path, make_ribbon):
     popup = make_ribbon(tmp_path / "Downloads" / "a.pdf")
 
-    assert popup.action_lbl.cget("text") == "Saved to Downloads"
+    assert popup.action_lbl.text() == "Saved to Downloads"

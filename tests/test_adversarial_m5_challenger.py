@@ -65,14 +65,14 @@ class TestArea2QuickSwitcherAdversarial:
             assert hex_code not in source, f"Forbidden hex code {hex_code} found in quick_switcher.py"
 
     def test_checklist_label_click_binding_exists(self):
-        """Row label must bind <Button-1> to toggle checkbox state."""
+        """Row label must install event filter to toggle checkbox state on click."""
         source = (ROOT / "quick_switcher.py").read_text(encoding="utf-8")
-        assert 'lbl.bind("<Button-1>"' in source or "lbl.bind('<Button-1>'" in source
+        assert "_ChecklistRowFilter" in source and "lbl.installEventFilter(" in source
 
     def test_mousewheel_unbind_on_collapse(self):
-        """Collapse must unbind global <MouseWheel> to avoid TclError."""
+        """Collapse must cleanly tear down the Qt checklist window without errors."""
         source = (ROOT / "quick_switcher.py").read_text(encoding="utf-8")
-        assert 'unbind_all("<MouseWheel>")' in source or "unbind_all('<MouseWheel>')" in source
+        assert "def _collapse_checklist" in source and "win.deleteLater()" in source
 
     def test_empty_selection_guards_against_injection(self):
         """select_all() and copy_files() must abort if 0 files selected."""
