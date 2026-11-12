@@ -37,8 +37,16 @@ def _config(downloads: Path) -> dict:
 def wizard(qapp, downloads):
     dlg = onboarding.WelcomeWizardDialog(config=_config(downloads))
     yield dlg
-    dlg.close()
-    dlg.deleteLater()
+    _dispose(qapp, dlg)
+
+
+def _dispose(qapp, widget) -> None:
+    """Close and delete a window now. One left for the interpreter's exit crashed the test run on CI."""
+    from PySide6.QtCore import QEvent
+    widget.close()
+    widget.deleteLater()
+    qapp.processEvents()
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
 
 
 def _enabled(config: dict, name: str) -> bool:
@@ -107,7 +115,7 @@ def test_3d_files_already_in_downloads_start_on_3d_printing(qapp, downloads):
         assert dlg.chosen_use() == "maker"
         assert all(dlg._category_checks[name].isChecked() for name in MAKER)
     finally:
-        dlg.close()
+        _dispose(qapp, dlg)
 
 
 def test_running_setup_again_starts_on_the_saved_choice(qapp, downloads):
@@ -117,7 +125,7 @@ def test_running_setup_again_starts_on_the_saved_choice(qapp, downloads):
     try:
         assert dlg.chosen_use() == "developer"
     finally:
-        dlg.close()
+        _dispose(qapp, dlg)
 
 
 def test_one_choice_is_always_picked(wizard):
@@ -146,7 +154,7 @@ def test_settings_can_show_the_projects_page_again(qapp, downloads):
         assert config_manager.load_sorter_config()["show_projects_page"] is True
         assert heard == [True]
     finally:
-        page.close()
+        _dispose(qapp, page)
 
 
 def test_the_window_hides_the_projects_page_for_an_everyday_setup(qapp, downloads):
@@ -167,5 +175,5 @@ def test_the_window_hides_the_projects_page_for_an_everyday_setup(qapp, download
         assert window._nav_buttons["projects"].isHidden()
         assert window._nav_buttons["home"].isChecked(), "hiding the page you are on goes to Home"
     finally:
-        window._accepting_close = True
-        window.close()
+        window._set_dirty(False)
+        _dispose(qapp, window)
