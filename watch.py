@@ -58,6 +58,8 @@ PENDING_DEADLINES: dict[tuple[str, Path], float] = {}
 WAKE_EVENT = threading.Event()
 # Set while run(wait_for_setup=True) is holding off until the welcome wizard is done.
 SETUP_PENDING = threading.Event()
+# Set while the folder to watch is not there (an unplugged drive, a deleted or misspelled folder).
+WATCH_FOLDER_MISSING = threading.Event()
 
 
 def _settle_seconds(config: dict) -> float:
@@ -663,6 +665,10 @@ class FolderWatches:
         self.downloads_handler: DownloadsHandler | None = None
         self.doc_handlers: list[DocumentsHandler] = []
         self._watches: list = []
+        # True while the folder to watch is not there. Nothing is watched then (not even the
+        # Documents sources, which are filed into that folder); ``retry`` starts the watches
+        # once the folder is back.
+        self.root_missing = False
 
     @staticmethod
     def targets(config: dict) -> tuple[Path, tuple[Path, ...]]:
@@ -674,9 +680,21 @@ class FolderWatches:
         root, sources = self.targets(config)
         self.root, self.sources = root, sources
         self.downloads_handler = DownloadsHandler(root, config, routing_context)
+        self.doc_handlers = []
+        self._watches = []
+        self.root_missing = not root.is_dir()
+        if self.root_missing:
+            # Watching a folder that is not there fails, and sorting some other folder in its
+            # place would be worse. The folder is not created either: it may be a drive that is
+            # not plugged in, and a different drive may have its letter now.
+            logging.warning(
+                "The folder to watch, %s, was not found. Nothing is sorted until it is there: "
+                "plug the drive back in, or choose another folder in Settings.",
+                root,
+            )
+            return
         self._watches = [self.observer.schedule(self.downloads_handler, str(root), recursive=True)]
         logging.info("Watching %s (recursive, with category auto-correction)", root)
-        self.doc_handlers = []
         for source in sources:
             handler = DocumentsHandler(list(sources), root, config, routing_context)
             self.doc_handlers.append(handler)
@@ -714,6 +732,39 @@ class FolderWatches:
             PENDING_DEADLINES.clear()
         self.build(config, routing_context)
         return True
+
+    def retry(self, config: dict, routing_context: RoutingContext | None = None) -> bool:
+        """Start the watches if the folder to watch is back (a drive plugged in again).
+
+        Returns True when it is, and the watches are running. Cheap enough to call on every
+        wake-up while ``root_missing`` is set: it does nothing until the folder exists.
+        """
+        if not self.root_missing:
+            return False
+        root, _sources = self.targets(config)
+        if not root.is_dir():
+            return False
+        self.build(config, routing_context)
+        return not self.root_missing
+
+
+def _publish_folder_state(folders: FolderWatches, on_sorted: Callable[[int], None] | None = None) -> None:
+    """Say, in the runtime state and for the tray's tooltip, whether the watch folder is there."""
+    was_missing = WATCH_FOLDER_MISSING.is_set()
+    # Waiting for the welcome wizard is the state that matters more: the wizard looks for it.
+    if folders.root_missing:
+        WATCH_FOLDER_MISSING.set()
+        if not SETUP_PENDING.is_set():
+            write_runtime_state("waiting_for_folder", f"waiting for {folders.root}")
+    else:
+        WATCH_FOLDER_MISSING.clear()
+        if was_missing and not SETUP_PENDING.is_set():
+            write_runtime_state("running", "the watch folder is back")
+    if on_sorted is not None and was_missing != folders.root_missing:
+        try:
+            on_sorted(0)  # refreshes the tray
+        except Exception:
+            logging.exception("Activity callback failed")
 
 
 def _run_daily_cleanup(config: dict) -> None:
@@ -832,11 +883,13 @@ def run(
         except Exception as err:
             logging.debug("Quick switcher monitor start skipped: %s", err)
     setup_pending = wait_for_setup and not config.get("onboarding_completed", False)
-    # A sweep that was due while sorting was paused; it runs when sorting is resumed.
+    # A sweep that was due while sorting was paused, or while the folder to watch was missing; it
+    # runs when sorting is resumed, or when the folder is back.
     sweep_pending = False
     try:
         # Observe first, reconcile second: a download arriving during the scan is
         # queued and cannot fall into the startup race window.
+        _publish_folder_state(folders, on_sorted)
         if setup_pending:
             SETUP_PENDING.set()
             write_runtime_state("waiting_for_setup", "waiting for the welcome wizard")
@@ -845,6 +898,9 @@ def run(
             # Paused means nothing moves, including what is already in the folders.
             sweep_pending = True
             logging.info("Sorting is paused; the startup sort waits until it is resumed")
+        elif folders.root_missing:
+            sweep_pending = True
+            logging.info("The startup sort waits until the folder to watch is there")
         else:
             _startup_sweep(config, routing_context, root)
 
@@ -858,9 +914,15 @@ def run(
             if reloader.dirty or fallback_due:
                 changed, new_config = reloader.check_for_updates()
             if time.monotonic() - last_heartbeat >= 300.0:
-                write_runtime_state("waiting_for_setup" if setup_pending else "running", "heartbeat")
+                if setup_pending:
+                    heartbeat_state = "waiting_for_setup"
+                elif folders.root_missing:
+                    heartbeat_state = "waiting_for_folder"
+                else:
+                    heartbeat_state = "running"
+                write_runtime_state(heartbeat_state, "heartbeat")
                 last_heartbeat = time.monotonic()
-                if not setup_pending and not is_paused():
+                if not setup_pending and not is_paused() and not folders.root_missing:
                     _run_daily_cleanup(config)
             if changed:
                 config = new_config
@@ -868,6 +930,8 @@ def run(
                 retargeted = folders.retarget(config, routing_context)
                 if not retargeted:
                     folders.update_config(config, routing_context)
+                else:
+                    _publish_folder_state(folders, on_sorted)
                 root = watch_root(config)
                 if setup_pending and config.get("onboarding_completed", False):
                     # The wizard just saved the user's profile: start sorting with it.
@@ -875,7 +939,8 @@ def run(
                     SETUP_PENDING.clear()
                     write_runtime_state("running", "welcome wizard finished")
                     logging.info("Welcome wizard finished; sorting starts now")
-                    if is_paused():
+                    _publish_folder_state(folders)  # the folder may still be missing
+                    if is_paused() or folders.root_missing:
                         sweep_pending = True
                     else:
                         _startup_sweep(config, routing_context, root)
@@ -887,7 +952,7 @@ def run(
                 elif retargeted and not setup_pending:
                     # Watched folders changed: behave as a restart would for the new
                     # folders (sweep what is already there).
-                    if is_paused():
+                    if is_paused() or folders.root_missing:
                         sweep_pending = True
                     else:
                         cutoff = existing_files_cutoff(config)
@@ -895,8 +960,16 @@ def run(
                         sort_existing(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
                         sort_existing_documents(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
 
+            if folders.root_missing and folders.retry(config, routing_context):
+                # The sweep that was waiting for the folder (sweep_pending) runs below.
+                logging.info("The folder to watch is back: %s", folders.root)
+                _publish_folder_state(folders, on_sorted)
+
             if setup_pending:
                 continue
+
+            if folders.root_missing:
+                continue  # nothing is sorted, released from a hold or cleaned up until the folder is there
 
             if sweep_pending and not is_paused():
                 sweep_pending = False
@@ -917,6 +990,7 @@ def run(
         pass
     finally:
         SETUP_PENDING.clear()
+        WATCH_FOLDER_MISSING.clear()
         observer.stop()
         write_runtime_state("stopped", "watch loop exited")
     observer.join()

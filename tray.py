@@ -230,6 +230,8 @@ class SorterTray:
     def tooltip(self) -> str:
         if watch.SETUP_PENDING.is_set():
             state = "Waiting for you to finish setup"
+        elif watch.WATCH_FOLDER_MISSING.is_set():
+            state = "Watch folder not found"
         else:
             state = "Paused" if is_paused() else "Watching Downloads"
         held = self._held_count()
@@ -355,6 +357,10 @@ class SorterTray:
 
     def on_sort_now(self, _icon=None, _item=None) -> None:
         def work() -> None:
+            root = watch_root(self.config)
+            if not root.is_dir():
+                self.notify(f"The folder to sort was not found: {root}")
+                return
             batch_id = uuid.uuid4().hex[:8]
             moved = sort_existing(self.config, batch_id=batch_id)
             moved += sort_existing_documents(self.config, batch_id=batch_id)
@@ -384,6 +390,9 @@ class SorterTray:
         threading.Thread(target=work, daemon=True).start()
 
     def on_open_downloads(self, _icon=None, _item=None) -> None:
+        if not self.downloads.exists():
+            self.notify(f"The folder was not found: {self.downloads}")
+            return
         open_in_explorer(self.downloads)
 
     def on_open_logs(self, _icon=None, _item=None) -> None:

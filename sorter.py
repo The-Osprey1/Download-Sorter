@@ -794,7 +794,20 @@ def collect_category_folders(config: dict) -> list[str]:
     return ordered
 
 
+DEFAULT_DOWNLOADS_FOLDER = "${USERPROFILE}\\Downloads" if sys.platform == "win32" else "~/Downloads"
+
+
 def watch_root(config: dict) -> Path:
+    """The folder that gets sorted: the one in the settings, or Downloads when none is named.
+
+    Windows lets a person move their Downloads folder (Properties > Location). Then
+    %USERPROFILE%\\Downloads is gone and the new place is only in the registry, so the
+    default folder follows it there. A folder the user named is never swapped for another
+    one: when it is missing (an unplugged drive, a deleted or misspelled folder) it stays
+    where it is, missing, and the watcher waits for it. It used to fall back to the
+    registry's Downloads folder for any missing folder, so a drive that was not plugged in
+    made the app sort the Downloads folder instead.
+    """
     folder = ""
     if isinstance(config, dict):
         watch_sec = config.get("watch")
@@ -802,10 +815,12 @@ def watch_root(config: dict) -> Path:
             folder = watch_sec.get("folder", "")
         if not folder:
             folder = config.get("downloads_dir", "")
-    if not folder:
-        folder = "${USERPROFILE}\\Downloads" if sys.platform == "win32" else "~/Downloads"
-    resolved = expand_path(folder)
-    if not resolved.exists() and sys.platform == "win32":
+    resolved = expand_path(folder or DEFAULT_DOWNLOADS_FOLDER)
+    if (
+        not resolved.exists()
+        and sys.platform == "win32"
+        and same_folder(resolved, expand_path(DEFAULT_DOWNLOADS_FOLDER))
+    ):
         try:
             import winreg
             sub_key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
@@ -983,6 +998,25 @@ def ensure_tree(config: dict) -> Path:
     for folder in collect_category_folders(config):
         folder_path(root, folder).mkdir(parents=True, exist_ok=True)
     return root
+
+
+def ensure_tree_or_warn(config: dict) -> bool:
+    """``ensure_tree`` for a sweep. False, with a warning, when the folder to sort is not there and cannot be made.
+
+    A folder on a drive that is not plugged in cannot be created. Nothing is sorted then, and the
+    log says why, instead of the sweep failing with a traceback (or sorting some other folder).
+    """
+    try:
+        ensure_tree(config)
+    except OSError as exc:
+        root = watch_root(config)
+        if root.is_dir():
+            raise  # the folder is there: this is a problem with one of the folders in it
+        logging.warning(
+            "The folder to sort, %s, was not found and could not be created (%s); nothing was sorted", root, exc
+        )
+        return False
+    return True
 
 
 def is_incomplete(
@@ -2412,8 +2446,8 @@ def sort_existing(
     skip_before: float | None = None,
 ) -> int:
     downloads = watch_root(config)
-    if not dry_run:
-        ensure_tree(config)
+    if not dry_run and not ensure_tree_or_warn(config):
+        return 0
     root = target_dir.resolve() if target_dir else downloads
     if not root.exists():
         return 0
@@ -2487,8 +2521,8 @@ def sort_existing_documents(
     routing_context: RoutingContext | None = None,
     skip_before: float | None = None,
 ) -> int:
-    if not dry_run:
-        ensure_tree(config)
+    if not dry_run and not ensure_tree_or_warn(config):
+        return 0
     moved = 0
     with reuse_my_folders():
         for source in document_roots(config):
