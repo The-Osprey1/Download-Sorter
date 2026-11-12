@@ -249,7 +249,8 @@ def test_pictures_by_month_uses_the_date_taken(downloads, config):
     os.utime(shot, (1_700_000_000, 1_700_000_000))   # November 2023
 
     assert sorter.move_file(photo, config, check_age=False).parent == downloads / "Images" / "2023-07"
-    assert sorter.move_file(shot, config, check_age=False).parent.name == "2023-11"
+    # Screenshots are kept apart from camera photos (Images\Screenshots), not by month.
+    assert sorter.move_file(shot, config, check_age=False).parent.name == "Screenshots"
 
 
 def test_pictures_go_by_kind_unless_months_are_turned_on(downloads, config):
@@ -351,10 +352,20 @@ def test_settings_extra_options_save(qapp, monkeypatch):
     try:
         checks = widget._option_checks
         layout = {("type_folders", "enabled"), ("my_folders", "enabled")}
+        experimental = {
+            ("photos", "split_by_kind"),
+            ("desktop_sweep", "enabled"),
+            ("bambu_recent", "enabled"),
+            ("shelf", "enabled"),
+        }
+        new_install_on = {("photos", "split_by_kind"), ("shelf", "enabled")}
         assert set(checks) == layout | {("photos", "by_month"), ("pdf_text", "enabled"), ("rename", "tidy"),
-                                        ("rename", "add_date"), ("cleanup", "enabled")}
+                                        ("rename", "add_date"), ("cleanup", "enabled")} | experimental
         assert all(checks[key].isChecked() for key in layout), "the folder layout is on by default"
-        assert not any(c.isChecked() for key, c in checks.items() if key not in layout), "extras are off by default"
+        assert all(checks[key].isChecked() for key in new_install_on)
+        assert not any(c.isChecked() for key, c in checks.items() if key not in layout | new_install_on), (
+            "opt-in extras are off by default"
+        )
         checks[("type_folders", "enabled")].setChecked(False)
         assert saved[-1]["type_folders"]["enabled"] is False
         assert saved[-1]["my_folders"]["enabled"] is True

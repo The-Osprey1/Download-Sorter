@@ -118,7 +118,7 @@ def init_stdio() -> None:
 
 # Commands that open a window or the tray. An unexpected error in these is
 # shown to the person (installed app only); in the others it is only saved.
-_WINDOW_COMMANDS = {"", "--tray", "-t", "--home", "--welcome", "--gui", "-g", "--rules"}
+_WINDOW_COMMANDS = {"", "--tray", "-t", "--home", "--welcome", "--gui", "-g", "--rules", "--shelf"}
 
 
 def _install_crash_handler(cmd: str) -> None:
@@ -196,6 +196,10 @@ def main(argv: list[str] | None = None) -> int:
         if cmd in ("--welcome",):
             import rules_manager
             return rules_manager.main(args)
+
+        if cmd in ("--shelf",):
+            import shelf
+            return shelf.main(args)
 
         if cmd in ("--gui", "-g", "--rules"):
             import rules_manager

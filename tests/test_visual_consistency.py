@@ -193,25 +193,36 @@ class TestRibbonPopupVisualConsistency(unittest.TestCase):
 class TestRulesManagerRemodelVisualConsistency(unittest.TestCase):
     """Assert Rules Manager Remodel tab and folder cards match suite_theme.py."""
 
-    def test_remodel_folder_cards_elevation_and_radii(self) -> None:
-        """Folder cards in rules_manager.py must use surfaceRaised (#171B24) and RADII['card'] (11px)."""
+    @staticmethod
+    def _remodel_source() -> str:
         content = (REPO_ROOT / "rules_manager.py").read_text(encoding="utf-8")
+        return content.split("class MachineRemodelWidget")[1].split("class RulesManagerDialog")[0]
+
+    @staticmethod
+    def _style_rule(selector: str) -> str:
+        """The body of one rule of the shared stylesheet (the look every page takes from ui_style)."""
+        import ui_style
+
+        sheet = ui_style.stylesheet()
+        start = sheet.index(selector + " {")
+        return sheet[start:sheet.index("}", start)]
+
+    def test_remodel_folder_cards_elevation_and_radii(self) -> None:
+        """Folder cards are built with ui_style.card(), whose shared look uses RADII['card'] (11px)."""
+        self.assertEqual(RADII["card"], 11)
         self.assertIn(
-            "surfaceRaised", content,
-            "Folder cards in MachineRemodelWidget must use surfaceRaised (#171B24) for elevation",
+            "ui_style.card(", self._remodel_source(),
+            "Folder cards in MachineRemodelWidget must be built with the shared card() so they match the suite",
         )
-        self.assertIn(
-            "11px", content,
-            "Folder cards in MachineRemodelWidget must use RADII['card'] (11px) border radius",
-        )
+        card_rule = self._style_rule("QFrame#card")
+        self.assertIn(f"border-radius: {RADII['card']}px", card_rule)
+        self.assertIn(COLORS["border"], card_rule)
 
     def test_remodel_card_radio_buttons_styled(self) -> None:
-        """Radio buttons in folder cards must have styled indicators using mint accent (#69E6AD)."""
-        content = (REPO_ROOT / "rules_manager.py").read_text(encoding="utf-8")
-        self.assertTrue(
-            "QRadioButton::indicator" in content or "downloadSorter" in content,
-            "Folder card radio buttons must include custom stylesheet indicator with downloadSorter mint accent",
-        )
+        """The choices in folder cards are segmented buttons, selected in the mint accent (#69E6AD)."""
+        self.assertIn('setProperty("role", "segment")', self._remodel_source())
+        checked_rule = self._style_rule('QRadioButton[role="segment"]:checked')
+        self.assertIn(ACCENTS["downloadSorter"], checked_rule)
 
     def test_remodel_tables_suite_theme_styling(self) -> None:
         """Protected and duplicate tables in Remodel tab must use suite_theme table styling."""

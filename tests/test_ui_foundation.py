@@ -117,6 +117,7 @@ def test_stylesheet_defines_the_roles_pages_use():
         'QLabel[role="badge"]', 'QLabel[role="badge"][kind="success"]', 'QLabel[role="badge"][kind="critical"]',
         'QFrame#card[tone="success"]', 'QFrame#card[tone="warning"]', 'QFrame#card[hero="true"]',
         'QCheckBox[role="switch"]::indicator', 'QRadioButton[role="segment"]', "QProgressBar::chunk",
+        'QLabel[role="error"]', 'QLabel[role="stat"]', 'QLineEdit[invalid="true"]', "QListView#completerPopup",
     ):
         assert needle in sheet, needle
     assert "qlineargradient(" in sheet, "the hero card gradient comes from the surfaceCard token"
@@ -298,3 +299,42 @@ def test_padded_icon_is_the_size_of_the_other_icons_in_its_column(qapp):
     assert not icon.isNull()
     assert icon.actualSize(QSize(28, 28)) == QSize(28, 28)
     assert not ui_widgets.category_tile_icon("pdf").isNull()
+
+
+def test_elided_label_shortens_to_the_room_it_has_and_keeps_the_rest_in_the_tooltip(qapp, real_font):
+    from PySide6.QtWidgets import QHBoxLayout
+
+    host = QWidget()
+    host.setStyleSheet(ui_style.stylesheet())
+    row = QHBoxLayout(host)
+    long_text = "Left alone: " + "a very long reason " * 6
+    tag = ui_style.badge(long_text, "success", label_class=ui_widgets.ElidedLabel)
+    row.addWidget(tag)
+    host.resize(300, 60)
+    host.show()
+    qapp.processEvents()
+    try:
+        assert isinstance(tag, ui_widgets.ElidedLabel)
+        assert tag.property("role") == "badge" and tag.property("kind") == "success"
+        assert tag.width() <= 300
+        assert tag.text().endswith("…") and tag.text() != long_text
+        assert tag.full_text() == long_text and tag.toolTip() == long_text
+        assert tag.accessibleName() == long_text, "a screen reader gets all of it"
+
+        host.resize(2000, 60)
+        qapp.processEvents()
+        assert tag.text() == long_text and tag.toolTip() == "", "with room again it shows everything"
+    finally:
+        host.close()
+
+
+def test_a_long_elided_text_does_not_make_its_row_wider(qapp, real_font):
+    from PySide6.QtWidgets import QHBoxLayout
+
+    host = QWidget()
+    row = QHBoxLayout(host)
+    row.addWidget(ui_widgets.ElidedLabel("a long folder name " * 20))
+    assert host.minimumSizeHint().width() < 120
+    plain = QWidget()
+    QHBoxLayout(plain).addWidget(QLabel("a long folder name " * 20))
+    assert plain.minimumSizeHint().width() > 400, "an ordinary label would have forced the row to that width"

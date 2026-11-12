@@ -357,8 +357,10 @@ def parse_hotkey(spec: str) -> tuple[int, int] | None:
             mods |= MOD_SHIFT
         elif low == "alt":
             mods |= MOD_ALT
-        elif low in ("win", "super"):
+        elif low == "win" or low == "super":
             mods |= MOD_WIN
+        elif low == "space":
+            key = 0x20
         elif len(part) == 1 and part.isalnum():
             key = ord(part.upper())
         elif low.startswith("f") and low[1:].isdigit() and 1 <= int(low[1:]) <= 12:

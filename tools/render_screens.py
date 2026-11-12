@@ -290,7 +290,10 @@ def render_rules(shooter: Shooter, size: tuple[int, int]) -> None:
     window._sandbox._input.setText("March invoice.pdf")
     shooter.shoot(window, "rules_sandbox_match", size)
     window._sandbox._input.setText("holiday-photo-final.xyz")
-    shooter.shoot(window, "rules_sandbox_nomatch", size)
+    shooter.shoot(window, "rules_sandbox_nomatch", size)  # offers "Make a rule for this..."
+    window._sandbox.set_compact(True)
+    shooter.shoot(window, "rules_sandbox_compact", size)  # what a short window gets
+    window._sandbox.set_compact(False)
     window._sandbox._input.setText("")
     window._tabs.setCurrentWidget(window._extension_table)
     shooter.shoot(window, "rules_file_types", size)
@@ -349,11 +352,34 @@ def render_wizard(shooter: Shooter, size: tuple[int, int], cfg: dict, sandbox: P
 
 def render_dialogs(shooter: Shooter) -> None:
     print("dialogs")
-    edit = rules_manager.RuleEditDialog(rule=dict(RULES[1]), rule_type="keyword")
+    folders = ["Documents", "Documents\\Banking", "Documents\\Invoices", "Pictures"]  # not the real Downloads
+    edit = rules_manager.RuleEditDialog(rule=dict(RULES[1]), rule_type="keyword", known_folders=folders)
     shooter.shoot(edit, "dialog_rule_editor", (540, edit.sizeHint().height()))
     edit.close()
+
+    # A new rule: nothing typed, so Save is off and says what is needed; then two boxes touched.
+    blank = rules_manager.RuleEditDialog(rule_type="keyword", known_folders=folders)
+    shooter.shoot(blank, "dialog_rule_editor_new", (540, blank.sizeHint().height()))
+    blank._touched.update({"name", "folder"})
+    blank._refresh_validation()
+    shooter.shoot(blank, "dialog_rule_editor_errors", (540, blank.sizeHint().height()))
+    blank.close()
+
+    # Only the word is missing: it is explained at once, in the box's own words.
+    no_word = rules_manager.RuleEditDialog(
+        rule={"name": "Bank statements", "folder": "Documents\\Banking", "match": [], "extensions": [".pdf", ".PDF"]},
+        rule_type="keyword", known_folders=folders)
+    shooter.shoot(no_word, "dialog_rule_editor_no_word", (540, no_word.sizeHint().height()))
+    no_word.close()
     library = rules_manager.PresetLibraryDialog()
     shooter.shoot(library, "dialog_rule_library", (620, 540))
+    library.close()
+
+    # With some of the sets already in the list: one whole set, and one rule of another.
+    presets = config_manager.get_available_presets()
+    have = [rule["name"] for rule in presets[0]["rules"]] + [presets[1]["rules"][0]["name"]]
+    library = rules_manager.PresetLibraryDialog(existing_names=have)
+    shooter.shoot(library, "dialog_rule_library_added", (620, 540))
     library.close()
 
 

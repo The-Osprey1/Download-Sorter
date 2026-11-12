@@ -299,30 +299,40 @@ def _handle_post_move(
 ) -> None:
     """Notify user via ribbon popup and record recent file for quick switcher, gated by config."""
     global _BAMBU_PROMPTED_SESSION
-    if source is not None and dest.suffix.lower() == ".3mf":
+    if dest.suffix.lower() in (".3mf", ".gcode", ".bgcode"):
         try:
-            import bambu_recent
-            if bambu_recent.is_enabled(config):
-                bambu_recent.record_move(source, dest, config=config)
-            elif (
-                not _BAMBU_PROMPTED_SESSION
-                and bambu_recent.should_ask(config)
-                and config.get("ribbon_enabled", True)
-                and config.get("notifications", True)
-            ):
-                _BAMBU_PROMPTED_SESSION = True
-                from ribbon_popup import notify_bambu_prompt
-                notify_bambu_prompt(source, dest)
+            import prints
+            from gcode_peek import parse_3mf, parse_gcode
+            meta = parse_3mf(dest) if dest.suffix.lower() == ".3mf" else parse_gcode(dest)
+            prints.record_print(dest, meta)
         except Exception as err:
-            logging.debug("Bambu recent-file note skipped: %s", err)
-        try:
-            import kits
-            from gcode_peek import parse_3mf
-            meta = parse_3mf(dest)
-            if meta.get("is_makerworld"):
-                kits.remember_model(meta.get("makerworld_meta", {}).get("model_id"), dest.parent.name)
-        except Exception as err:
-            logging.debug("Kit index note skipped: %s", err)
+            logging.debug("Print details note skipped: %s", err)
+    if source is not None:
+        if dest.suffix.lower() == ".3mf":
+            try:
+                import bambu_recent
+                if bambu_recent.is_enabled(config):
+                    bambu_recent.record_move(source, dest, config=config)
+                elif (
+                    not _BAMBU_PROMPTED_SESSION
+                    and bambu_recent.should_ask(config)
+                    and config.get("ribbon_enabled", True)
+                    and config.get("notifications", True)
+                ):
+                    _BAMBU_PROMPTED_SESSION = True
+                    from ribbon_popup import notify_bambu_prompt
+                    notify_bambu_prompt(source, dest)
+            except Exception as err:
+                logging.debug("Bambu recent-file note skipped: %s", err)
+        if dest.suffix.lower() == ".3mf":
+            try:
+                import kits
+                from gcode_peek import parse_3mf
+                meta = parse_3mf(dest)
+                if meta.get("is_makerworld"):
+                    kits.remember_model(meta.get("makerworld_meta", {}).get("model_id"), dest.parent.name)
+            except Exception as err:
+                logging.debug("Kit index note skipped: %s", err)
     if config.get("ribbon_enabled", True) and config.get("notifications", True):
         try:
             from ribbon_popup import notify_file_moved
@@ -334,6 +344,14 @@ def _handle_post_move(
         learning.observe_sorted(dest, target_root, config)
     except Exception as err:
         logging.debug("Learning log skipped: %s", err)
+    try:
+        import learning
+        suggestion = learning.fallback_suggestion(dest, target_root, config)
+        if suggestion and config.get("ribbon_enabled", True) and config.get("notifications", True):
+            from ribbon_popup import notify_suggestion
+            notify_suggestion(suggestion["id"])
+    except Exception as err:
+        logging.debug("Fallback suggestion skipped: %s", err)
     if config.get("quick_switcher_enabled", True):
         try:
             from quick_switcher import record_recent_file
@@ -875,6 +893,11 @@ def _run_daily_cleanup(config: dict) -> None:
         clean_old.expire_quarantine(config)
     except Exception:
         logging.exception("Quarantine expiry failed")
+    try:
+        import desktop_sweep
+        desktop_sweep.sweep(config)
+    except Exception:
+        logging.exception("Desktop sweep failed")
     if result and result["count"] and config.get("notifications", True):
         try:
             import ribbon_popup

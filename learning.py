@@ -746,3 +746,33 @@ def forget() -> None:
                 target.unlink(missing_ok=True)
             except OSError as exc:
                 logging.debug("Could not delete %s: %s", target, exc)
+
+
+def fallback_suggestion(dest: Path, root: Path, config: dict) -> dict | None:
+    """A file the rules could not place (it landed in the default folder): ask whether
+    a folder the learner recognises should have taken it. Returns the suggestion to show,
+    or None. Reuses the same rules as the move-based suggestions, so the same
+    "Yes / No" answers and the same declining apply."""
+    if not suggestions_enabled(config):
+        return None
+    fallback = folder_key(str(config.get("default_folder") or "Other"))
+    try:
+        parent_rel = Path(dest).parent.relative_to(Path(root))
+    except ValueError:
+        return None
+    if folder_key(str(parent_rel)) != fallback:
+        return None
+    with _LOCK:
+        model = load_model()
+        if not model.folders:
+            return None
+        feats = features(Path(dest))
+        for guess in model.predict(feats, top=3):
+            label = str(guess.get("folder") or "")
+            if not label or folder_key(label) == fallback:
+                continue
+            suggestion = _suggestion_for(model, feats, label, Path(dest), config)
+            if suggestion:
+                save_model(model)
+                return suggestion
+    return None

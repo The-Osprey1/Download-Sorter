@@ -76,13 +76,11 @@ download-sorter-remodel = "remodel:main"
 [tool.setuptools]
 py-modules = [
     "about",
-    "bambu_recent",
     "batch_handoff",
     "clean_old",
     "config_manager",
     "gcode_peek",
     "hold_manager",
-    "kits",
     "learning",
     "folder_scan",
     "onboarding",
@@ -105,7 +103,6 @@ py-modules = [
     "ui_motion",
     "ui_style",
     "ui_categories",
-    "zip_members",
     "ui_widgets",
     "quit_signal",
     "update_check",
@@ -113,6 +110,18 @@ py-modules = [
     "unzip_3d",
     "unzip_archive",
     "watch",
+    "bambu_recent",
+    "kits",
+    "zip_members",
+    "desktop_sweep",
+    "hotkey",
+    "pdf_content",
+    "photo_kind",
+    "prints",
+    "rule_check",
+    "setup_export",
+    "shelf",
+    "space_report",
 ]
 
 [tool.setuptools.dynamic]

@@ -651,27 +651,26 @@ class TestBadgeRenderingAndMemoryIntegrity:
         sandbox.set_config_and_project(base_config, active_proj)
         sandbox.evaluate("model.stl")
         assert sandbox._badge_lbl.text() == "Project mode"
-        style = sandbox._badge_lbl.styleSheet()
-        assert "background:" in style
-        assert "border-radius:" in style
+        # The look comes from the shared style sheet (a badge role and a kind), not from inline styles.
+        assert sandbox._badge_lbl.property("role") == "badge"
+        assert sandbox._badge_lbl.property("kind") == "warning"
 
         # 2. Test Remaining 6 Badges with Active Project Disabled
         sandbox.set_config_and_project(base_config, None)
         badge_test_cases = [
-            ("", "Waiting"),
-            ("IME3311_Doc.pdf", "Name rule"),
-            ("bracket_op1.nc", "G-code check"),
-            ("unrelated.zip", "File type"),
-            ("unknown_file.bin", "No rule matched"),
-            ("document.docx.crdownload", "Skipped"),
+            ("", "Waiting", "neutral"),
+            ("IME3311_Doc.pdf", "Name rule", "success"),
+            ("bracket_op1.nc", "G-code check", "info"),
+            ("unrelated.zip", "File type", "neutral"),
+            ("unknown_file.bin", "No rule matched", "warning"),
+            ("document.docx.crdownload", "Skipped", "critical"),
         ]
 
-        for fname, expected_badge in badge_test_cases:
+        for fname, expected_badge, expected_kind in badge_test_cases:
             sandbox.evaluate(fname)
             assert sandbox._badge_lbl.text() == expected_badge
-            style = sandbox._badge_lbl.styleSheet()
-            assert "background:" in style
-            assert "border-radius:" in style
+            assert sandbox._badge_lbl.property("role") == "badge"
+            assert sandbox._badge_lbl.property("kind") == expected_kind
 
     def test_memory_leak_rapid_keystrokes_and_evaluations(self, qapp, base_config):
         """Execute 1,500 evaluations and verify bounded memory allocation."""
