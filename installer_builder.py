@@ -151,6 +151,7 @@ namespace DownloadSorterInstaller
             bool silent = false;
             bool update = false;
             bool noShortcuts = false;
+            bool noRegistry = false;
             string customDir = null;
 
             for (int i = 0; i < args.Length; i++)
@@ -179,6 +180,15 @@ namespace DownloadSorterInstaller
                          string.Equals(a, "/noshortcuts", StringComparison.OrdinalIgnoreCase))
                 {
                     noShortcuts = true;
+                }
+                else if (string.Equals(a, "/NO-REGISTRY", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a, "--no-registry", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(a, "/noregistry", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Copy the files only: no "Installed apps" entry. The entry is one per
+                    // user, so a test (or a portable copy) that registered itself would
+                    // replace the one of the copy that is really installed.
+                    noRegistry = true;
                 }
                 else if (a.StartsWith("/D=", StringComparison.OrdinalIgnoreCase) ||
                          a.StartsWith("-D=", StringComparison.OrdinalIgnoreCase) ||
@@ -209,12 +219,12 @@ namespace DownloadSorterInstaller
                         bool hasDesktop = !noShortcuts && File.Exists(Path.Combine(desktopDir, "Download Sorter.lnk"));
                         string smPrograms = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs");
                         bool hasStartMenu = !noShortcuts && File.Exists(Path.Combine(smPrograms, "Download Sorter.lnk"));
-                        PerformInstall(targetDir, hasDesktop, hasStartMenu);
+                        PerformInstall(targetDir, hasDesktop, hasStartMenu, !noRegistry);
                         Relaunch(targetDir);
                     }
                     else
                     {
-                        PerformInstall(targetDir, !noShortcuts, !noShortcuts);
+                        PerformInstall(targetDir, !noShortcuts, !noShortcuts, !noRegistry);
                     }
                     return 0;
                 }
@@ -357,7 +367,7 @@ namespace DownloadSorterInstaller
             try { Process.Start(exe, "--home"); } catch { }  // and the window, so the user sees it is back
         }
 
-        public static void PerformInstall(string targetDir, bool createDesktop, bool createStartMenu)
+        public static void PerformInstall(string targetDir, bool createDesktop, bool createStartMenu, bool registerUninstall = true)
         {
             if (!Directory.Exists(targetDir))
             {
@@ -430,7 +440,10 @@ namespace DownloadSorterInstaller
             }
 
             CreateShortcuts(targetDir, createDesktop, createStartMenu);
-            RegisterUninstall(targetDir);
+            if (registerUninstall)
+            {
+                RegisterUninstall(targetDir);
+            }
         }
 
         private static void CreateShortcuts(string targetDir, bool desktop, bool startMenu)
@@ -776,7 +789,7 @@ def build_csharp_installer(
     if not dist.exists():
         raise FileNotFoundError(f"Distribution directory does not exist: {dist}")
 
-    ver = version or getattr(about, "__version__", "2.3.0")
+    ver = version or getattr(about, "__version__", "2.4.0")
     author_str = getattr(about, "AUTHOR", "")
     credit_str = getattr(about, "CREDIT", "")
     repo_url_str = getattr(about, "REPO_URL", "")
@@ -845,7 +858,7 @@ def build_setup_exe(
     setup file (and its documented /S and /D= options) does not depend on
     whether Inno Setup happens to be installed on the build machine.
     """
-    ver = version or getattr(about, "__version__", "2.3.0")
+    ver = version or getattr(about, "__version__", "2.4.0")
     dist = Path(dist_dir) if dist_dir else (REPO_ROOT / "dist" / "DownloadSorter")
     target_out_dir = dist.parent if dist.name == "DownloadSorter" else (REPO_ROOT / "dist")
     out = Path(output_exe) if output_exe else (target_out_dir / f"DownloadSorter-Setup-v{ver}-windows-x64.exe")

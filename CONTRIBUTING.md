@@ -39,7 +39,23 @@ pytest tests/ -v
 
 All 750+ tests should pass with 0 errors.
 
+The tests leave a Download Sorter that is installed or running on your PC alone: every test gets its own quit signal, and the registry entries the app writes (start with Windows, right-click menu, Installed apps) go to a scratch area that is deleted afterwards (`tests/conftest.py`, checked by `tests/test_machine_isolation.py`). A test that starts the setup program runs it in another process, which cannot be redirected, so it must pass `/NO-REGISTRY` (and `/NO-SHORTCUTS`).
+
 Tests marked `desktop` open real Windows dialogs and need an unlocked desktop session; skip them with `pytest -m "not desktop"`. A test that runs for more than 5 minutes is stopped and the run shows where it was stuck (this needs `pytest-timeout`, installed above).
+
+---
+
+## 🖼️ Seeing the Windows
+
+`tools/render_screens.py` draws every page offscreen with made-up data and saves PNG files. It never reads your own settings, history or folders.
+
+```powershell
+.\.venv\Scripts\python.exe tools\render_screens.py --out C:\temp\shots
+# Only some pages, at 150% display scale and the smallest window size:
+.\.venv\Scripts\python.exe tools\render_screens.py --out C:\temp\shots --only home,rules --scale 1.5 --min
+```
+
+Run it before and after a change to the windows, and attach the images to the pull request.
 
 ---
 

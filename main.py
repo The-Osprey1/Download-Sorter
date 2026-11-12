@@ -27,7 +27,7 @@ Commands:
   --welcome             Launch first-run Welcome & Setup Wizard
   --gui, -g, --rules    Launch PySide6 Visual Rules Manager & Live Sandbox GUI
   --sort, -s, --once    Sort Downloads once (--dry-run, --target <dir>, --notify)
-  --undo, -u            Reversibly undo the most recent sort batch (--notify)
+  --undo, -u            Reversibly undo the most recent sort batch (--notify, --file <path>)
   --peek, -p <file>     Inspect 3D print file / CNC toolpath and extract embedded thumbnail
   --unzip-3d <zip>      Unpack 3D models from archive into Downloads
   --unzip <zip>         Safely unpack archive into Extracted/ with wrapper stripping

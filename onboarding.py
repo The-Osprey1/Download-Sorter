@@ -8,6 +8,7 @@ Provides:
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta
 import html
 import json
 import logging
@@ -20,17 +21,20 @@ import time
 from typing import Any
 import uuid
 
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QScrollArea,
@@ -46,9 +50,12 @@ import folder_scan
 import problem_report
 from suite_theme import ACCENTS, COLORS, RADII
 import learning
+import refile
+import ui_categories
 import ui_icons
 import ui_motion
 import ui_style
+import ui_widgets
 import update_check
 import updater
 
@@ -87,6 +94,28 @@ def _sorter_is_waiting_for_setup() -> bool:
         return state.get("status") == "waiting_for_setup"
     except Exception:
         return False
+
+
+def current_sorter_state() -> str:
+    """"paused", "running" or "stopped": what the background sorter is doing right now.
+
+    Home and the window's sidebar both read this, so they always agree.
+    """
+    is_paused = False
+    if sorter and hasattr(sorter, "is_paused"):
+        try:
+            is_paused = sorter.is_paused()
+        except Exception:
+            pass
+    if is_paused:
+        return "paused"
+    is_running = True
+    if hasattr(suite_data, "is_sorter_running"):
+        try:
+            is_running = suite_data.is_sorter_running()
+        except Exception:
+            pass
+    return "running" if is_running else "stopped"
 
 
 def _auto_unzip_enabled(config: dict[str, Any]) -> bool:
@@ -869,23 +898,57 @@ def _open_storage_sense_settings() -> None:
             logging.debug("Could not open Storage Sense settings", exc_info=True)
 
 
-def _friendly_time(raw: str) -> str:
-    """'2026-11-08T14:05:00+00:00' -> 'Today, 2:05 PM' in local time."""
-    from datetime import datetime, timedelta
-
+def _local_time(raw: str) -> datetime | None:
+    """A history timestamp as a local datetime, or None when it can't be read."""
     try:
-        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except (TypeError, ValueError):
+        return None
+    return when.astimezone() if when.tzinfo is not None else when
+
+
+def _now_like(when: datetime) -> datetime:
+    """Now in local time, as the same kind of datetime (with or without a time zone) as ``when``."""
+    return datetime.now().astimezone() if when.tzinfo is not None else datetime.now()
+
+
+def _friendly_time(raw: str, now: datetime | None = None) -> str:
+    """'2026-11-08T14:05:00+00:00' -> 'Today, 2:05 PM' in local time."""
+    when = _local_time(raw)
+    if when is None:
         return raw
-    if when.tzinfo is not None:
-        when = when.astimezone()
     clock = when.strftime("%I:%M %p").lstrip("0")
-    today = datetime.now(when.tzinfo).date() if when.tzinfo else datetime.now().date()
+    today = (now or _now_like(when)).date()
     if when.date() == today:
         return f"Today, {clock}"
     if when.date() == today - timedelta(days=1):
         return f"Yesterday, {clock}"
     return f"{when.strftime('%b')} {when.day}, {clock}"
+
+
+def _relative_time(raw: str, now: datetime | None = None) -> str:
+    """"Just now", "3 min ago", "2 h ago", then "Today, 2:05 PM", "Yesterday, ..." and dates."""
+    when = _local_time(raw)
+    if when is None:
+        return raw
+    now = now or _now_like(when)
+    seconds = (now - when).total_seconds()
+    if seconds < 45:
+        return "Just now"  # also a moment "in the future": another clock was a little ahead
+    if seconds < 3600:
+        return f"{max(1, int(seconds // 60))} min ago"
+    if seconds < 6 * 3600 and when.date() == now.date():
+        return f"{int(seconds // 3600)} h ago"
+    return _friendly_time(raw, now)
+
+
+def _full_time(raw: str) -> str:
+    """"Monday, Nov 9, 2026, 2:05 PM": the whole date, for a tooltip."""
+    when = _local_time(raw)
+    if when is None:
+        return str(raw)
+    clock = when.strftime("%I:%M %p").lstrip("0")
+    return f"{when.strftime('%A')}, {when.strftime('%b')} {when.day}, {when.year}, {clock}"
 
 
 class HomeDashboardWidget(QWidget):
@@ -899,6 +962,9 @@ class HomeDashboardWidget(QWidget):
     """
 
     persona_changed = Signal(str)
+    status_changed = Signal(str)       # "running", "paused", "stopped" or "starting"
+    update_available = Signal(bool)    # a newer version was found
+    navigate_requested = Signal(str)   # ask the window to show another page ("rules", ...)
     # Results from background work, delivered on the window's thread.
     _sort_finished = Signal(int, str)
     _preview_ready = Signal(int, int)
@@ -908,6 +974,8 @@ class HomeDashboardWidget(QWidget):
 
     POLL_MS = 2000
     START_TIMEOUT_S = 15.0
+    FIRST_LIMIT = 25   # files shown at first in "Recently sorted"
+    MORE_LIMIT = 100   # ... and after "Show more"
 
     def __init__(self, config: dict[str, Any] | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -915,9 +983,16 @@ class HomeDashboardWidget(QWidget):
             suite_data.load_sorter_config() if hasattr(suite_data, "load_sorter_config") else {}
         )
         self._shown_ids: set[str] | None = None
+        self._records: list[dict[str, Any]] = []  # what the list was loaded with, before the filter
+        self._limit = self.FIRST_LIMIT
+        self._tone: str | None = None
+        self._times_refreshed = 0.0
+        self._last_filed_raw = ""
+        self._last_filed_what = ""
         self._history_key: tuple[int, int] | None = None
         self._moves_today: int | None = None
         self._last_state: str | None = None
+        self._announced_state: str | None = None
         self._starting_until = 0.0
         self._sorting = False
         self._waiting = 0
@@ -966,6 +1041,7 @@ class HomeDashboardWidget(QWidget):
 
         # Status and the main actions
         self._status_card, hero = ui_style.card(spacing=6)
+        self._status_card.setProperty("hero", "true")  # the soft gradient; its tint follows the sorter's state
         self._hero_card = self._status_card  # older name kept for callers
 
         status_row = QHBoxLayout()
@@ -982,6 +1058,9 @@ class HomeDashboardWidget(QWidget):
 
         self._status_desc_lbl = ui_style.label("", "muted", wrap=True)
         hero.addWidget(self._status_desc_lbl)
+        self._last_filed_lbl = ui_style.label("", "caption")
+        self._last_filed_lbl.setVisible(False)
+        hero.addWidget(self._last_filed_lbl)
         self._waiting_lbl = ui_style.label("", wrap=True)
         self._waiting_lbl.setStyleSheet(f"color: {COLORS['info']};")
         self._waiting_lbl.setVisible(False)
@@ -1019,6 +1098,15 @@ class HomeDashboardWidget(QWidget):
         feed_header = QHBoxLayout()
         feed_header.addWidget(ui_style.label("Recently sorted", "section"))
         feed_header.addStretch()
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("Filter by name or folder")
+        self._filter_edit.setClearButtonEnabled(True)
+        self._filter_edit.addAction(ui_icons.icon("filter"), QLineEdit.ActionPosition.LeadingPosition)
+        self._filter_edit.setAccessibleName("Filter recently sorted files")
+        self._filter_edit.setFixedWidth(230)
+        self._filter_edit.setVisible(False)  # only shown when there is something to filter
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        feed_header.addWidget(self._filter_edit)
         self._refresh_btn = ui_style.icon_button("refresh", "Refresh")
         self._refresh_btn.clicked.connect(self.refresh_data)
         feed_header.addWidget(self._refresh_btn)
@@ -1054,14 +1142,24 @@ class HomeDashboardWidget(QWidget):
         hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._activity_table.setColumnWidth(1, 190)
         self._activity_table.setColumnWidth(2, 150)
-        self._activity_table.setColumnWidth(3, 48)
+        self._activity_table.setColumnWidth(3, 84)  # "Show in folder" and the "..." menu side by side
+        self._activity_table.setIconSize(QSize(28, 28))
         self._activity_table.verticalHeader().setVisible(False)
-        self._activity_table.verticalHeader().setDefaultSectionSize(40)
+        self._activity_table.verticalHeader().setDefaultSectionSize(44)
         self._activity_table.setShowGrid(False)
         self._activity_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._activity_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._activity_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._activity_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._activity_table.customContextMenuRequested.connect(self._show_row_menu)
+        self._activity_table.cellDoubleClicked.connect(self._on_row_double_clicked)
         self._activity_layout.addWidget(self._activity_table)
+
+        self._more_btn = ui_style.button("Show more", "ghost")
+        self._more_btn.setToolTip(f"Show up to {self.MORE_LIMIT} recently sorted files")
+        self._more_btn.setVisible(False)
+        self._more_btn.clicked.connect(self.show_more)
+        self._activity_layout.addWidget(self._more_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         layout.addLayout(self._activity_layout, 1)
 
@@ -1069,21 +1167,7 @@ class HomeDashboardWidget(QWidget):
 
     def _sorter_state(self) -> str:
         """'paused', 'running' or 'stopped'."""
-        is_paused = False
-        if sorter and hasattr(sorter, "is_paused"):
-            try:
-                is_paused = sorter.is_paused()
-            except Exception:
-                pass
-        if is_paused:
-            return "paused"
-        is_running = True
-        if hasattr(suite_data, "is_sorter_running"):
-            try:
-                is_running = suite_data.is_sorter_running()
-            except Exception:
-                pass
-        return "running" if is_running else "stopped"
+        return current_sorter_state()
 
     def _watched_folder_text(self) -> str:
         root = None
@@ -1150,7 +1234,15 @@ class HomeDashboardWidget(QWidget):
         ui_style.set_role(self._btn_pause_resume, "primary" if sorting_stopped else None, btn_icon)
         ui_style.set_role(self._btn_sort_now, None if sorting_stopped else "primary", "sort")
         self._btn_pause_resume.setEnabled(not starting)
+        tone = "info" if starting else {"running": "success", "paused": "warning"}.get(state)
+        if tone != self._tone:  # restyling every two seconds would be wasted work
+            self._tone = tone
+            ui_style.set_tone(self._status_card, tone)
         self._last_state = "starting" if starting else state
+        self._update_empty_text()
+        if self._last_state != self._announced_state:
+            self._announced_state = self._last_state
+            self.status_changed.emit(self._last_state)
 
         moves_today = 0
         if sorter and hasattr(sorter, "IncrementalHistoryReader") and hasattr(sorter, "HISTORY_FILE"):
@@ -1184,6 +1276,8 @@ class HomeDashboardWidget(QWidget):
         signature = self._history_signature()
         if signature != self._history_key and not self._sorting:
             self.refresh_data(announce=True)
+        elif time.monotonic() - self._times_refreshed >= 30:
+            self._refresh_relative_times()  # "3 min ago" must keep counting while the window sits open
 
     def refresh_data(self, announce: bool = False) -> None:
         """Reload settings and the recent activity list.
@@ -1200,60 +1294,285 @@ class HomeDashboardWidget(QWidget):
         records: list[dict[str, Any]] = []
         if hasattr(suite_data, "get_recent_activity"):
             try:
-                records = self._label_folders(suite_data.get_recent_activity(limit=25))
+                records = self._label_folders(suite_data.get_recent_activity(limit=self._limit))
             except Exception:
                 records = []
+        self._records = records
+        self._times_refreshed = time.monotonic()
 
         previous_ids = self._shown_ids
         self._shown_ids = {str(r.get("id", "")) for r in records}
-        new_rows = []
+        new_ids: set[str] = set()
         if previous_ids is not None:
-            new_rows = [i for i, r in enumerate(records) if str(r.get("id", "")) not in previous_ids]
+            new_ids = self._shown_ids - previous_ids
+
+        self._set_last_filed(records[0] if records else None)
+        self._filter_edit.setVisible(bool(records))
+        self._more_btn.setVisible(len(records) >= self._limit and self._limit < self.MORE_LIMIT)
 
         if not records:
-            self._empty_card.setVisible(True)
-            self._activity_table.setVisible(False)
-            self._activity_table.setRowCount(0)
+            self._show_empty()
             return
 
+        new_rows = self._render_rows(new_ids)
+        if new_rows:
+            ui_motion.flash_rows(self._activity_table, new_rows)
+        fresh = [r for r in records if str(r.get("id", "")) in new_ids] if new_ids else []
+        if fresh and announce:
+            if len(fresh) == 1:
+                text = f"Filed {fresh[0].get('filename', 'a file')} in {fresh[0].get('folder', 'its folder')}."
+            else:
+                text = f"Filed {len(fresh)} new files. {self._folder_breakdown(fresh)}"
+            self._banner.show_message(text.strip(), "success", "Undo", self.undo_last)
+            self.refresh_waiting()
+
+    # ---- the "Recently sorted" list ------------------------------------
+
+    def _show_empty(self) -> None:
+        self._update_empty_text()
+        self._empty_card.setVisible(True)
+        self._activity_table.setVisible(False)
+        self._activity_table.setRowCount(0)
+
+    def _empty_hint(self) -> str:
+        if self._last_state == "stopped":
+            return "Sorting is off. Click “Start sorting” above to file new downloads."
+        if self._waiting > 0:
+            noun = "file is" if self._waiting == 1 else "files are"
+            button = f"Sort {self._waiting} file{'s' if self._waiting != 1 else ''} now"
+            return f"{self._waiting} {noun} waiting in Downloads. Click “{button}” above to file them."
+        return "Files you download will show up here a few seconds after they're sorted."
+
+    def _update_empty_text(self) -> None:
+        query = self._filter_edit.text().strip()
+        if self._records and query:
+            title, hint = "No matches", f"Nothing in the list matches “{query}”."
+        else:
+            title, hint = "Nothing sorted yet", self._empty_hint()
+        self._empty_state_lbl.setText(title)
+        self._empty_hint_lbl.setText(hint)
+
+    def _visible_records(self) -> list[dict[str, Any]]:
+        query = self._filter_edit.text().strip().lower()
+        if not query:
+            return list(self._records)
+        return [r for r in self._records
+                if query in str(r.get("filename", "")).lower() or query in str(r.get("folder", "")).lower()]
+
+    def _render_rows(self, new_ids: set[str]) -> list[int]:
+        """Fill the table from the loaded records (through the filter). Returns the rows that are new."""
+        records = self._visible_records()
+        if not records:
+            self._show_empty()
+            return []
         if not self._activity_table.isVisible() and self.isVisible():
             ui_motion.fade_in(self._activity_table)
         self._empty_card.setVisible(False)
         self._activity_table.setVisible(True)
         self._activity_table.setRowCount(0)
         self._activity_table.setRowCount(len(records))
+        new_rows: list[int] = []
         for row, rec in enumerate(records):
-            filename = str(rec.get("filename", ""))
-            folder = str(rec.get("folder", ""))
-            dest = str(rec.get("dest", ""))
+            self._fill_row(row, rec)
+            if str(rec.get("id", "")) in new_ids:
+                new_rows.append(row)
+        return new_rows
 
-            f_item = QTableWidgetItem(filename)
-            f_item.setToolTip(dest or filename)
-            self._activity_table.setItem(row, 0, f_item)
+    def _fill_row(self, row: int, rec: dict[str, Any]) -> None:
+        filename = str(rec.get("filename", ""))
+        folder = str(rec.get("folder", ""))
+        dest = str(rec.get("dest", ""))
+        raw_time = str(rec.get("timestamp", ""))
+        gone = not bool(rec.get("exists", True))  # moved or deleted since it was filed
+        main_color = QColor(COLORS["textFaint"] if gone else COLORS["text"])
+        quiet_color = QColor(COLORS["textFaint"] if gone else COLORS["textMuted"])
 
-            folder_item = QTableWidgetItem(folder)
-            folder_item.setIcon(ui_icons.icon("folder"))
-            folder_item.setForeground(QColor(COLORS["textMuted"]))
-            self._activity_table.setItem(row, 1, folder_item)
+        f_item = QTableWidgetItem(filename)
+        f_item.setToolTip(f"{dest or filename}\nThis file has been moved or deleted since it was filed." if gone
+                          else (dest or filename))
+        f_item.setIcon(ui_widgets.category_tile_icon(ui_categories.kind_of(dest or filename, folder)))
+        f_item.setData(Qt.ItemDataRole.UserRole, rec)
+        f_item.setForeground(main_color)
+        self._activity_table.setItem(row, 0, f_item)
 
-            ts_item = QTableWidgetItem(_friendly_time(str(rec.get("timestamp", ""))))
-            ts_item.setForeground(QColor(COLORS["textMuted"]))
-            self._activity_table.setItem(row, 2, ts_item)
+        folder_item = QTableWidgetItem(folder)
+        folder_item.setIcon(ui_widgets.padded_icon("folder", quiet_color.name()))
+        folder_item.setForeground(quiet_color)
+        folder_item.setToolTip(folder)
+        self._activity_table.setItem(row, 1, folder_item)
 
-            show_btn = ui_style.icon_button("reveal", "Show in folder")
-            show_btn.clicked.connect(lambda _c=False, p=dest: self._show_in_folder(p))
-            self._activity_table.setCellWidget(row, 3, show_btn)
+        ts_item = QTableWidgetItem(_relative_time(raw_time))
+        ts_item.setForeground(quiet_color)
+        ts_item.setToolTip(_full_time(raw_time))
+        ts_item.setData(Qt.ItemDataRole.UserRole, raw_time)
+        self._activity_table.setItem(row, 2, ts_item)
 
-        if new_rows:
-            ui_motion.flash_rows(self._activity_table, new_rows)
-            if announce:
-                fresh = [records[i] for i in new_rows]
-                if len(fresh) == 1:
-                    text = f"Filed {fresh[0].get('filename', 'a file')} in {fresh[0].get('folder', 'its folder')}."
-                else:
-                    text = f"Filed {len(fresh)} new files. {self._folder_breakdown(fresh)}"
-                self._banner.show_message(text.strip(), "success", "Undo", self.undo_last)
-                self.refresh_waiting()
+        self._activity_table.setCellWidget(row, 3, self._row_actions(rec))
+
+    def _row_actions(self, rec: dict[str, Any]) -> QWidget:
+        """The two buttons at the end of a row: "Show in folder" and the "..." menu."""
+        cell = QWidget()
+        layout = QHBoxLayout(cell)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(0)
+        dest = str(rec.get("dest", ""))
+        name = str(rec.get("filename", "")) or "this file"
+        reveal = ui_style.icon_button("reveal", "Show in folder")
+        reveal.setAccessibleName(f"Show {name} in folder")  # a screen reader hears which file
+        reveal.clicked.connect(lambda _c=False, p=dest: self._show_in_folder(p))
+        layout.addWidget(reveal)
+        menu = ui_widgets.RowMenuButton("More actions")
+        menu.setAccessibleName(f"More actions for {name}")
+        menu.set_actions(self._row_entries(rec))
+        layout.addWidget(menu)
+        return cell
+
+    def _row_entries(self, rec: dict[str, Any]) -> list:
+        """What can be done with one filed file. Fixing a misfile needs the file to still be where it was filed."""
+        dest = str(rec.get("dest", ""))
+        can_fix = bool(rec.get("exists", True)) and bool(rec.get("id"))
+        return [
+            ("Show in folder", "reveal", lambda p=dest: self._show_in_folder(p), True),
+            None,
+            ("Put back where it was", "undo", lambda r=rec: self.put_back(r), can_fix),
+            ("Move to...", "move", lambda r=rec: self.move_to(r), can_fix),
+            ("Always file like this...", "rule", lambda r=rec: self.always_file_like(r), can_fix),
+        ]
+
+    def _row_record(self, row: int) -> dict[str, Any] | None:
+        item = self._activity_table.item(row, 0)
+        rec = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        return rec if isinstance(rec, dict) else None
+
+    def _show_row_menu(self, pos) -> None:
+        item = self._activity_table.itemAt(pos)
+        rec = self._row_record(item.row()) if item is not None else None
+        if rec is None:
+            return
+        menu = QMenu(self)
+        ui_widgets.fill_menu(menu, self._row_entries(rec))
+        menu.exec(self._activity_table.viewport().mapToGlobal(pos))
+
+    def _on_row_double_clicked(self, row: int, column: int) -> None:
+        rec = self._row_record(row)
+        if rec is not None and column != 3:
+            self._show_in_folder(str(rec.get("dest", "")))
+
+    def _on_filter_changed(self, _text: str) -> None:
+        if self._records:
+            self._render_rows(set())
+
+    def show_more(self) -> None:
+        """Show up to MORE_LIMIT files instead of the first FIRST_LIMIT."""
+        self._limit = self.MORE_LIMIT
+        self.refresh_data()
+
+    def _set_last_filed(self, rec: dict[str, Any] | None) -> None:
+        if not rec or _local_time(str(rec.get("timestamp", ""))) is None:
+            self._last_filed_raw = ""
+            self._last_filed_lbl.setVisible(False)
+            return
+        self._last_filed_raw = str(rec.get("timestamp", ""))
+        self._last_filed_what = f"{rec.get('filename', 'a file')} in {rec.get('folder', 'its folder')}"
+        self._update_last_filed_text()
+
+    def _update_last_filed_text(self) -> None:
+        if not self._last_filed_raw:
+            return
+        when = _relative_time(self._last_filed_raw)
+        if when.startswith("Today, "):
+            when = "today at " + when[len("Today, "):]
+        elif when.startswith("Yesterday, "):
+            when = "yesterday at " + when[len("Yesterday, "):]
+        elif when == "Just now":
+            when = "just now"
+        elif not when.endswith(" ago"):
+            when = "on " + when
+        self._last_filed_lbl.setText(f"Last filed: {self._last_filed_what}, {when}")
+        self._last_filed_lbl.setToolTip(_full_time(self._last_filed_raw))
+        self._last_filed_lbl.setVisible(True)
+
+    def _refresh_relative_times(self) -> None:
+        self._times_refreshed = time.monotonic()
+        for row in range(self._activity_table.rowCount()):
+            item = self._activity_table.item(row, 2)
+            raw = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+            if raw:
+                item.setText(_relative_time(str(raw)))
+        self._update_last_filed_text()
+
+    # ---- fixing a misfiled file ----------------------------------------
+
+    def _watch_root(self) -> Path | None:
+        if sorter and hasattr(sorter, "watch_root"):
+            try:
+                return Path(sorter.watch_root(self._config))
+            except Exception:
+                return None
+        return None
+
+    def _no_longer_in_history(self, rec: dict[str, Any]) -> None:
+        self._banner.show_message(
+            f"{rec.get('filename', 'That file')} can't be changed here: its move was already undone "
+            "or is no longer in the history.", "warning")
+        self.refresh_data()
+
+    def put_back(self, rec: dict[str, Any]) -> bool:
+        """Put one filed file back where it was before it was filed. True when it was."""
+        record = refile.active_record(str(rec.get("id", "")))
+        if record is None:
+            self._no_longer_in_history(rec)
+            return False
+        outcome = refile.put_back(record, self._watch_root())
+        self.refresh_data()
+        self._banner.show_message(outcome.message, "info" if outcome.ok else "warning")
+        self.refresh_waiting()
+        return outcome.ok
+
+    def move_to(self, rec: dict[str, Any], folder: str | Path | None = None) -> bool:
+        """Move one filed file to a folder you pick (``folder`` skips the picker). True when it moved."""
+        record = refile.active_record(str(rec.get("id", "")))
+        if record is None:
+            self._no_longer_in_history(rec)
+            return False
+        if folder is None:
+            name = Path(str(record.get("dest", ""))).name
+            start = self._watch_root() or Path.home()
+            folder = QFileDialog.getExistingDirectory(self, f"Move {name} to...", str(start))
+            if not folder:
+                return False
+        outcome = refile.move_to_folder(record, Path(folder), self._config, self._watch_root())
+        self.refresh_data()
+        self._banner.show_message(outcome.message, "success" if outcome.ok else "warning")
+        if outcome.ok and outcome.suggestion:
+            refile.ask_about_suggestion(outcome.suggestion, self._config)
+        self.refresh_waiting()
+        return outcome.ok
+
+    def always_file_like(self, rec: dict[str, Any]) -> bool:
+        """Open the rule editor filled in from this file, and save the rule as the first (winning) one."""
+        from rules_manager import RuleEditDialog
+
+        dest = Path(str(rec.get("dest", "")))
+        draft = refile.rule_draft_for(dest.name, dest.parent, self._watch_root())
+        dialog = RuleEditDialog(rule=draft, rule_type="keyword", parent=self.window(), title="Always file like this")
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        rule = dialog.get_rule_data()
+        rule["origin"] = "user"
+        try:
+            refile.add_rule_first(rule)
+        except Exception as exc:
+            logging.exception("Could not add a rule from Home")
+            self._banner.show_message(f"The rule couldn't be saved: {exc}", "error", timeout_ms=0)
+            return False
+        if hasattr(suite_data, "load_sorter_config"):
+            self._config = suite_data.load_sorter_config()
+        self._banner.show_message(
+            f"Rule “{rule['name']}” added. Matching files will go to {rule['folder']}.",
+            "success", "Open Rules", lambda: self.navigate_requested.emit("rules"), timeout_ms=10000,
+        )
+        return True
 
     def _label_folders(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Name each file's folder from Downloads down: "Documents\\PDF", not just "PDF"."""
@@ -1316,6 +1635,7 @@ class HomeDashboardWidget(QWidget):
             return
         self._release = dict(release)
         self._offer_update()
+        self.update_available.emit(True)
 
     def _offer_update(self) -> None:
         release = self._release or {}
@@ -1472,6 +1792,7 @@ class HomeDashboardWidget(QWidget):
         if generation != self._preview_generation:
             return
         self._waiting = count
+        self._update_empty_text()
         if count > 0:
             noun = "file is" if count == 1 else "files are"
             self._waiting_lbl.setText(
@@ -1496,7 +1817,10 @@ class HomeDashboardWidget(QWidget):
         p = Path(target_path)
         try:
             if p.exists():
-                subprocess.Popen(["explorer.exe", f"/select,{p}"])
+                # The path is its own argument after "/select,". Joined into one
+                # ("/select,C:\a b\c.pdf"), Windows quotes the whole thing and Explorer
+                # then ignores the request when the path has a space in it.
+                subprocess.Popen(["explorer.exe", "/select,", str(p)])
             elif p.parent.exists():
                 subprocess.Popen(["explorer.exe", str(p.parent)])
         except Exception:

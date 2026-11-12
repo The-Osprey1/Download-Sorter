@@ -23,7 +23,7 @@ import about
 if about.handle_version_flag():
     sys.exit(0)
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QSettings, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QKeySequence, QPalette, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -78,6 +78,7 @@ import about
 import ui_icons
 import ui_motion
 import ui_style
+import ui_widgets
 
 try:
     import sorter
@@ -218,14 +219,21 @@ class PresetLibraryDialog(QDialog):
 class RuleEditDialog(QDialog):
     """Modal dialog for creating and editing a keyword or extension rule."""
 
-    def __init__(self, rule: dict[str, Any] | None = None, rule_type: str = "keyword", parent: QWidget | None = None):
+    def __init__(
+        self,
+        rule: dict[str, Any] | None = None,
+        rule_type: str = "keyword",
+        parent: QWidget | None = None,
+        title: str | None = None,
+    ):
         super().__init__(parent)
         self.rule_type = rule_type
         self.original_rule = rule or {}
 
-        title = "Edit name rule" if rule_type == "keyword" else "Edit file type rule"
+        default_title = "Edit name rule" if rule_type == "keyword" else "Edit file type rule"
         if not rule:
-            title = "Add name rule" if rule_type == "keyword" else "Add file type rule"
+            default_title = "Add name rule" if rule_type == "keyword" else "Add file type rule"
+        title = title or default_title
         self.setWindowTitle(title)
         self.setMinimumWidth(500)
         self.setStyleSheet(ui_style.stylesheet())
@@ -1529,9 +1537,18 @@ class RulesManagerDialog(QDialog):
             initial_view = parent
             parent = None
         super().__init__(parent)
+        self._accepting_close = False  # see reject() and closeEvent()
+        self._discarded = False        # set on a leftover window that a newer one is closing
+        self._update_available = False
         self.setWindowTitle(about.APP_NAME)
-        self.setMinimumSize(900, 640)
+        self.setMinimumSize(900, 560)
         self.resize(1040, 760)
+        # A bare dialog only gets a close button, but this is the app's main window.
+        self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+        icon_file = ROOT / "DownloadSorter.ico"
+        if icon_file.exists():
+            self.setWindowIcon(QIcon(str(icon_file)))
 
         # Clean up any lingering top-level headless dialogs to prevent Qt window registry leaks
         app = QApplication.instance()
@@ -1539,6 +1556,7 @@ class RulesManagerDialog(QDialog):
             for top_win in list(app.topLevelWidgets()):
                 if isinstance(top_win, RulesManagerDialog) and top_win is not self:
                     try:
+                        top_win._discarded = True  # tidying up: its size must not replace the remembered one
                         top_win.close()
                         top_win.deleteLater()
                     except Exception:
@@ -1549,6 +1567,7 @@ class RulesManagerDialog(QDialog):
         self.load_data()
         self.switch_view(initial_view)
         self._add_shortcuts()
+        self._restore_window_state()
 
     # ------------------------------------------------------------------
     # layout
@@ -1589,6 +1608,9 @@ class RulesManagerDialog(QDialog):
         self._view_btn_group = QButtonGroup(self)
         self._view_btn_group.setExclusive(True)
         self._nav_buttons: dict[str, QPushButton] = {}
+        self._nav_dots: dict[str, QLabel] = {}
+        self._nav_tips: dict[str, str] = {}
+        dot_colors = {"home": COLORS["info"], "rules": COLORS["warning"]}
         for page_id, text, icon_name in (
             ("home", "Home", "home"),
             ("rules", "Rules", "rules"),
@@ -1596,11 +1618,23 @@ class RulesManagerDialog(QDialog):
             ("settings", "Settings", "settings"),
         ):
             btn = ui_style.button(text, "nav", icon_name)
-            btn.setToolTip(f"{text} (Ctrl+{self.PAGES.index(page_id) + 1})")
+            tip = f"{text} (Ctrl+{self.PAGES.index(page_id) + 1})"
+            btn.setToolTip(tip)
+            self._nav_tips[page_id] = tip
             btn.setCheckable(True)
             self._view_btn_group.addButton(btn, self.PAGES.index(page_id))
             self._nav_buttons[page_id] = btn
             side.addWidget(btn)
+            if page_id in dot_colors:
+                # A small dot at the right edge: "something on this page needs a look".
+                dot = ui_style.status_dot(dot_colors[page_id], 8)
+                dot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                dot.setVisible(False)
+                dot_layout = QHBoxLayout(btn)
+                dot_layout.setContentsMargins(0, 0, 12, 0)
+                dot_layout.addStretch()
+                dot_layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
+                self._nav_dots[page_id] = dot
         self._view_btn_group.idClicked.connect(self._on_view_switcher_clicked)
 
         # Older names, kept for callers and tests
@@ -1611,27 +1645,43 @@ class RulesManagerDialog(QDialog):
 
         side.addStretch()
 
-        status_row = QHBoxLayout()
+        # The sorter's state, always in view. Click it to go to Home.
+        self._status_chip = ui_widgets.ClickableFrame()
+        self._status_chip.setProperty("role", "chip")
+        status_row = QHBoxLayout(self._status_chip)
+        status_row.setContentsMargins(12, 6, 12, 6)
         status_row.setSpacing(8)
         self._sorter_status_dot = ui_style.status_dot(COLORS["textFaint"])
         status_row.addWidget(self._sorter_status_dot)
         self._sorter_status_pill = ui_style.label("", "muted")
         status_row.addWidget(self._sorter_status_pill, 1)
-        side.addLayout(status_row)
+        self._status_chip.clicked.connect(lambda: self.switch_view("home"))
+        side.addWidget(self._status_chip)
         side.addSpacing(6)
-        self._credit_lbl = ui_style.label(f"Version {about.__version__} · {about.CREDIT}", "caption", wrap=True)
+        self._credit_lbl = ui_style.label(f"Version {about.__version__}\n{about.CREDIT}", "caption")
+        self._credit_lbl.setContentsMargins(12, 0, 0, 0)
         self._credit_lbl.setObjectName("creditFooter")
         side.addWidget(self._credit_lbl)
         root.addWidget(self._sidebar)
 
-        # ---- pages ---------------------------------------------------
-        self._view_stack = QStackedWidget(self)
-        root.addWidget(self._view_stack, 1)
+        # ---- pages (a message bar on top, then the page) -------------
+        content = QWidget(self)
+        column = QVBoxLayout(content)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        self._notice = ui_widgets.NoticeBar(content)
+        column.addWidget(self._notice)
+        self._view_stack = QStackedWidget(content)
+        column.addWidget(self._view_stack, 1)
+        root.addWidget(content, 1)
 
         from onboarding import HomeDashboardWidget, SettingsWidget
 
         self._home_widget = HomeDashboardWidget(config=self._config, parent=self)
         self._home_widget.persona_changed.connect(self.set_active_persona)
+        self._home_widget.status_changed.connect(self._apply_sidebar_status)
+        self._home_widget.update_available.connect(self._on_update_available)
+        self._home_widget.navigate_requested.connect(self.switch_view)
         self._view_stack.addWidget(self._padded(self._home_widget))
 
         self._customize_container = self._build_rules_page()
@@ -1775,20 +1825,123 @@ class RulesManagerDialog(QDialog):
     def _on_view_changed(self, view_id: int) -> None:
         if view_id == 0 and hasattr(self, "_home_widget"):
             self._home_widget.refresh_data()
+        if view_id == 1:
+            self._reload_rules_if_stale()
         if view_id == 3 and hasattr(self, "_settings_widget"):
             self._settings_widget.refresh_data()
+        self._refresh_nav_dots()
+
+    def _reload_rules_if_stale(self) -> None:
+        """Show rules added elsewhere (from Home, or a learning ribbon) when Rules opens, unless you're mid-edit."""
+        if getattr(self, "_dirty", False):
+            return
+        try:
+            fresh = suite_data.load_sorter_config()
+        except Exception:
+            return
+
+        def rules_of(cfg: dict[str, Any]) -> str:
+            return json.dumps([cfg.get("keyword_rules", []), cfg.get("extension_rules", [])],
+                              sort_keys=True, default=str)
+
+        if rules_of(fresh) != rules_of(self._config):
+            self.load_data()
 
     def _refresh_sorter_status(self) -> None:
-        paused = bool(sorter and hasattr(sorter, "is_paused") and sorter.is_paused())
-        running = suite_data.is_sorter_running() if hasattr(suite_data, "is_sorter_running") else False
-        if paused:
-            text, color = "Sorting is paused", COLORS["warning"]
-        elif running:
-            text, color = "Sorting is on", COLORS["success"]
-        else:
-            text, color = "Sorting is off", COLORS["textFaint"]
+        from onboarding import current_sorter_state
+
+        state = current_sorter_state()
+        # Home knows the sorter was just asked to start; don't flash "off" over its "Starting...".
+        if state != "running" and getattr(self._home_widget, "_last_state", None) == "starting":
+            state = "starting"
+        self._apply_sidebar_status(state)
+
+    def _apply_sidebar_status(self, state: str) -> None:
+        text, color = {
+            "running": ("Sorting is on", COLORS["success"]),
+            "paused": ("Sorting is paused", COLORS["warning"]),
+            "starting": ("Starting...", COLORS["info"]),
+        }.get(state, ("Sorting is off", COLORS["textFaint"]))
         self._sorter_status_pill.setText(text)
         ui_style.set_status_dot(self._sorter_status_dot, color)
+        self._status_chip.setAccessibleName(f"{text}. Open Home.")
+
+    def _on_update_available(self, available: bool) -> None:
+        self._update_available = bool(available)
+        self._refresh_nav_dots()
+
+    def _refresh_nav_dots(self) -> None:
+        """Dots on the sidebar: unsaved rules on Rules, a waiting update on Home (while you're elsewhere)."""
+        if not hasattr(self, "_nav_dots") or not hasattr(self, "_view_stack"):
+            return
+        unsaved = bool(getattr(self, "_dirty", False))
+        self._nav_dots["rules"].setVisible(unsaved)
+        rules_tip = self._nav_tips["rules"]
+        self._nav_buttons["rules"].setToolTip(f"{rules_tip}: unsaved changes" if unsaved else rules_tip)
+
+        update_waiting = self._update_available and self.current_page() != "home"
+        self._nav_dots["home"].setVisible(update_waiting)
+        home_tip = self._nav_tips["home"]
+        self._nav_buttons["home"].setToolTip(f"{home_tip}: an update is available" if update_waiting else home_tip)
+
+    def notify(
+        self,
+        text: str,
+        kind: str = "info",
+        action_text: str = "",
+        action=None,
+        timeout_ms: int = 7000,
+    ) -> None:
+        """Say something short on any page: a message bar under the top edge, with an optional action."""
+        self._notice.show_message(text, kind, action_text, action, timeout_ms)
+
+    # ------------------------------------------------------------------
+    # the window itself
+    # ------------------------------------------------------------------
+
+    def _window_settings(self) -> QSettings | None:
+        """Where the window's size is kept: a small file next to the settings (no registry entries)."""
+        if sorter is None:
+            return None
+        try:
+            folder = Path(sorter.LOG_DIR)
+            folder.mkdir(parents=True, exist_ok=True)
+            return QSettings(str(folder / "window.ini"), QSettings.Format.IniFormat)
+        except OSError:
+            return None
+
+    def _restore_window_state(self) -> None:
+        settings = self._window_settings()
+        if settings is None:
+            return
+        try:
+            saved = settings.value("geometry")
+            if saved and not isinstance(saved, str):
+                self.restoreGeometry(saved)  # Qt moves it back on screen if the monitors changed
+        except Exception:
+            logging.debug("Could not restore the window's size", exc_info=True)
+
+    def _save_window_state(self) -> None:
+        if self._discarded or not self.isVisible():
+            return  # only a window you were looking at says where the window belongs
+        settings = self._window_settings()
+        if settings is None:
+            return
+        try:
+            settings.setValue("geometry", self.saveGeometry())
+            settings.sync()
+        except Exception:
+            logging.debug("Could not save the window's size", exc_info=True)
+
+    def reject(self) -> None:
+        """Esc closes the window like its close button, so unsaved rules are asked about first.
+
+        (A dialog's own Esc hides it without a close event, which skipped the question.)
+        """
+        if self._accepting_close:
+            super().reject()
+        else:
+            self.close()
 
     def _on_profile_changed(self, persona_id: str) -> None:
         """Settings changed the profile (which may add rules): reload and re-apply."""
@@ -1833,6 +1986,7 @@ class RulesManagerDialog(QDialog):
             self._save_btn.setEnabled(dirty)
             if dirty:
                 self._save_btn.setText("Save changes")
+        self._refresh_nav_dots()
 
     def get_current_draft_config(self) -> dict[str, Any]:
         """Return draft configuration dictionary reflecting current in-memory edits."""
@@ -1907,7 +2061,9 @@ class RulesManagerDialog(QDialog):
                 self._config = draft_config
                 self._keyword_table.load_rules(draft_config.get("keyword_rules", []))
                 self._on_rules_or_project_changed()
-                QMessageBox.information(self, "Rules added", f"Added {added_total} rule(s). Click Save changes to keep them.")
+                one = added_total == 1
+                self.notify(f"Added {added_total} rule{'' if one else 's'}. "
+                            f"Click Save changes to keep {'it' if one else 'them'}.", "success")
 
     def export_rules(self) -> None:
         """Export current draft rules to a user-selected JSON file."""
@@ -1916,7 +2072,7 @@ class RulesManagerDialog(QDialog):
             draft_config = self.get_current_draft_config()
             ok = suite_data.export_rules_to_file(path, draft_config)
             if ok:
-                QMessageBox.information(self, "Rules exported", f"Your rules were saved to:\n{path}")
+                self.notify(f"Your rules were saved to {path}.", "success")
 
     def import_rules(self) -> None:
         """Import rules from a user-selected JSON file with merge or replace options."""
@@ -1963,7 +2119,7 @@ class RulesManagerDialog(QDialog):
         self._keyword_table.load_rules(draft_config.get("keyword_rules", []))
         self._extension_table.load_rules(draft_config.get("extension_rules", []))
         self._on_rules_or_project_changed()
-        QMessageBox.information(self, "Rules imported", "The rules were imported. Click Save changes to keep them.")
+        self.notify("The rules were imported. Click Save changes to keep them.", "success")
 
     def reset_to_defaults(self) -> None:
         """Prompt to reset configuration to factory defaults."""
@@ -1978,7 +2134,7 @@ class RulesManagerDialog(QDialog):
             self._keyword_table.load_rules(self._config.get("keyword_rules", []))
             self._extension_table.load_rules(self._config.get("extension_rules", []))
             self._on_rules_or_project_changed()
-            QMessageBox.information(self, "Rules reset", "Your rules were reset. Click Save changes to keep this.")
+            self.notify("Your rules were reset. Click Save changes to keep this.", "success")
 
     def ask_to_save_changes(self) -> str:
         """"save", "discard" or "cancel" for unsaved rule changes."""
@@ -2013,7 +2169,12 @@ class RulesManagerDialog(QDialog):
             self._home_widget._refresh_timer.stop()
         if hasattr(self, "_status_timer"):
             self._status_timer.stop()
-        super().closeEvent(event)
+        self._save_window_state()
+        self._accepting_close = True  # QDialog.closeEvent calls reject(); let that one through
+        try:
+            super().closeEvent(event)
+        finally:
+            self._accepting_close = False
 
     def hideEvent(self, event) -> None:
         if hasattr(self, "_save_timer") and self._save_timer is not None:

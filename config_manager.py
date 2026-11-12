@@ -1168,6 +1168,13 @@ def get_recent_activity(
     except OSError:
         return []
 
+    def path_key(value: str) -> str:
+        return os.path.normcase(os.path.normpath(value))
+
+    # Newest first, so by the time an older record is looked at we know every place a
+    # newer move took a file *from*. A file that was moved on (by a later sort, or by
+    # you from Home's menu) shows once, where it is now, not also where it used to be.
+    moved_on: set[str] = set()
     activity: list[dict[str, Any]] = []
     for rec in reversed(records):
         action = rec.get("action")
@@ -1179,6 +1186,13 @@ def get_recent_activity(
         rec_id = str(rec.get("id", ""))
         is_undone = rec_id in undone_ids
         if is_undone and not include_undone:
+            continue
+
+        superseded = path_key(dest_str) in moved_on
+        src_value = rec.get("src")
+        if not is_undone and isinstance(src_value, str) and src_value:
+            moved_on.add(path_key(src_value))
+        if superseded:
             continue
 
         dest_path = Path(dest_str)

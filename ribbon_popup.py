@@ -12,6 +12,9 @@ Features:
 - Atomic slot synchronization for multi-file downloads using Windows file locking.
 - Automatic vertical stacking when multiple files are downloaded at once.
 - Safe File Explorer reveal supporting commas and special characters in paths.
+- One-click Undo of just this file, next to "Jump to File".
+- Folder names are fitted to the space left by measuring them with the ribbon's font,
+  so the buttons are never pushed out of view.
 - Auto-dismisses after timeout (pauses on hover, dismisses on close button).
 - Rate-capped to avoid spamming the screen during large bulk operations.
 """
@@ -25,6 +28,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -47,6 +51,7 @@ if sys.platform == "win32":
                 pass
 
 import tkinter as tk
+from tkinter import font as tkfont
 
 try:
     from PIL import Image, ImageDraw, ImageTk
@@ -122,30 +127,8 @@ BATCH_GAP_SECONDS = 4.0      # this long without a new file ends the burst
 BATCH_IDLE_CLOSE_MS = 6000   # the batch ribbon closes this long after the last file
 BATCH_POLL_MS = 300
 
-# Category color map aligned with the shared design tokens
-CATEGORY_COLORS: dict[str, str] = {
-    "step": "#69E6AD",         # 3D / CAD: Suite mint
-    "stl": "#69E6AD",
-    "3mf": "#69E6AD",
-    "obj": "#69E6AD",
-    "cad": "#69E6AD",
-    "3d models": "#69E6AD",
-    "gcode": "#D74A4A",        # CNC / GCode: HaasStudio red
-    "print files": "#E8833A",  # Slicer: PrintLibrary orange
-    "pdfs": "#FA7183",         # PDFs: Critical coral red
-    "school": "#61A5FF",       # Documents: Suite blue
-    "documents": "#61A5FF",
-    "word": "#61A5FF",
-    "text": "#8B94A7",
-    "spreadsheets": "#69E6AD", # Excel / CSV: Green
-    "images": "#A855F7",       # Purple / Violet
-    "videos": "#EC4899",       # Pink / Magenta
-    "audio": "#8B5CF6",        # Indigo
-    "installers": "#F43F5E",   # Rose
-    "archives": "#06B6D4",     # Cyan
-    "code": "#F5AD62",         # Warning amber / Gold
-    "other": "#8B94A7",        # Muted slate
-}
+# Category colors and the file-kind rules are shared with the Qt window (ui_categories.py).
+from ui_categories import CATEGORY_COLORS, category_info  # noqa: E402,F401
 
 # Fallback text glyphs when Pillow is not available
 CATEGORY_GLYPHS: dict[str, str] = {
@@ -189,6 +172,70 @@ def blend_colors(color1: str, color2: str, factor: float) -> str:
         return color1
 
 
+ELLIPSIS = "…"
+COLLAPSED = "...\\"   # stands for the leading folders of a path that is too long to show
+HELD_TEXTS = ("Holding in Downloads (Bambu Studio)", "Holding in Downloads", "Held in Downloads")
+
+
+def ellipsize_middle(text: str, max_px: int, measure, keep_head: int = 0, ellipsis: str = ELLIPSIS) -> str:
+    """Shorten ``text`` in the middle until ``measure(result) <= max_px``.
+
+    ``measure`` is ``tkinter.font.Font.measure`` of the font that draws the text
+    (or any function from text to pixels), so the result fits however wide the
+    letters are. The first ``keep_head`` characters always stay, for a fixed
+    start such as ``...\\``. Text that already fits is returned as it is.
+    """
+    if measure(text) <= max_px:
+        return text
+    head, body = text[:keep_head], text[keep_head:]
+
+    def shortened(kept: int) -> str:
+        front, back = (kept + 1) // 2, kept // 2
+        return head + body[:front] + ellipsis + body[len(body) - back:]
+
+    best = -1
+    low, high = 0, len(body) - 1
+    while low <= high:  # the most characters of the body that still fit
+        middle = (low + high) // 2
+        if measure(shortened(middle)) <= max_px:
+            best, low = middle, middle + 1
+        else:
+            high = middle - 1
+    return shortened(best) if best >= 0 else ellipsis
+
+
+def folder_text_candidates(folder_disp: str, prefix: str = "Saved to ") -> list[str]:
+    """Ways to say where a file went, longest first.
+
+    ``Documents\\Invoices & Receipts`` gives ``Saved to Documents\\Invoices & Receipts``,
+    then ``Saved to ...\\Invoices & Receipts`` (the leading folders collapse into
+    ``...\\``), then ``...\\Invoices & Receipts`` without "Saved to". The folder the
+    file is in is the last thing to be shortened.
+    """
+    parts = [part for part in re.split(r"[\\/]+", folder_disp) if part]
+    if not parts:
+        return [prefix.rstrip()]
+    candidates = [prefix + "\\".join(parts)]
+    candidates += [prefix + COLLAPSED + "\\".join(parts[start:]) for start in range(1, len(parts))]
+    candidates.append(COLLAPSED + parts[-1] if len(parts) > 1 else parts[-1])
+    return candidates
+
+
+def fit_text(candidates, max_px: int, measure, keep_head: int = 0) -> str:
+    """The first of ``candidates`` (longest first) that fits, else the last one shortened in the middle."""
+    candidates = list(candidates)
+    for text in candidates:
+        if measure(text) <= max_px:
+            return text
+    return ellipsize_middle(candidates[-1], max_px, measure, keep_head)
+
+
+def fit_folder_text(folder_disp: str, max_px: int, measure, prefix: str = "Saved to ") -> str:
+    """"Saved to <folder>", as much of it as fits in ``max_px`` (see folder_text_candidates)."""
+    candidates = folder_text_candidates(folder_disp, prefix)
+    return fit_text(candidates, max_px, measure, len(COLLAPSED) if candidates[-1].startswith(COLLAPSED) else 0)
+
+
 def add_to_recent_docs(path: str | Path) -> None:
     """Register the file in Windows Recent Documents so it immediately appears in all file upload dialogs."""
     if sys.platform == "win32":
@@ -202,65 +249,7 @@ def add_to_recent_docs(path: str | Path) -> None:
 
 def get_category_info(dest_path: Path, folder_disp: str) -> tuple[str, str]:
     """Return (category_type, accent_color) based on file extension and folder context."""
-    folder_lower = folder_disp.lower()
-    ext = dest_path.suffix.lower()
-
-    # Direct extension mappings (primary precision)
-    if ext in (".step", ".stp", ".stl", ".3mf", ".obj", ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".dwg", ".dxf"):
-        return "cad", "#69E6AD"
-    if ext in (".nc", ".tap", ".ngc"):
-        return "cnc", "#D74A4A"
-    if ext in (".gcode", ".bgcode"):
-        return "print", "#E8833A"
-    if ext == ".pdf":
-        return "pdf", "#FA7183"
-    if ext in (".doc", ".docx", ".odt", ".rtf", ".txt", ".md"):
-        return "doc", "#61A5FF"
-    if ext in (".xls", ".xlsx", ".csv", ".ods"):
-        return "sheet", "#69E6AD"
-    if ext in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"):
-        return "image", "#A855F7"
-    if ext in (".mp4", ".mov", ".mkv", ".avi", ".webm"):
-        return "video", "#EC4899"
-    if ext in (".mp3", ".wav", ".flac", ".m4a", ".aac"):
-        return "audio", "#8B5CF6"
-    if ext in (".zip", ".rar", ".7z", ".tar", ".gz"):
-        return "archive", "#06B6D4"
-    if ext in (".exe", ".msi", ".msix"):
-        return "installer", "#F43F5E"
-    if ext in (".py", ".js", ".ts", ".html", ".css", ".json", ".cpp", ".cs", ".rs", ".go", ".c", ".h"):
-        return "code", "#F5AD62"
-
-    # Destination folder keyword matches
-    for key, color in CATEGORY_COLORS.items():
-        if key in folder_lower:
-            if key in ("step", "stl", "3mf", "obj", "cad", "3d models"):
-                return "cad", color
-            if key == "gcode":
-                return "cnc", color
-            if key == "print files":
-                return "print", color
-            if key == "pdfs":
-                return "pdf", color
-            if key in ("school", "documents", "word", "text"):
-                return "doc", color
-            if key == "spreadsheets":
-                return "sheet", color
-            if key == "images":
-                return "image", color
-            if key == "videos":
-                return "video", color
-            if key == "audio":
-                return "audio", color
-            if key == "archives":
-                return "archive", color
-            if key == "installers":
-                return "installer", color
-            if key == "code":
-                return "code", color
-            return "default", color
-
-    return "default", DEFAULT_ACCENT
+    return category_info(dest_path, folder_disp)
 
 
 def get_accent_color(dest_path: Path, folder_disp: str) -> str:
@@ -735,7 +724,8 @@ class RibbonPopup:
                 bd=0,
                 cursor="hand2",
             )
-            self.status.pack(side="left", padx=(int(10 * scale), int(2 * scale)), pady=int(6 * scale))
+            status_padx = (int(10 * scale), int(2 * scale))
+            self.status.pack(side="left", padx=status_padx, pady=int(6 * scale))
         else:
             fallback_glyph = CATEGORY_GLYPHS.get(self.category_type, "✓")
             self.status = tk.Label(
@@ -747,11 +737,18 @@ class RibbonPopup:
                 width=2,
                 anchor="center",
             )
-            self.status.pack(side="left", padx=(int(8 * scale), int(2 * scale)), fill="y")
+            status_padx = (int(8 * scale), int(2 * scale))
+            self.status.pack(side="left", padx=status_padx, fill="y")
 
         # Main content area
-        self.content = tk.Frame(self.container, bg=BG_COLOR, padx=int(8 * scale), pady=pad_y)
+        content_padx = int(8 * scale)
+        self.content = tk.Frame(self.container, bg=BG_COLOR, padx=content_padx, pady=pad_y)
         self.content.pack(side="left", fill="both", expand=True)
+
+        # Tk has not laid anything out yet, so work out how wide the bottom row will be
+        # from what is packed to its left: the frame around the container (1 px each
+        # side), the stripe, the icon with its padding, and the content padding.
+        row_width = self.target_w - 2 - stripe_w - self.status.winfo_reqwidth() - sum(status_padx) - 2 * content_padx
 
         # Top row: Eyebrow tag badge + Close button
         self.top_row = tk.Frame(self.content, bg=BG_COLOR)
@@ -829,23 +826,20 @@ class RibbonPopup:
         )
         self.name_lbl.pack(fill="x", pady=(2, 1))
 
-        # Bottom row: Context subtitle & dedicated "Jump to File" pill button
+        # Bottom row: where the file went on the left, the action pills on the right
         self.bottom_row = tk.Frame(self.content, bg=BG_COLOR)
         self.bottom_row.pack(fill="x", pady=(1, 0))
 
-        folder_text = f"Saved to {self.folder_disp}"
-        if len(folder_text) > 24:
-            folder_text = folder_text[:22] + "…"
-
+        # The text is measured with this same font object, so it is drawn as wide as it measured
+        self._action_font = tkfont.Font(root=self.root, family=FONT_FAMILY, size=9)
         self.action_lbl = tk.Label(
             self.bottom_row,
-            text=folder_text,
-            font=(FONT_FAMILY, 9),
+            text=f"Saved to {self.folder_disp}",
+            font=self._action_font,
             fg=TEXT_MUTED,
             bg=BG_COLOR,
             anchor="w",
         )
-        self.action_lbl.pack(side="left")
 
         # Explicit interactive "Jump to File" pill button (or File now / Keep here when held)
         self.jump_btn = tk.Label(
@@ -858,12 +852,11 @@ class RibbonPopup:
             padx=int(6 * scale),
             pady=int(1 * scale),
         )
+        pill_gap = int(3 * scale)
         if self.is_held:
-            folder_text = "Holding in Downloads (Bambu Studio)"
-            self.action_lbl.config(text=folder_text)
             self.file_now_btn = tk.Label(
                 self.bottom_row,
-                text="📁 File now",
+                text="File now",
                 font=(FONT_FAMILY, 8, "bold"),
                 fg=COLORS.get("canvas", "#0B0D12"),
                 bg=self.accent_color,
@@ -871,14 +864,14 @@ class RibbonPopup:
                 padx=int(5 * scale),
                 pady=int(1 * scale),
             )
-            self.file_now_btn.pack(side="right", padx=(int(3 * scale), 0))
+            self.file_now_btn.pack(side="right", padx=(pill_gap, 0))
             self.file_now_btn.bind("<Button-1>", lambda e: (self._on_file_now(), "break")[1])
             self.file_now_btn.bind("<Enter>", self.on_enter)
             self.file_now_btn.bind("<Leave>", self.on_leave)
 
             self.keep_here_btn = tk.Label(
                 self.bottom_row,
-                text="📌 Keep here",
+                text="Keep here",
                 font=(FONT_FAMILY, 8, "bold"),
                 fg=TEXT_MAIN,
                 bg=SURFACE_RAISED,
@@ -890,8 +883,30 @@ class RibbonPopup:
             self.keep_here_btn.bind("<Button-1>", lambda e: (self._on_keep_here(), "break")[1])
             self.keep_here_btn.bind("<Enter>", self.on_enter)
             self.keep_here_btn.bind("<Leave>", self.on_leave)
+            pills = [self.file_now_btn, self.keep_here_btn]
         else:
+            # Undo sits left of "Jump to File": the file is already filed, so this puts it back
+            self.undo_btn = tk.Label(
+                self.bottom_row,
+                text="Undo",
+                font=(FONT_FAMILY, 8, "bold"),
+                fg=TEXT_MAIN,
+                bg=SURFACE_RAISED,
+                cursor="hand2",
+                padx=int(6 * scale),
+                pady=int(1 * scale),
+            )
             self.jump_btn.pack(side="right")
+            self.undo_btn.pack(side="right", padx=(0, pill_gap))
+            self.undo_btn.bind("<Button-1>", lambda e: (self._on_undo(), "break")[1])
+            self.undo_btn.bind("<Enter>", self.on_enter)
+            self.undo_btn.bind("<Leave>", self.on_leave)
+            pills = [self.jump_btn, self.undo_btn]
+
+        # The text goes in last: Tk lays out in packing order, so a long folder name can
+        # only squeeze the text and never push a pill out of view.
+        self.action_lbl.pack(side="left")
+        self._fit_action_text(row_width, pills, pill_gap, scale)
 
         # Bind hover and click events across all interactive surface widgets
         interactive_widgets = [
@@ -910,6 +925,27 @@ class RibbonPopup:
 
         self.progress = tk.Frame(self.container, bg=self.accent_color, height=progress_h)
         self.progress.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
+
+    def _fit_action_text(self, row_width: int, pills: list, pill_gap: int, scale: float) -> None:
+        """Show as much of "Saved to <folder>" as the pills leave room for.
+
+        Widths come from Tk (``Font.measure`` for the text, ``winfo_reqwidth`` for the
+        pills), not from counting characters, so it holds at every display scale.
+        """
+        measure = self._action_font.measure
+        text_padding = self.action_lbl.winfo_reqwidth() - measure(self.action_lbl.cget("text"))
+        room = (
+            row_width
+            - sum(pill.winfo_reqwidth() for pill in pills)
+            - pill_gap          # between the pills
+            - int(6 * scale)    # between the text and the first pill
+            - text_padding
+        )
+        if self.is_held:
+            text = fit_text(HELD_TEXTS, room, measure)
+        else:
+            text = fit_folder_text(self.folder_disp, room, measure)
+        self.action_lbl.config(text=text)
 
     def _animate_slide_in(
         self,
@@ -1018,6 +1054,8 @@ class RibbonPopup:
         self.jump_btn.config(bg=btn_bg, fg=btn_fg)
         if hasattr(self, "keep_here_btn"):
             self.keep_here_btn.config(bg=btn_bg)
+        if hasattr(self, "undo_btn"):
+            self.undo_btn.config(bg=btn_bg)
         self.status.config(bg=bg)
         self.close_frame.config(bg=bg)
         self.close_btn.config(bg=bg)
@@ -1037,6 +1075,18 @@ class RibbonPopup:
             hold_manager.keep_here(self.dest_path)
         except Exception as exc:
             logging.debug("Keep here failed: %s", exc)
+        self.close()
+
+    def _on_undo(self) -> None:
+        """Put this one file back where it came from, then close.
+
+        Another process does the work (``--undo --file``) and shows a short ribbon
+        when it is done, so this one can close at once. A second click while it
+        slides out does nothing, so the file is not undone twice.
+        """
+        if self.is_closing:
+            return
+        _spawn(_app_command("--undo", "--file", str(self.dest_path), "--quiet-toast"))
         self.close()
 
     def on_click(self, _event=None) -> None:

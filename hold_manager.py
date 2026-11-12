@@ -188,21 +188,47 @@ def get_all_held() -> list[dict]:
         return list(state.get("held", {}).values())
 
 
-def hold_file(
+def hold_period_over(path: Path | str, config: dict, now: float | None = None) -> bool:
+    """True when ``path`` has been in place for longer than the hold lasts.
+
+    The hold counts from when the file arrived, not from when Download Sorter first
+    looked at it. A file that sat in Downloads for ``hold_days`` or more before that
+    (an old file found by a sweep, or found again after a reinstall that forgot the
+    holds) has nothing left to wait for, so it is filed instead of held again.
+    """
+    hold_days = float(config.get("hold", {}).get("hold_days", DEFAULT_HOLD_DAYS))
+    cur_time = time.time() if now is None else float(now)
+    arrived = sorter.arrival_time(Path(path))
+    return arrived is not None and arrived + hold_days * 86400.0 <= cur_time
+
+
+# What ``register_hold`` found.
+HOLD_NOT_HELD = "not held"    # holds are off, or the file waited long enough: the caller files it
+HOLD_KEPT_HERE = "kept here"  # the user chose "Keep here" for it
+HOLD_UNCHANGED = "unchanged"  # held already, and the file is the same: its schedule stays
+HOLD_NEW = "new"              # held now: a new file, or one that changed since (a new download of it)
+
+
+def register_hold(
     path: Path | str,
     config: dict,
     planned_dest: Path | str,
     meta: dict | None = None,
     now: float | None = None,
-) -> bool:
-    """Register a .3mf file for grace-period hold in Downloads."""
+) -> str:
+    """Hold a .3mf file in Downloads for the grace period, and say what that found (a ``HOLD_`` value).
+
+    A caller that tells the user about a hold does it for ``HOLD_NEW`` only. A file that is found
+    again unchanged (by every sweep, at every start-up, by a second event for the same download)
+    is held already, and was announced when it was first held.
+    """
     p = Path(path).resolve()
     if not p.exists() or not p.is_file():
-        return False
+        return HOLD_NOT_HELD
 
     hold_cfg = config.get("hold", {})
     if not hold_cfg.get("enabled", True):
-        return False
+        return HOLD_NOT_HELD
 
     hold_days = float(hold_cfg.get("hold_days", DEFAULT_HOLD_DAYS))
     max_held = int(hold_cfg.get("max_held", DEFAULT_MAX_HELD))
@@ -213,7 +239,7 @@ def hold_file(
         mtime = st.st_mtime
         size = st.st_size
     except OSError:
-        return False
+        return HOLD_NOT_HELD
 
     key = str(p)
     with state_lock():
@@ -222,22 +248,34 @@ def hold_file(
 
         # If already marked keep_here, respect it
         if key in held and held[key].get("keep_here"):
-            return True
+            return HOLD_KEPT_HERE
 
         # Already held and unchanged (e.g. the startup sweep sees it again): keep the
         # existing schedule instead of pushing the release out by another hold period.
         existing = held.get(key)
         if existing and int(existing.get("size", -1)) == size and abs(float(existing.get("mtime", 0)) - mtime) <= 2.0:
-            return True
+            return HOLD_UNCHANGED
 
-        # Enforce max held cap
-        if len(held) >= max_held and key not in held:
-            # Drop or release the oldest eligible file
-            oldest_key = min(held.keys(), key=lambda k: held[k].get("first_seen", 0))
-            if not held[oldest_key].get("keep_here"):
-                del held[oldest_key]
+        if max_held < 1 or hold_period_over(p, config, cur_time):
+            return HOLD_NOT_HELD
 
-        release_at = cur_time + (hold_days * 86400.0)
+        # At most ``max_held`` files wait at once. The one closest to its release is filed
+        # instead of being forgotten: it is made due now, and the normal release moves it
+        # (waiting for a slicer or an open file as usual). Dropping its record left the file
+        # in place with no hold and nothing that would ever release it.
+        if key not in held:
+            waiting = sorted(
+                (k for k, rec in held.items()
+                 if not rec.get("keep_here") and float(rec.get("release_at", 0)) > cur_time),
+                key=lambda k: float(held[k].get("release_at", 0)),
+            )
+            for old in waiting[: max(0, len(waiting) - max_held + 1)]:
+                held[old]["release_at"] = cur_time
+                logging.info("3MF hold limit (%d) reached: %s will be filed now", max_held, held[old].get("filename", old))
+
+        # The hold runs from when the file arrived, not from when it was first noticed.
+        arrived = sorter.arrival_time(p)
+        release_at = (cur_time if arrived is None else min(cur_time, arrived)) + (hold_days * 86400.0)
         mw_meta = (meta or {}).get("makerworld_meta", {}) if meta else {}
 
         held[key] = {
@@ -255,7 +293,22 @@ def hold_file(
         write_state(state)
 
     logging.info("3MF Hold registered: %s (holding until %s)", p.name, time.ctime(release_at))
-    return True
+    return HOLD_NEW
+
+
+def hold_file(
+    path: Path | str,
+    config: dict,
+    planned_dest: Path | str,
+    meta: dict | None = None,
+    now: float | None = None,
+) -> bool:
+    """Register a .3mf file for grace-period hold in Downloads.
+
+    Returns False when the file is not to be held, and the caller files it: holds are
+    off, or the file has been in place longer than the hold lasts (``hold_period_over``).
+    """
+    return register_hold(path, config, planned_dest, meta=meta, now=now) != HOLD_NOT_HELD
 
 
 def keep_here(path: Path | str) -> bool:
@@ -335,6 +388,24 @@ def file_now(path: Path | str, config: dict | None = None) -> Path | None:
     return final_dest
 
 
+def _folder_is_away(path: Path, config: dict) -> bool:
+    """True when ``path`` is inside the folder being sorted and that folder is not there right now.
+
+    A file on a drive that is not plugged in does not exist either, but it is not gone: it is
+    back with the drive, and its hold (a "Keep here" choice too) must not be forgotten for that.
+    A hold whose file is gone from a folder that is there is dropped, as it always was.
+    """
+    try:
+        root = sorter.watch_root(config)
+        try:
+            there = root.is_dir()
+        except OSError:  # a folder that cannot be looked at is not there for this purpose
+            there = False
+        return not there and sorter.is_under(path, root)
+    except (OSError, ValueError):
+        return False
+
+
 def check_releases(
     config: dict,
     now: float | None = None,
@@ -359,7 +430,8 @@ def check_releases(
         for key, rec in list(held.items()):
             p = Path(key)
             if not p.exists():
-                to_delete.append(key)
+                if not _folder_is_away(p, config):
+                    to_delete.append(key)
                 continue
 
             if rec.get("keep_here"):

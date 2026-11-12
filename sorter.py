@@ -771,6 +771,22 @@ def load_config() -> dict:
         return get_default_config()
 
 
+def read_saved_config() -> dict | None:
+    """The saved settings, or None when they cannot be read right now.
+
+    ``load_config`` answers with the default settings when the file is missing, half-written or
+    not a dictionary. That is right for a first start, and wrong for something that has settings
+    in hand and only wants to see whether they changed: the default settings name another folder
+    and other rules. It keeps what it has, as the watcher does with a settings file it cannot parse.
+    """
+    try:
+        with CONFIG_PATH.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+        return apply_v2_defaults(data) if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
 def collect_category_folders(config: dict) -> list[str]:
     folders: list[str] = []
     for rule in config.get("keyword_rules", []):
@@ -794,7 +810,20 @@ def collect_category_folders(config: dict) -> list[str]:
     return ordered
 
 
+DEFAULT_DOWNLOADS_FOLDER = "${USERPROFILE}\\Downloads" if sys.platform == "win32" else "~/Downloads"
+
+
 def watch_root(config: dict) -> Path:
+    """The folder that gets sorted: the one in the settings, or Downloads when none is named.
+
+    Windows lets a person move their Downloads folder (Properties > Location). Then
+    %USERPROFILE%\\Downloads is gone and the new place is only in the registry, so the
+    default folder follows it there. A folder the user named is never swapped for another
+    one: when it is missing (an unplugged drive, a deleted or misspelled folder) it stays
+    where it is, missing, and the watcher waits for it. It used to fall back to the
+    registry's Downloads folder for any missing folder, so a drive that was not plugged in
+    made the app sort the Downloads folder instead.
+    """
     folder = ""
     if isinstance(config, dict):
         watch_sec = config.get("watch")
@@ -802,10 +831,12 @@ def watch_root(config: dict) -> Path:
             folder = watch_sec.get("folder", "")
         if not folder:
             folder = config.get("downloads_dir", "")
-    if not folder:
-        folder = "${USERPROFILE}\\Downloads" if sys.platform == "win32" else "~/Downloads"
-    resolved = expand_path(folder)
-    if not resolved.exists() and sys.platform == "win32":
+    resolved = expand_path(folder or DEFAULT_DOWNLOADS_FOLDER)
+    if (
+        not resolved.exists()
+        and sys.platform == "win32"
+        and same_folder(resolved, expand_path(DEFAULT_DOWNLOADS_FOLDER))
+    ):
         try:
             import winreg
             sub_key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
@@ -985,6 +1016,25 @@ def ensure_tree(config: dict) -> Path:
     return root
 
 
+def ensure_tree_or_warn(config: dict) -> bool:
+    """``ensure_tree`` for a sweep. False, with a warning, when the folder to sort is not there and cannot be made.
+
+    A folder on a drive that is not plugged in cannot be created. Nothing is sorted then, and the
+    log says why, instead of the sweep failing with a traceback (or sorting some other folder).
+    """
+    try:
+        ensure_tree(config)
+    except OSError as exc:
+        root = watch_root(config)
+        if root.is_dir():
+            raise  # the folder is there: this is a problem with one of the folders in it
+        logging.warning(
+            "The folder to sort, %s, was not found and could not be created (%s); nothing was sorted", root, exc
+        )
+        return False
+    return True
+
+
 def is_incomplete(
     path: Path,
     config: dict,
@@ -1138,6 +1188,9 @@ DEFAULT_TYPE_FOLDERS: dict[str, tuple[str, ...]] = {
     "JPG": (".jpg", ".jpeg"),
     "PNG": (".png",),
     "GIF": (".gif",),
+    "WEBP": (".webp",),
+    "HEIC": (".heic", ".heif"),
+    "TIFF": (".tif", ".tiff"),
     "Vector": (".svg", ".ai", ".eps", ".cdr"),
     # Videos
     "MP4": (".mp4", ".m4v"),
@@ -1145,6 +1198,7 @@ DEFAULT_TYPE_FOLDERS: dict[str, tuple[str, ...]] = {
     "MKV": (".mkv",),
     # Audio
     "MP3": (".mp3",),
+    "M4A": (".m4a",),
     "WAV": (".wav",),
     "FLAC": (".flac",),
     # Code
@@ -2102,7 +2156,9 @@ def hold_in_place(
 ) -> bool:
     """Decide whether the hold keeps ``path`` where it is.
 
-    Returns True when the file must stay put (marked "Keep here", or newly held).
+    Returns True when the file must stay put (marked "Keep here", or held). The
+    "Holding in Downloads" notice is shown once, when the hold is new: not again for
+    a file that is found held and unchanged.
     A dry run only reports what would happen: it never registers or resets a hold
     and never shows a notification.
     """
@@ -2115,6 +2171,8 @@ def hold_in_place(
     if dry_run:
         if hold_manager.is_held(path):
             logging.info("[DRY-RUN] %s is already held in place (planned: %s)", path.name, destination)
+        elif hold_manager.hold_period_over(path, config):
+            return False  # it has waited long enough: the dry run goes on to show where it would be filed
         else:
             logging.info("[DRY-RUN] Would hold %s in place (planned: %s)", path.name, destination)
         return True
@@ -2124,8 +2182,14 @@ def hold_in_place(
         meta_3mf = parse_3mf(path)
     except Exception:
         pass
-    if not hold_manager.hold_file(path, config, destination, meta=meta_3mf):
+    held = hold_manager.register_hold(path, config, destination, meta=meta_3mf)
+    if held == hold_manager.HOLD_NOT_HELD:
         return False
+    if held != hold_manager.HOLD_NEW:
+        # Found again, unchanged (by a sweep, at start-up, by a second event for the same
+        # download): it is held already, and the notice was shown when it was first held.
+        logging.debug("3MF file %s is still held in place", path.name)
+        return True
     logging.info("3MF file held in place: %s (planned: %s)", path.name, destination)
     if config.get("ribbon_enabled", True) and config.get("notifications", True):
         try:
@@ -2369,26 +2433,32 @@ def existing_files_cutoff(config: dict) -> float | None:
     return float(value)
 
 
-def arrived_before(path: Path, cutoff: float | None) -> bool:
-    """True when path was created and last changed before cutoff.
+def arrival_time(path: Path) -> float | None:
+    """When ``path`` landed where it is: the newer of its modified and created times.
 
-    Uses the newer of the modified and created times: some browsers stamp a
-    download with the server's modified date, but its creation time on Windows
-    is when it landed in Downloads.
+    Some browsers stamp a download with the server's modified date, but its
+    creation time on Windows is when it landed in Downloads. None when the file
+    cannot be read.
     """
-    if cutoff is None:
-        return False
     try:
         st = path.stat()
     except OSError:
-        return False
+        return None
     newest = st.st_mtime
     created = getattr(st, "st_birthtime", None)
     if created is None and sys.platform == "win32":
         created = st.st_ctime
     if created is not None:
         newest = max(newest, created)
-    return newest < cutoff
+    return newest
+
+
+def arrived_before(path: Path, cutoff: float | None) -> bool:
+    """True when path was created and last changed before cutoff (see ``arrival_time``)."""
+    if cutoff is None:
+        return False
+    arrived = arrival_time(path)
+    return arrived is not None and arrived < cutoff
 
 
 def sort_existing(
@@ -2400,8 +2470,8 @@ def sort_existing(
     skip_before: float | None = None,
 ) -> int:
     downloads = watch_root(config)
-    if not dry_run:
-        ensure_tree(config)
+    if not dry_run and not ensure_tree_or_warn(config):
+        return 0
     root = target_dir.resolve() if target_dir else downloads
     if not root.exists():
         return 0
@@ -2475,8 +2545,8 @@ def sort_existing_documents(
     routing_context: RoutingContext | None = None,
     skip_before: float | None = None,
 ) -> int:
-    if not dry_run:
-        ensure_tree(config)
+    if not dry_run and not ensure_tree_or_warn(config):
+        return 0
     moved = 0
     with reuse_my_folders():
         for source in document_roots(config):

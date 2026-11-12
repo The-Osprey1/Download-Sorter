@@ -58,6 +58,8 @@ PENDING_DEADLINES: dict[tuple[str, Path], float] = {}
 WAKE_EVENT = threading.Event()
 # Set while run(wait_for_setup=True) is holding off until the welcome wizard is done.
 SETUP_PENDING = threading.Event()
+# Set while the folder to watch is not there (an unplugged drive, a deleted or misspelled folder).
+WATCH_FOLDER_MISSING = threading.Event()
 
 
 def _settle_seconds(config: dict) -> float:
@@ -647,6 +649,19 @@ class WatchCoordinator:
         return fallback_due
 
 
+def _is_folder(path: Path) -> bool:
+    """``Path.is_dir`` that says no, instead of raising, for a folder that cannot be looked at.
+
+    A network share that drops, or a drive that is half there, can fail with an error that
+    ``is_dir`` passes on. The watcher asks while a drive may be coming and going, and must not
+    stop because of that.
+    """
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 class FolderWatches:
     """The Downloads and Documents subscriptions of one observer.
 
@@ -663,6 +678,10 @@ class FolderWatches:
         self.downloads_handler: DownloadsHandler | None = None
         self.doc_handlers: list[DocumentsHandler] = []
         self._watches: list = []
+        # True while the folder to watch is not there. Nothing is watched then (not even the
+        # Documents sources, which are filed into that folder); ``retry`` starts the watches
+        # once the folder is back.
+        self.root_missing = False
 
     @staticmethod
     def targets(config: dict) -> tuple[Path, tuple[Path, ...]]:
@@ -674,16 +693,81 @@ class FolderWatches:
         root, sources = self.targets(config)
         self.root, self.sources = root, sources
         self.downloads_handler = DownloadsHandler(root, config, routing_context)
-        self._watches = [self.observer.schedule(self.downloads_handler, str(root), recursive=True)]
-        logging.info("Watching %s (recursive, with category auto-correction)", root)
         self.doc_handlers = []
-        for source in sources:
-            handler = DocumentsHandler(list(sources), root, config, routing_context)
-            self.doc_handlers.append(handler)
-            self._watches.append(self.observer.schedule(handler, str(source), recursive=True))
-            logging.info("Watching %s (recursive)", source)
-        if not sources:
-            logging.warning("No Documents sources found to watch")
+        self._watches = []
+        self.root_missing = not _is_folder(root)
+        reason = "was not found"
+        if not self.root_missing:
+            try:
+                self._watches = [self.observer.schedule(self.downloads_handler, str(root), recursive=True)]
+                logging.info("Watching %s (recursive, with category auto-correction)", root)
+                for source in sources:
+                    handler = DocumentsHandler(list(sources), root, config, routing_context)
+                    self.doc_handlers.append(handler)
+                    self._watches.append(self.observer.schedule(handler, str(source), recursive=True))
+                    logging.info("Watching %s (recursive)", source)
+                if not sources:
+                    logging.warning("No Documents sources found to watch")
+            except OSError as exc:
+                # The folder went away between the check and the watch (a drive that comes and
+                # goes), or it cannot be opened. Whatever was watched so far is let go.
+                reason = f"could not be opened ({exc})"
+                self._drop_watches()
+                self.root_missing = True
+        if self.root_missing:
+            # Watching a folder that is not there fails, and sorting some other folder in its
+            # place would be worse. The folder is not created either: it may be a drive that is
+            # not plugged in, and a different drive may have its letter now.
+            logging.warning(
+                "The folder to watch, %s, %s. Nothing is sorted until it is there: "
+                "plug the drive back in, or choose another folder in Settings.",
+                root, reason,
+            )
+
+    def _drop_watches(self) -> None:
+        """Unschedule every watch. One whose folder is gone has stopped by itself and may refuse to be removed."""
+        for watch in self._watches:
+            try:
+                self.observer.unschedule(watch)
+            except Exception as exc:  # the observer already dropped it
+                logging.debug("Unschedule failed: %s", exc)
+        self._watches = []
+        self.doc_handlers = []
+
+    def _dead_watches(self) -> list:
+        """The watches whose watcher thread has stopped.
+
+        watchdog stops the thread of a watch by itself when its folder is deleted or its drive goes,
+        and keeps the watch on its books: nothing is watched any more, and nothing says so.
+        """
+        mine = set(self._watches)
+        emitters = getattr(self.observer, "emitters", None) or ()
+        return [emitter.watch for emitter in list(emitters) if emitter.watch in mine and not emitter.is_alive()]
+
+    def watch_lost(self) -> bool:
+        """Notice that the folder being watched is gone, or that a watch has died (a drive unplugged while the app runs).
+
+        Without this the app kept saying it was running, and never watched the folder again when it
+        came back. The watches are let go and ``root_missing`` is set; ``retry`` starts them again
+        once the folder is there, in the same round when it was only away for a moment.
+        Returns True when it did.
+        """
+        if self.root_missing or not self._watches:
+            return False
+        gone = self.root is not None and not _is_folder(self.root)
+        if not gone and not self._dead_watches():
+            return False
+        self._drop_watches()
+        self.root_missing = True
+        if gone:
+            logging.warning(
+                "The folder being watched, %s, is gone (a drive that was unplugged?). "
+                "Nothing is sorted until it is back.",
+                self.root,
+            )
+        else:
+            logging.warning("The watch on %s stopped (a drive that was unplugged for a moment?); watching it again", self.root)
+        return True
 
     def update_config(self, config: dict, routing_context: RoutingContext | None = None) -> None:
         if self.downloads_handler is not None:
@@ -700,11 +784,7 @@ class FolderWatches:
             "Watched folders changed (%s, %d Documents source(s) -> %s, %d); re-subscribing",
             self.root, len(self.sources), root, len(sources),
         )
-        for watch in self._watches:
-            try:
-                self.observer.unschedule(watch)
-            except Exception as exc:  # pragma: no cover - observer already dropped it
-                logging.debug("Unschedule failed: %s", exc)
+        self._drop_watches()
         # Pending events belong to the old folders; the sweep after a retarget
         # picks up anything that is in the new ones.
         with QUEUE_LOCK:
@@ -714,6 +794,43 @@ class FolderWatches:
             PENDING_DEADLINES.clear()
         self.build(config, routing_context)
         return True
+
+    def retry(self, config: dict, routing_context: RoutingContext | None = None) -> bool:
+        """Start the watches if the folder to watch is back (a drive plugged in again).
+
+        Returns True when it is, and the watches are running. Cheap enough to call on every
+        wake-up while ``root_missing`` is set: it does nothing until the folder exists.
+        """
+        if not self.root_missing:
+            return False
+        try:
+            root, _sources = self.targets(config)
+            if not _is_folder(root):
+                return False
+            self.build(config, routing_context)
+        except OSError as exc:  # a drive that is only half there: it is tried again next time
+            logging.debug("The folder to watch is not ready yet: %s", exc)
+            return False
+        return not self.root_missing
+
+
+def _publish_folder_state(folders: FolderWatches, on_sorted: Callable[[int], None] | None = None) -> None:
+    """Say, in the runtime state and for the tray's tooltip, whether the watch folder is there."""
+    was_missing = WATCH_FOLDER_MISSING.is_set()
+    # Waiting for the welcome wizard is the state that matters more: the wizard looks for it.
+    if folders.root_missing:
+        WATCH_FOLDER_MISSING.set()
+        if not SETUP_PENDING.is_set():
+            write_runtime_state("waiting_for_folder", f"waiting for {folders.root}")
+    else:
+        WATCH_FOLDER_MISSING.clear()
+        if was_missing and not SETUP_PENDING.is_set():
+            write_runtime_state("running", "the watch folder is back")
+    if on_sorted is not None and was_missing != folders.root_missing:
+        try:
+            on_sorted(0)  # refreshes the tray
+        except Exception:
+            logging.exception("Activity callback failed")
 
 
 def _run_daily_cleanup(config: dict) -> None:
@@ -832,11 +949,13 @@ def run(
         except Exception as err:
             logging.debug("Quick switcher monitor start skipped: %s", err)
     setup_pending = wait_for_setup and not config.get("onboarding_completed", False)
-    # A sweep that was due while sorting was paused; it runs when sorting is resumed.
+    # A sweep that was due while sorting was paused, or while the folder to watch was missing; it
+    # runs when sorting is resumed, or when the folder is back.
     sweep_pending = False
     try:
         # Observe first, reconcile second: a download arriving during the scan is
         # queued and cannot fall into the startup race window.
+        _publish_folder_state(folders, on_sorted)
         if setup_pending:
             SETUP_PENDING.set()
             write_runtime_state("waiting_for_setup", "waiting for the welcome wizard")
@@ -845,6 +964,9 @@ def run(
             # Paused means nothing moves, including what is already in the folders.
             sweep_pending = True
             logging.info("Sorting is paused; the startup sort waits until it is resumed")
+        elif folders.root_missing:
+            sweep_pending = True
+            logging.info("The startup sort waits until the folder to watch is there")
         else:
             _startup_sweep(config, routing_context, root)
 
@@ -853,14 +975,25 @@ def run(
             if stop is not None and stop.is_set():
                 break
 
+            # Before anything else touches the folder: a drive unplugged while the app runs.
+            lost = folders.watch_lost()
+            if lost:
+                sweep_pending = True  # what arrives while nothing is watched is not seen
+
             changed = False
             new_config = config
             if reloader.dirty or fallback_due:
                 changed, new_config = reloader.check_for_updates()
             if time.monotonic() - last_heartbeat >= 300.0:
-                write_runtime_state("waiting_for_setup" if setup_pending else "running", "heartbeat")
+                if setup_pending:
+                    heartbeat_state = "waiting_for_setup"
+                elif folders.root_missing:
+                    heartbeat_state = "waiting_for_folder"
+                else:
+                    heartbeat_state = "running"
+                write_runtime_state(heartbeat_state, "heartbeat")
                 last_heartbeat = time.monotonic()
-                if not setup_pending and not is_paused():
+                if not setup_pending and not is_paused() and not folders.root_missing:
                     _run_daily_cleanup(config)
             if changed:
                 config = new_config
@@ -868,6 +1001,8 @@ def run(
                 retargeted = folders.retarget(config, routing_context)
                 if not retargeted:
                     folders.update_config(config, routing_context)
+                else:
+                    _publish_folder_state(folders, on_sorted)
                 root = watch_root(config)
                 if setup_pending and config.get("onboarding_completed", False):
                     # The wizard just saved the user's profile: start sorting with it.
@@ -875,7 +1010,8 @@ def run(
                     SETUP_PENDING.clear()
                     write_runtime_state("running", "welcome wizard finished")
                     logging.info("Welcome wizard finished; sorting starts now")
-                    if is_paused():
+                    _publish_folder_state(folders)  # the folder may still be missing
+                    if is_paused() or folders.root_missing:
                         sweep_pending = True
                     else:
                         _startup_sweep(config, routing_context, root)
@@ -887,7 +1023,7 @@ def run(
                 elif retargeted and not setup_pending:
                     # Watched folders changed: behave as a restart would for the new
                     # folders (sweep what is already there).
-                    if is_paused():
+                    if is_paused() or folders.root_missing:
                         sweep_pending = True
                     else:
                         cutoff = existing_files_cutoff(config)
@@ -895,8 +1031,18 @@ def run(
                         sort_existing(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
                         sort_existing_documents(config, batch_id=sweep_id, routing_context=routing_context, skip_before=cutoff)
 
+            came_back = folders.root_missing and folders.retry(config, routing_context)
+            if came_back:
+                # The sweep that was waiting for the folder (sweep_pending) runs below.
+                logging.info("The folder to watch is back: %s", folders.root)
+            if lost or came_back:
+                _publish_folder_state(folders, on_sorted)
+
             if setup_pending:
                 continue
+
+            if folders.root_missing:
+                continue  # nothing is sorted, released from a hold or cleaned up until the folder is there
 
             if sweep_pending and not is_paused():
                 sweep_pending = False
@@ -917,6 +1063,7 @@ def run(
         pass
     finally:
         SETUP_PENDING.clear()
+        WATCH_FOLDER_MISSING.clear()
         observer.stop()
         write_runtime_state("stopped", "watch loop exited")
     observer.join()

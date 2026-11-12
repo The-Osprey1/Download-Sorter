@@ -1,6 +1,6 @@
 # Download Sorter
 
-> **Made by Devyn Fidel (2026)** · v2.3.0 · [MIT License](LICENSE)
+> **Made by Devyn Fidel (2026)** · v2.4.0 · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
@@ -17,7 +17,7 @@
 
 ## Get it
 
-1. **Download** the installer, `DownloadSorter-Setup-v2.3.0-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
+1. **Download** the installer, `DownloadSorter-Setup-v2.4.0-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
 2. **Run it.** Windows will probably show a blue "Windows protected your PC" screen the first time. [Here's why, and what to click](#windows-protected-your-pc).
    - It installs just for you, in `%LOCALAPPDATA%\Programs\DownloadSorter`. No administrator password is needed.
    - It adds Start menu and desktop shortcuts, and an entry in Installed apps.
@@ -36,7 +36,7 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 - **Setup starts from your own folders.** The first welcome step shows the folders already in your Downloads folder (like `Invoices` or `IME 4030`) and offers to keep filing matching files into them. If there are none yet, you tick the kinds of files you want sorted.
 - **Nothing moves until you finish the welcome steps.** If you chose to sort the files already in Downloads, that first sort counts as one batch, so a single **Undo last sort** puts everything back.
 - **New downloads are filed a few seconds after they finish.** Half-finished downloads are left alone.
-- **The Home page shows each file as it's filed**, with where it went and an Undo button:
+- **The Home page shows each file as it's filed**, with where it went and how long ago. The **...** at the end of a row fixes a mistake (see [Undo](#undo-updates-uninstalling-and-help)):
 
   ![New files appear on the Home page a few seconds after they're filed](docs/images/home-live.gif)
 
@@ -145,7 +145,7 @@ To check that your download is exactly what was published:
 2. Run this in PowerShell, in the folder where the installer is:
 
    ```powershell
-   Get-FileHash .\DownloadSorter-Setup-v2.3.0-windows-x64.exe -Algorithm SHA256
+   Get-FileHash .\DownloadSorter-Setup-v2.4.0-windows-x64.exe -Algorithm SHA256
    ```
 
 3. The long code it prints should match the line for the installer in `checksums.txt`.
@@ -163,12 +163,13 @@ All the source code is in this repository, and the installer is built from it by
 ## Undo, updates, uninstalling and help
 
 - **Undo:** click **Undo last sort** on Home, or right-click the tray icon (near the clock) and choose **Undo last sort**.
+- **Fix one file:** on Home, click the **...** at the end of its row. **Put back where it was** undoes just that file. **Move to...** files it in a folder you pick, and Download Sorter notes that you chose it. **Always file like this...** opens the rule editor filled in from the file; the new rule goes first, so it wins.
 - **Pause:** use **Pause sorting** on Home, or the tray icon.
 - **Updates:** when a new version is out, Home shows "Download Sorter X is available". Click **Download and install**: it downloads in the app (with progress), checks the file against the release's published checksum, then **Restart and install** closes Download Sorter for a few seconds and opens it again. Your rules and settings are kept. (Versions before 2.2 open the download page instead; download and run the installer once.)
 - **Uninstall:** go to Windows Settings, then Apps, then Installed apps, then Download Sorter, then Uninstall. It asks whether to also delete your rules and history.
 - **Something went wrong?** Right-click the tray icon and choose **Report a problem...** (also in Settings → About). It opens a [bug report](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml) with your version and Windows version filled in. If you can, attach `sorter.log` from **Open log folder** (look it over first: it contains file names).
 
-*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.3.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
+*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.4.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
 
 ---
 
