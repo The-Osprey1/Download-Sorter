@@ -58,6 +58,8 @@ def build_standalone(use_inno: bool = False) -> int:
 
     # 3. Invoke PyInstaller
     print("[*] Running PyInstaller...")
+    import version_resource
+    version_resource.write(ROOT / version_resource.VERSION_FILE)
     cmd = [sys.executable, "-m", "PyInstaller", str(spec_file), "--noconfirm"]
     res = subprocess.run(cmd, cwd=str(ROOT))
     if res.returncode != 0:

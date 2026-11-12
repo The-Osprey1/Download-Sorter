@@ -1,0 +1,17 @@
+# Winget default locale manifest template (issue #9). Placeholders are in <angle brackets>.
+PackageIdentifier: DevynFidel.DownloadSorter
+PackageVersion: <VERSION>
+PackageLocale: en-US
+Publisher: Devyn Fidel
+PublisherUrl: <REPOSITORY_URL>
+PackageName: Download Sorter
+PackageUrl: <REPOSITORY_URL>
+License: MIT
+ShortDescription: Sorts your downloads into folders by file type, rules and the website they came from.
+Moniker: download-sorter
+Tags:
+  - downloads
+  - organizer
+  - sorting
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
