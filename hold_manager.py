@@ -202,25 +202,33 @@ def hold_period_over(path: Path | str, config: dict, now: float | None = None) -
     return arrived is not None and arrived + hold_days * 86400.0 <= cur_time
 
 
-def hold_file(
+# What ``register_hold`` found.
+HOLD_NOT_HELD = "not held"    # holds are off, or the file waited long enough: the caller files it
+HOLD_KEPT_HERE = "kept here"  # the user chose "Keep here" for it
+HOLD_UNCHANGED = "unchanged"  # held already, and the file is the same: its schedule stays
+HOLD_NEW = "new"              # held now: a new file, or one that changed since (a new download of it)
+
+
+def register_hold(
     path: Path | str,
     config: dict,
     planned_dest: Path | str,
     meta: dict | None = None,
     now: float | None = None,
-) -> bool:
-    """Register a .3mf file for grace-period hold in Downloads.
+) -> str:
+    """Hold a .3mf file in Downloads for the grace period, and say what that found (a ``HOLD_`` value).
 
-    Returns False when the file is not to be held, and the caller files it: holds are
-    off, or the file has been in place longer than the hold lasts (``hold_period_over``).
+    A caller that tells the user about a hold does it for ``HOLD_NEW`` only. A file that is found
+    again unchanged (by every sweep, at every start-up, by a second event for the same download)
+    is held already, and was announced when it was first held.
     """
     p = Path(path).resolve()
     if not p.exists() or not p.is_file():
-        return False
+        return HOLD_NOT_HELD
 
     hold_cfg = config.get("hold", {})
     if not hold_cfg.get("enabled", True):
-        return False
+        return HOLD_NOT_HELD
 
     hold_days = float(hold_cfg.get("hold_days", DEFAULT_HOLD_DAYS))
     max_held = int(hold_cfg.get("max_held", DEFAULT_MAX_HELD))
@@ -231,7 +239,7 @@ def hold_file(
         mtime = st.st_mtime
         size = st.st_size
     except OSError:
-        return False
+        return HOLD_NOT_HELD
 
     key = str(p)
     with state_lock():
@@ -240,16 +248,16 @@ def hold_file(
 
         # If already marked keep_here, respect it
         if key in held and held[key].get("keep_here"):
-            return True
+            return HOLD_KEPT_HERE
 
         # Already held and unchanged (e.g. the startup sweep sees it again): keep the
         # existing schedule instead of pushing the release out by another hold period.
         existing = held.get(key)
         if existing and int(existing.get("size", -1)) == size and abs(float(existing.get("mtime", 0)) - mtime) <= 2.0:
-            return True
+            return HOLD_UNCHANGED
 
         if max_held < 1 or hold_period_over(p, config, cur_time):
-            return False
+            return HOLD_NOT_HELD
 
         # At most ``max_held`` files wait at once. The one closest to its release is filed
         # instead of being forgotten: it is made due now, and the normal release moves it
@@ -285,7 +293,22 @@ def hold_file(
         write_state(state)
 
     logging.info("3MF Hold registered: %s (holding until %s)", p.name, time.ctime(release_at))
-    return True
+    return HOLD_NEW
+
+
+def hold_file(
+    path: Path | str,
+    config: dict,
+    planned_dest: Path | str,
+    meta: dict | None = None,
+    now: float | None = None,
+) -> bool:
+    """Register a .3mf file for grace-period hold in Downloads.
+
+    Returns False when the file is not to be held, and the caller files it: holds are
+    off, or the file has been in place longer than the hold lasts (``hold_period_over``).
+    """
+    return register_hold(path, config, planned_dest, meta=meta, now=now) != HOLD_NOT_HELD
 
 
 def keep_here(path: Path | str) -> bool:

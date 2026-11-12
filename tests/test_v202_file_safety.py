@@ -133,7 +133,7 @@ def test_dry_run_move_file_does_not_register_a_hold_or_notify(downloads, config)
     notify = MagicMock()
     stub = types.SimpleNamespace(notify_file_held=notify)
     with patch.dict(sys.modules, {"ribbon_popup": stub}), \
-            patch.object(hold_manager, "hold_file", wraps=hold_manager.hold_file) as hold:
+            patch.object(hold_manager, "register_hold", wraps=hold_manager.register_hold) as hold:
         config["ribbon_enabled"] = config["notifications"] = True
         assert sorter.move_file(sample, config, dry_run=True, check_age=False) is None
     hold.assert_not_called()
@@ -157,7 +157,7 @@ def test_dry_run_reclassify_and_documents_do_not_register_holds(tmp_path, downlo
     config["document_sources"] = [str(docs)]
     config.setdefault("documents", {})
     in_docs = _make(docs / "Plate.3mf", b"3mf")
-    with patch.object(hold_manager, "hold_file") as hold:
+    with patch.object(hold_manager, "register_hold") as hold:
         sorter.reclassify_misplaced_file(misplaced, config, dry_run=True)
         sorter.relocate_from_documents(in_docs, config, dry_run=True)
     hold.assert_not_called()

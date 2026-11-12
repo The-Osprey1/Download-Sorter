@@ -2140,7 +2140,9 @@ def hold_in_place(
 ) -> bool:
     """Decide whether the hold keeps ``path`` where it is.
 
-    Returns True when the file must stay put (marked "Keep here", or newly held).
+    Returns True when the file must stay put (marked "Keep here", or held). The
+    "Holding in Downloads" notice is shown once, when the hold is new: not again for
+    a file that is found held and unchanged.
     A dry run only reports what would happen: it never registers or resets a hold
     and never shows a notification.
     """
@@ -2164,8 +2166,14 @@ def hold_in_place(
         meta_3mf = parse_3mf(path)
     except Exception:
         pass
-    if not hold_manager.hold_file(path, config, destination, meta=meta_3mf):
+    held = hold_manager.register_hold(path, config, destination, meta=meta_3mf)
+    if held == hold_manager.HOLD_NOT_HELD:
         return False
+    if held != hold_manager.HOLD_NEW:
+        # Found again, unchanged (by a sweep, at start-up, by a second event for the same
+        # download): it is held already, and the notice was shown when it was first held.
+        logging.debug("3MF file %s is still held in place", path.name)
+        return True
     logging.info("3MF file held in place: %s (planned: %s)", path.name, destination)
     if config.get("ribbon_enabled", True) and config.get("notifications", True):
         try:
