@@ -54,7 +54,7 @@ def own_quit_event(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def own_home_folder(monkeypatch, tmp_path_factory):
-    """Give each test a home folder of its own, with an empty Downloads and Documents in it.
+    """Give each test a home folder of its own, with an empty Downloads, Documents and Desktop in it.
 
     Settings that name no Downloads folder fall back to ``${USERPROFILE}\\Downloads``. A test that
     built its own settings and ran the welcome wizard therefore created the wizard's rule folders
@@ -62,7 +62,10 @@ def own_home_folder(monkeypatch, tmp_path_factory):
     Yields the home folder.
     """
     home = tmp_path_factory.mktemp("home")
-    for name in ("Downloads", "Documents"):
+    # Desktop too: a Windows file dialog opened by a test starts there, and when the folder is
+    # missing Windows shows a "Location is not available" error box on the screen of whoever
+    # runs the tests.
+    for name in ("Downloads", "Documents", "Desktop"):
         (home / name).mkdir()
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("HOME", str(home))

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.6.0] - 2026-11-12
 
 ### Added
 * **The welcome step asks what you mostly download (`onboarding.py`, `rules_manager.py`)**: pick **Everyday files**, **3D printing** or **Software** at the top of the first step. Everyday files starts with the 3D Models and CAD folders unticked and hides the Projects page and the 3D printing tools; 3D printing ticks those folders and shows both; Software shows the Projects page. When your Downloads folder already holds 3D files, 3D printing is picked for you. You can still tick any folder by hand, and **Settings** has a **Show the Projects page** box. Nothing changes for an install that is already set up.
@@ -21,10 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Tray icon on Qt (new `tray_qt.py`, `tray.py`, RFC #2)**: the tray uses PySide6's system tray, like the rest of the app, and pystray is no longer a dependency. The menu and its behaviour are unchanged. The ribbon and the quick switcher still use Tk.
 
 ### Fixed
+* **Running the tests no longer shows a "Location is not available" box (`tests/conftest.py`)**: one test opens a real Windows file dialog, and the temporary home folder each test gets had no Desktop folder for it to start in.
 * **The Settings page no longer scrolls sideways (`onboarding.py`)**: one long checkbox made the page wider than the window, so the right edge of every section was cut off. Its note is now on a line of its own.
 * **Dragging a file out now works in every app (`batch_handoff.py`, issue #28)**: the drag object from the quick switcher and the recent-files shelf carried only the shell's own item list, which Explorer reads but browsers, chat apps and slicers do not. It now also carries the standard file list (CF_HDROP).
 
-## [2.5.0] - Unreleased
+## [2.5.0] - 2026-11-12
 
 ### Added
 * **Make a rule from "Try a filename" (`rules_manager.py`)**: when no name rule decided the file name you typed (it went by file type, or to the catch-all folder), **Make a rule for this...** opens the rule editor filled in from the name. The new rule goes first and the name is checked again at once, so you see it win.
