@@ -10,6 +10,8 @@ import math
 import sys
 import time
 import zipfile
+
+import zip_members
 from pathlib import Path
 
 import safe_ops
@@ -55,16 +57,57 @@ def is_3d_archive(archive_path: Path) -> list[str]:
         with zipfile.ZipFile(archive_path, "r") as z:
             results: list[str] = []
             for name in z.namelist():
-                if name.endswith("/") or name.startswith("__MACOSX/") or "/__MACOSX/" in name:
+                if zip_members.is_directory_entry(name) or zip_members.is_system_junk(name):
                     continue
                 p = Path(name)
-                if p.name.startswith("._") or p.name.lower() in JUNK_NAMES:
+                if p.name.lower() in JUNK_NAMES:
                     continue
                 if p.suffix.lower() in TARGET_3D_EXTENSIONS:
                     results.append(name)
             return results
     except Exception:
         return []
+
+
+GUIDE_EXTENSIONS = {".pdf", ".txt", ".md", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def _makerworld_kit_dir(archive_path: Path, downloads: Path, config: dict) -> Path | None:
+    """The model kit folder for a zip downloaded from a MakerWorld model page, or None."""
+    import kits
+    from sorter import MAKERWORLD_FOLDER, folder_path, sanitize_folder_segment
+
+    found = kits.model_from_file(archive_path)
+    if not found:
+        return None
+    _model_id, slug_title = found
+    base = folder_path(downloads, str(config.get("makerworld_destination") or MAKERWORLD_FOLDER))
+    return base / kits.existing_folder(base, sanitize_folder_segment(slug_title))
+
+
+def _kit_members(archive_path: Path, model_files: list[str]) -> list[str]:
+    """The 3D files plus the build guides and reference photos a MakerWorld kit keeps."""
+    members = list(model_files)
+    try:
+        with zipfile.ZipFile(archive_path, "r") as z:
+            for name in z.namelist():
+                if zip_members.is_directory_entry(name) or zip_members.is_system_junk(name):
+                    continue
+                if Path(name).suffix.lower() not in GUIDE_EXTENSIONS:
+                    continue
+                if name not in members:
+                    members.append(name)
+    except Exception:
+        pass
+    return members
+
+
+def _safe_parent(zip_internal_path: str) -> Path:
+    """The folder a member sat in inside the zip, kept (its own sub-folders stay together),
+    but never allowed to climb out of the kit folder."""
+    parts = zip_members.safe_relative_parts(zip_internal_path)
+    folders = parts[:-1] if parts else ()
+    return Path(*folders) if folders else Path(".")
 
 
 def unpack_3d_archive(
@@ -111,6 +154,12 @@ def unpack_3d_archive(
         active_proj = load_active_project()
 
     downloads = watch_root(config)
+    kit_dir: Path | None = None
+    if not active_proj:
+        kit_dir = _makerworld_kit_dir(archive_path, downloads, config)
+        if kit_dir is not None:
+            # A MakerWorld kit keeps its build guide and reference photos with the models.
+            model_files = _kit_members(archive_path, model_files)
     extracted_paths: list[Path] = []
     model_folder_name = archive_path.stem
     multi_file = len(model_files) > 1
@@ -145,7 +194,9 @@ def unpack_3d_archive(
             for zip_internal_path in model_files:
                 file_name = Path(zip_internal_path).name
 
-                if active_proj:
+                if kit_dir is not None:
+                    dest_dir = kit_dir / _safe_parent(zip_internal_path)
+                elif active_proj:
                     if multi_file:
                         dest_dir = target_root / model_folder_name
                     else:

@@ -224,6 +224,7 @@ class TestMachineRemodel(unittest.TestCase):
         import hold_manager
         held_file = self.sandbox / "Plate1_Model.3mf"
         held_file.write_text("3mf content")
+        self.config["hold"]["enabled"] = True  # the loose hold is off by default
         hold_manager.hold_file(held_file, self.config, planned_dest=self.sandbox / "out.3mf")
         self.assertTrue(hold_manager.is_held(held_file))
 

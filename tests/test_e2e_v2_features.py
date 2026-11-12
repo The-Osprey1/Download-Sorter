@@ -891,6 +891,7 @@ class TestCrossFeatureCombinationsTier3(unittest.TestCase):
         held_3mf.write_text("3mf hold data")
 
         config = sorter.get_default_config()
+        config["hold"]["enabled"] = True  # the loose hold is off by default
         config["downloads_dir"] = str(downloads)
 
         hold_manager.hold_file(held_3mf, config, planned_dest=downloads / "out.3mf")
@@ -913,6 +914,7 @@ class TestCrossFeatureCombinationsTier3(unittest.TestCase):
         f_hold = self.test_root / "Held.3mf"
         f_hold.write_text("held")
         config = sorter.get_default_config()
+        config["hold"]["enabled"] = True  # the loose hold is off by default
         hold_manager.hold_file(f_hold, config, planned_dest=self.test_root / "out.3mf")
 
         self.assertIn("1 3MF file held in Downloads", t.tooltip())

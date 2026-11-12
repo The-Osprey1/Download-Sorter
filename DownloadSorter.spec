@@ -64,6 +64,9 @@ hidden_imports = [
     'update_check',
     'updater',
     'installer_builder',
+    'bambu_recent',
+    'kits',
+    'zip_members',
 ]
 
 a = Analysis(

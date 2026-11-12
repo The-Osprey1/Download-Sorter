@@ -62,6 +62,8 @@ def make_config(root: Path, docs: Path | None = None) -> dict:
     config["onboarding_completed"] = True
     if isinstance(config.get("batch_handoff"), dict):
         config["batch_handoff"]["enabled"] = False
+    if isinstance(config.get("hold"), dict):
+        config["hold"]["enabled"] = True
     return config
 
 
