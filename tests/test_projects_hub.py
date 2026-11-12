@@ -15,7 +15,7 @@ import sorter
 class ProjectsHubTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmp.name)
+        self.root = Path(self._tmp.name).resolve()  # the long name, as the hub stores it
         self.hub = self.root / "Projects Hub"
         self.project = self.root / "code" / "DriftPad"
         self.project.mkdir(parents=True)

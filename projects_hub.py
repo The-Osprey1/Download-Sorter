@@ -58,7 +58,12 @@ def _save(items: list[dict]) -> None:
 
 
 def _key(path: str | Path) -> str:
-    return os.path.normcase(os.path.normpath(str(path)))
+    # Resolved first, so a short name (RUNNER~1) and the long one are the same project.
+    try:
+        full = os.path.realpath(str(path))
+    except OSError:
+        full = str(path)
+    return os.path.normcase(os.path.normpath(full))
 
 
 def is_registered(path: str | Path) -> bool:
