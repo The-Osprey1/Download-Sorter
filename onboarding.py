@@ -13,6 +13,7 @@ import html
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QSpinBox,
     QProgressBar,
     QScrollArea,
     QStackedWidget,
@@ -2014,6 +2016,54 @@ class HomeDashboardWidget(QWidget):
         super().hideEvent(event)
 
 
+def parse_type_names(text: str) -> tuple[dict[str, str], list[str]]:
+    """Read ".pdf = PDFs, stl = Prints" into {".pdf": "PDFs", ".stl": "Prints"}, and the parts it could not read."""
+    names: dict[str, str] = {}
+    bad: list[str] = []
+    for part in re.split(r"[,;]", text or ""):
+        part = part.strip()
+        if not part:
+            continue
+        ext, sep, folder = part.partition("=")
+        ext = ext.strip().lower()
+        folder = folder.strip()
+        if ext and not ext.startswith("."):
+            ext = "." + ext
+        if not sep or not re.fullmatch(r"\.[a-z0-9]{1,10}", ext) or not folder or re.search(r'[<>:"/\\|?*]', folder):
+            bad.append(part)
+            continue
+        names[ext] = folder
+    return names, bad
+
+
+def format_type_names(names: dict[str, Any]) -> str:
+    return ", ".join(f"{ext} = {folder}" for ext, folder in names.items() if str(folder or "").strip())
+
+
+def watch_folder_problem(folder: Path) -> str:
+    """Why ``folder`` should not be the folder to sort, in words for the page; '' when it is fine."""
+    try:
+        resolved = folder.resolve()
+    except OSError:
+        return "That folder could not be read."
+    if not resolved.is_dir():
+        return "That folder was not found."
+    if resolved.parent == resolved:
+        return "A whole drive can't be sorted. Pick a folder on it."
+    risky = [Path(os.environ.get("USERPROFILE") or Path.home())]
+    for name in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"):
+        if os.environ.get(name):
+            risky.append(Path(os.environ[name]))
+    for index, place in enumerate(risky):
+        try:
+            place = place.resolve()
+        except OSError:
+            continue
+        if resolved == place or (index > 0 and place in resolved.parents):
+            return "That folder holds Windows, programs or your whole profile. Pick a folder made for downloads."
+    return ""
+
+
 class SettingsWidget(QWidget):
     """Settings page: profile, Windows integration, zip handling, and About."""
 
@@ -2052,6 +2102,28 @@ class SettingsWidget(QWidget):
 
         header, _ = ui_style.page_header("Settings")
         layout.addWidget(header)
+
+        watched = self._section(
+            layout, "Folder to sort",
+            "Download Sorter sorts new files saved in this folder. Files in the old folder stay "
+            "where they are when you change it.",
+        )
+        self._watch_folder_lbl = ui_style.label("", wrap=True)
+        self._watch_folder_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        watched.addWidget(self._watch_folder_lbl)
+        self._watch_folder_note = ui_style.label("", "muted", wrap=True)
+        self._watch_folder_note.setVisible(False)
+        watched.addWidget(self._watch_folder_note)
+        watch_row = QHBoxLayout()
+        watch_row.setSpacing(8)
+        self._btn_watch_change = ui_style.button("Change folder...")
+        self._btn_watch_change.clicked.connect(self._on_change_watch_folder)
+        watch_row.addWidget(self._btn_watch_change)
+        self._btn_watch_default = ui_style.button("Use my Downloads folder", "ghost")
+        self._btn_watch_default.clicked.connect(lambda: self.set_watch_folder(""))
+        watch_row.addWidget(self._btn_watch_default)
+        watch_row.addStretch()
+        watched.addLayout(watch_row)
 
         profile = self._section(
             layout, "Your folders and starter rules",
@@ -2118,6 +2190,54 @@ class SettingsWidget(QWidget):
             folders.addWidget(chk)
             self._option_checks[key] = chk
 
+        folders.addWidget(ui_style.label("Your own names for type folders", "muted"))
+        self._type_names_edit = QLineEdit()
+        self._type_names_edit.setPlaceholderText(".pdf = PDFs, .stl = Prints")
+        self._type_names_edit.setAccessibleName("Your own names for type folders")
+        self._type_names_edit.setToolTip(
+            "Write the file type, an equals sign and the folder name. Separate several with commas. "
+            "Files already sorted are not moved.")
+        self._type_names_edit.editingFinished.connect(self._on_type_names_edited)
+        folders.addWidget(self._type_names_edit)
+        self._type_names_note = ui_style.label("", "muted", wrap=True)
+        self._type_names_note.setStyleSheet(f"color: {COLORS['warning']};")
+        self._type_names_note.setVisible(False)
+        folders.addWidget(self._type_names_note)
+
+        folders.addWidget(ui_style.label("Folders of mine that should not collect files", "muted"))
+        self._skip_folders_edit = QLineEdit()
+        self._skip_folders_edit.setPlaceholderText("3D Models\\Old, Reference")
+        self._skip_folders_edit.setAccessibleName("Folders of mine that should not collect files")
+        self._skip_folders_edit.setToolTip(
+            "Folder names inside the folder being sorted, separated by commas. Files named after "
+            "these folders are sorted the usual way instead.")
+        self._skip_folders_edit.editingFinished.connect(self._on_skip_folders_edited)
+        folders.addWidget(self._skip_folders_edit)
+
+        printing = self._section(layout, "3D printing", "Both off unless you turn them on.")
+        self._chk_by_designer = QCheckBox(
+            "Put MakerWorld models in a folder for each designer "
+            "(3D Models\\MakerWorld\\Designer\\Model)")
+        self._chk_by_designer.toggled.connect(
+            lambda checked: self._update_config(lambda cfg: cfg.__setitem__("makerworld_by_designer", bool(checked))))
+        printing.addWidget(self._chk_by_designer)
+        hold_row = QHBoxLayout()
+        hold_row.setSpacing(8)
+        chk_hold = QCheckBox("Leave new .3mf files where they were saved for")
+        chk_hold.setToolTip(
+            "A held .3mf stays where it was saved, so a slicer that has it open keeps working. "
+            "It is filed when the days are up, or when you click File now on its ribbon.")
+        chk_hold.toggled.connect(lambda checked: self._on_option_toggled(("hold", "enabled"), checked))
+        self._option_checks[("hold", "enabled")] = chk_hold
+        self._hold_days_spin = self._days_spin("Days to leave a new .3mf file before filing it", 1, 60)
+        self._hold_days_spin.valueChanged.connect(
+            lambda value: self._update_config(lambda cfg: self._set_option(cfg, "hold", "hold_days", int(value))))
+        hold_row.addWidget(chk_hold)
+        hold_row.addWidget(self._hold_days_spin)
+        hold_row.addWidget(ui_style.label("days before filing them"))
+        hold_row.addStretch()
+        printing.addLayout(hold_row)
+
         extras = self._section(
             layout, "Extra options",
             "All off unless you turn them on. Undo puts files back with their old names.",
@@ -2144,14 +2264,29 @@ class SettingsWidget(QWidget):
                                           "(Images\\Camera, Images\\Screenshots)"),
             (("pdf_text", "enabled"), "Look for rule words at the top of PDFs, so a "
                                       "“document (3).pdf” that says Invoice still goes to Invoices"),
-            (("desktop_sweep", "enabled"), "Move loose files left on the Desktop for 7 days into Downloads"),
-            (("bambu_recent", "enabled"), "Keep Bambu Studio's Recently Opened list pointing at moved .3mf files "
-                                          "(writes to BambuStudio.conf when closed; keeps a backup)"),
+            (("bambu_recent", "enabled"), "Keep Bambu Studio's Recently Opened list pointing at moved .3mf files"),
         ):
             chk = QCheckBox(text)
             chk.toggled.connect(lambda checked, k=key: self._on_option_toggled(k, checked))
             experimental.addWidget(chk)
             self._option_checks[key] = chk
+        # Its own line: one long checkbox made the whole page wider than the window.
+        experimental.addWidget(ui_style.label(
+            "This writes to BambuStudio.conf while Bambu Studio is closed, and keeps a backup.", "muted", wrap=True))
+
+        sweep_row = QHBoxLayout()
+        sweep_row.setSpacing(8)
+        chk_sweep = QCheckBox("Move loose files left on the Desktop into the sorted folder after")
+        chk_sweep.toggled.connect(lambda checked: self._on_option_toggled(("desktop_sweep", "enabled"), checked))
+        self._option_checks[("desktop_sweep", "enabled")] = chk_sweep
+        self._sweep_days_spin = self._days_spin("Days a file sits on the Desktop before it is moved", 1, 365)
+        self._sweep_days_spin.valueChanged.connect(
+            lambda value: self._update_config(lambda cfg: self._set_option(cfg, "desktop_sweep", "days", int(value))))
+        sweep_row.addWidget(chk_sweep)
+        sweep_row.addWidget(self._sweep_days_spin)
+        sweep_row.addWidget(ui_style.label("days"))
+        sweep_row.addStretch()
+        experimental.addLayout(sweep_row)
 
         bambu_row = QHBoxLayout()
         bambu_row.setSpacing(8)
@@ -2257,6 +2392,25 @@ class SettingsWidget(QWidget):
             on_by_default = block_name in ("type_folders", "my_folders", "shelf")
             chk.setChecked(bool(block.get(key, on_by_default)) if isinstance(block, dict) else on_by_default)
             chk.blockSignals(False)
+        self._refresh_watch_folder()
+        self._chk_by_designer.blockSignals(True)
+        self._chk_by_designer.setChecked(bool(self._config.get("makerworld_by_designer")))
+        self._chk_by_designer.blockSignals(False)
+        for spin, block_name, name, default in (
+            (self._hold_days_spin, "hold", "hold_days", 7),
+            (self._sweep_days_spin, "desktop_sweep", "days", 7),
+        ):
+            block = self._config.get(block_name)
+            try:
+                value = int(float(block.get(name, default))) if isinstance(block, dict) else default
+            except (TypeError, ValueError):
+                value = default
+            spin.blockSignals(True)
+            spin.setValue(max(spin.minimum(), min(spin.maximum(), value)))
+            spin.blockSignals(False)
+        self._type_names_edit.setText(format_type_names(self._saved_type_names()))
+        self._type_names_note.setVisible(False)
+        self._skip_folders_edit.setText(", ".join(self._saved_skip_folders()))
         shelf_block = self._config.get("shelf")
         hotkey_spec = str(shelf_block.get("hotkey") or "Ctrl+Shift+Space") if isinstance(shelf_block, dict) else "Ctrl+Shift+Space"
         idx = self._shelf_hotkey_combo.findData(hotkey_spec)
@@ -2338,6 +2492,88 @@ class SettingsWidget(QWidget):
     def _on_option_toggled(self, key: tuple[str, str], checked: bool) -> None:
         block_name, name = key
         self._update_config(lambda cfg: self._set_option(cfg, block_name, name, bool(checked)))
+
+    @staticmethod
+    def _days_spin(name: str, low: int, high: int) -> QSpinBox:
+        spin = QSpinBox()
+        spin.setRange(low, high)
+        spin.setAccessibleName(name)
+        spin.setFixedWidth(64)
+        return spin
+
+    # ---- the folder to sort ----
+    def _refresh_watch_folder(self) -> None:
+        import sorter
+        folder = sorter.watch_root(self._config)
+        is_default = sorter.same_folder(folder, sorter.watch_root({}))
+        self._watch_folder_lbl.setText(str(folder))
+        self._btn_watch_default.setVisible(not is_default)
+        missing = not folder.exists()
+        self._watch_folder_note.setStyleSheet(f"color: {COLORS['warning']};" if missing else "")
+        if missing:
+            self._watch_folder_note.setText(
+                "This folder was not found. Nothing is sorted until it is back, for example when "
+                "its drive is plugged in.")
+        self._watch_folder_note.setVisible(missing)
+
+    def _on_change_watch_folder(self) -> None:
+        import sorter
+        start = sorter.watch_root(self._config)
+        picked = QFileDialog.getExistingDirectory(self, "Folder to sort", str(start if start.exists() else Path.home()))
+        if picked:
+            self.set_watch_folder(picked)
+
+    def set_watch_folder(self, folder: str) -> bool:
+        """Sort ``folder`` from now on ('' goes back to the Downloads folder). False when it is refused."""
+        import sorter
+        folder = str(folder or "").strip()
+        if folder:
+            problem = watch_folder_problem(Path(folder))
+            if problem:
+                self._watch_folder_note.setStyleSheet(f"color: {COLORS['warning']};")
+                self._watch_folder_note.setText(problem)
+                self._watch_folder_note.setVisible(True)
+                return False
+            folder = str(Path(folder))
+            if sorter.same_folder(Path(folder), sorter.watch_root({})):
+                folder = ""  # the default follows Windows when Downloads is moved
+
+        def change(cfg: dict[str, Any]) -> None:
+            self._set_option(cfg, "watch", "folder", folder)
+            cfg.pop("downloads_dir", None)  # the older key; watch.folder is the one read first
+
+        self._update_config(change)
+        self._refresh_watch_folder()
+        return True
+
+    # ---- folder names and folders left out ----
+    def _saved_type_names(self) -> dict[str, Any]:
+        block = self._config.get("type_folders")
+        names = block.get("names") if isinstance(block, dict) else None
+        return names if isinstance(names, dict) else {}
+
+    def _saved_skip_folders(self) -> list[str]:
+        block = self._config.get("my_folders")
+        skip = block.get("skip") if isinstance(block, dict) else None
+        return [str(item) for item in skip] if isinstance(skip, list) else []
+
+    def _on_type_names_edited(self) -> None:
+        names, bad = parse_type_names(self._type_names_edit.text())
+        if bad:
+            self._type_names_note.setText(
+                "Not saved. Write each one as “.pdf = PDFs”. Could not read: " + ", ".join(bad))
+            self._type_names_note.setVisible(True)
+            return
+        self._type_names_note.setVisible(False)
+        if names != self._saved_type_names():
+            self._update_config(lambda cfg: self._set_option(cfg, "type_folders", "names", names))
+        self._type_names_edit.setText(format_type_names(names))
+
+    def _on_skip_folders_edited(self) -> None:
+        parts = [part.strip().strip("\\/") for part in re.split(r"[,;]", self._skip_folders_edit.text())]
+        skip = [part for part in parts if part]
+        if skip != self._saved_skip_folders():
+            self._update_config(lambda cfg: self._set_option(cfg, "my_folders", "skip", skip))
 
     def _on_shelf_hotkey_changed(self, index: int) -> None:
         spec = self._shelf_hotkey_combo.itemData(index)

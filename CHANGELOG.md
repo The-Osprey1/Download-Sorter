@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+* **Settings shows the options that needed the settings file (`onboarding.py`)**: a new **Folder to sort** section shows the folder being sorted and lets you change it or go back to your Downloads folder. A whole drive, your profile folder and the Windows and program folders are refused, and a folder that is missing (an unplugged drive) is said on the page. **Folders** has boxes for your own type-folder names (`.pdf = PDFs`) and for folders of yours that should not collect files. A new **3D printing** section has MakerWorld folders by designer and the `.3mf` hold with its number of days. The Desktop sweep's number of days can be changed.
 * **Projects hub (new `projects_hub.py`, `projects_page.py`, RFC #1)**: a new **Projects** page lists project folders with their kind, state and Git status. **Add to hub** puts a junction to the project in `%USERPROFILE%\Projects Hub\<kind>`, so all projects can be opened from one place while staying where they are; **Remove from hub** removes only the junction. **Zip a copy** archives without touching the project.
 * **Route a download to a project (`ribbon_popup.py`, RFC #1)**: when you have projects in the hub, the moved-file ribbon has a **Route** button with a menu of them; picking one moves the file into that project (Undo still works).
 
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * **Tray icon on Qt (new `tray_qt.py`, `tray.py`, RFC #2)**: the tray uses PySide6's system tray, like the rest of the app, and pystray is no longer a dependency. The menu and its behaviour are unchanged. The ribbon and the quick switcher still use Tk.
 
 ### Fixed
+* **The Settings page no longer scrolls sideways (`onboarding.py`)**: one long checkbox made the page wider than the window, so the right edge of every section was cut off. Its note is now on a line of its own.
 * **Dragging a file out now works in every app (`batch_handoff.py`, issue #28)**: the drag object from the quick switcher and the recent-files shelf carried only the shell's own item list, which Explorer reads but browsers, chat apps and slicers do not. It now also carries the standard file list (CF_HDROP).
 
 ## [2.5.0] - Unreleased
