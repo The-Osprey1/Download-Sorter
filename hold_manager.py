@@ -188,6 +188,20 @@ def get_all_held() -> list[dict]:
         return list(state.get("held", {}).values())
 
 
+def hold_period_over(path: Path | str, config: dict, now: float | None = None) -> bool:
+    """True when ``path`` has been in place for longer than the hold lasts.
+
+    The hold counts from when the file arrived, not from when Download Sorter first
+    looked at it. A file that sat in Downloads for ``hold_days`` or more before that
+    (an old file found by a sweep, or found again after a reinstall that forgot the
+    holds) has nothing left to wait for, so it is filed instead of held again.
+    """
+    hold_days = float(config.get("hold", {}).get("hold_days", DEFAULT_HOLD_DAYS))
+    cur_time = time.time() if now is None else float(now)
+    arrived = sorter.arrival_time(Path(path))
+    return arrived is not None and arrived + hold_days * 86400.0 <= cur_time
+
+
 def hold_file(
     path: Path | str,
     config: dict,
@@ -195,7 +209,11 @@ def hold_file(
     meta: dict | None = None,
     now: float | None = None,
 ) -> bool:
-    """Register a .3mf file for grace-period hold in Downloads."""
+    """Register a .3mf file for grace-period hold in Downloads.
+
+    Returns False when the file is not to be held, and the caller files it: holds are
+    off, or the file has been in place longer than the hold lasts (``hold_period_over``).
+    """
     p = Path(path).resolve()
     if not p.exists() or not p.is_file():
         return False
@@ -230,14 +248,26 @@ def hold_file(
         if existing and int(existing.get("size", -1)) == size and abs(float(existing.get("mtime", 0)) - mtime) <= 2.0:
             return True
 
-        # Enforce max held cap
-        if len(held) >= max_held and key not in held:
-            # Drop or release the oldest eligible file
-            oldest_key = min(held.keys(), key=lambda k: held[k].get("first_seen", 0))
-            if not held[oldest_key].get("keep_here"):
-                del held[oldest_key]
+        if max_held < 1 or hold_period_over(p, config, cur_time):
+            return False
 
-        release_at = cur_time + (hold_days * 86400.0)
+        # At most ``max_held`` files wait at once. The one closest to its release is filed
+        # instead of being forgotten: it is made due now, and the normal release moves it
+        # (waiting for a slicer or an open file as usual). Dropping its record left the file
+        # in place with no hold and nothing that would ever release it.
+        if key not in held:
+            waiting = sorted(
+                (k for k, rec in held.items()
+                 if not rec.get("keep_here") and float(rec.get("release_at", 0)) > cur_time),
+                key=lambda k: float(held[k].get("release_at", 0)),
+            )
+            for old in waiting[: max(0, len(waiting) - max_held + 1)]:
+                held[old]["release_at"] = cur_time
+                logging.info("3MF hold limit (%d) reached: %s will be filed now", max_held, held[old].get("filename", old))
+
+        # The hold runs from when the file arrived, not from when it was first noticed.
+        arrived = sorter.arrival_time(p)
+        release_at = (cur_time if arrived is None else min(cur_time, arrived)) + (hold_days * 86400.0)
         mw_meta = (meta or {}).get("makerworld_meta", {}) if meta else {}
 
         held[key] = {

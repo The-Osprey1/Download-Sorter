@@ -1138,6 +1138,9 @@ DEFAULT_TYPE_FOLDERS: dict[str, tuple[str, ...]] = {
     "JPG": (".jpg", ".jpeg"),
     "PNG": (".png",),
     "GIF": (".gif",),
+    "WEBP": (".webp",),
+    "HEIC": (".heic", ".heif"),
+    "TIFF": (".tif", ".tiff"),
     "Vector": (".svg", ".ai", ".eps", ".cdr"),
     # Videos
     "MP4": (".mp4", ".m4v"),
@@ -1145,6 +1148,7 @@ DEFAULT_TYPE_FOLDERS: dict[str, tuple[str, ...]] = {
     "MKV": (".mkv",),
     # Audio
     "MP3": (".mp3",),
+    "M4A": (".m4a",),
     "WAV": (".wav",),
     "FLAC": (".flac",),
     # Code
@@ -2115,6 +2119,8 @@ def hold_in_place(
     if dry_run:
         if hold_manager.is_held(path):
             logging.info("[DRY-RUN] %s is already held in place (planned: %s)", path.name, destination)
+        elif hold_manager.hold_period_over(path, config):
+            return False  # it has waited long enough: the dry run goes on to show where it would be filed
         else:
             logging.info("[DRY-RUN] Would hold %s in place (planned: %s)", path.name, destination)
         return True
@@ -2369,26 +2375,32 @@ def existing_files_cutoff(config: dict) -> float | None:
     return float(value)
 
 
-def arrived_before(path: Path, cutoff: float | None) -> bool:
-    """True when path was created and last changed before cutoff.
+def arrival_time(path: Path) -> float | None:
+    """When ``path`` landed where it is: the newer of its modified and created times.
 
-    Uses the newer of the modified and created times: some browsers stamp a
-    download with the server's modified date, but its creation time on Windows
-    is when it landed in Downloads.
+    Some browsers stamp a download with the server's modified date, but its
+    creation time on Windows is when it landed in Downloads. None when the file
+    cannot be read.
     """
-    if cutoff is None:
-        return False
     try:
         st = path.stat()
     except OSError:
-        return False
+        return None
     newest = st.st_mtime
     created = getattr(st, "st_birthtime", None)
     if created is None and sys.platform == "win32":
         created = st.st_ctime
     if created is not None:
         newest = max(newest, created)
-    return newest < cutoff
+    return newest
+
+
+def arrived_before(path: Path, cutoff: float | None) -> bool:
+    """True when path was created and last changed before cutoff (see ``arrival_time``)."""
+    if cutoff is None:
+        return False
+    arrived = arrival_time(path)
+    return arrived is not None and arrived < cutoff
 
 
 def sort_existing(

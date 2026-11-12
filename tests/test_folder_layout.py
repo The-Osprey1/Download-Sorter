@@ -69,12 +69,14 @@ def _goes_to(name: str, config: dict) -> str:
     ("bracket.f3d", "CAD\\Fusion 360"),
     ("bracket.step", "CAD\\STEP"),
     ("photo.jpg", "Images\\JPG"),
+    ("phone.heic", "Images\\HEIC"),
     ("song.mp3", "Audio\\MP3"),
+    ("voice.m4a", "Audio\\M4A"),
     ("clip.mp4", "Videos\\MP4"),
     # small or rare kinds stay in the main folder
     ("setup.exe", "Installers"),
     ("bundle.zip", "Archives"),
-    ("scan.heic", "Images"),
+    ("favicon.ico", "Images"),
     ("mystery.xyz", "Other"),
 ])
 def test_each_kind_of_file_has_its_own_folder(config, name, folder):
