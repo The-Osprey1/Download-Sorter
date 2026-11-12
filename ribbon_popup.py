@@ -1173,6 +1173,16 @@ class RibbonPopup(_BaseRibbonPopup):
                 self.bottom_row_layout.addWidget(self.open_bambu_btn)
                 pills.append(self.open_bambu_btn)
 
+            # Quick Route: send the file on to one of your hub projects (Projects page).
+            self.route_btn = None
+            self._route_targets = self._route_targets_available()
+            if self._route_targets:
+                self.route_btn = self._make_pill_button(
+                    self.bottom_row, "Route ›", ACTION_COLOR, SURFACE_RAISED, self._show_route_menu, scale, pad_x=6, pad_y=1
+                )
+                self.bottom_row_layout.addWidget(self.route_btn)
+                pills.append(self.route_btn)
+
             self.undo_btn = self._make_pill_button(
                 self.bottom_row, "Undo", TEXT_MAIN, SURFACE_RAISED, self._on_undo, scale, pad_x=6, pad_y=1
             )
@@ -1249,6 +1259,34 @@ class RibbonPopup(_BaseRibbonPopup):
             return bambu_recent.bambu_exe() is not None
         except Exception:
             return False
+
+    @staticmethod
+    def _route_targets_available() -> list:
+        try:
+            import projects_hub
+            return projects_hub.route_targets()[:8]
+        except Exception:
+            return []
+
+    def _show_route_menu(self, _event=None) -> None:
+        """A small menu of hub projects; picking one moves the file into that project."""
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self.root)
+        for project in self._route_targets:
+            menu.addAction(f"Route to {project.get('name')}").setData(project)
+        chosen = menu.exec(QCursor.pos())
+        if chosen is not None:
+            self._route_to(chosen.data())
+
+    def _route_to(self, project: dict) -> None:
+        try:
+            import projects_hub
+            target = projects_hub.route_file(self.dest_path, project)
+            self.dest_path = target
+        except Exception as exc:
+            print(f"Could not route to {project.get('name')}: {exc}", file=sys.stderr)
+        finally:
+            self.close()
 
     def _on_open_in_bambu(self) -> None:
         try:

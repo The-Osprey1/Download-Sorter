@@ -22,7 +22,7 @@ import config_manager
 import sorter
 import tray
 
-SEPARATOR = tray.pystray.Menu.SEPARATOR
+SEPARATOR = tray.tray_qt.SEPARATOR
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ def test_the_submenu_follows_the_history_without_rebuilding_the_menu(tmp_path):
 
 
 def test_the_history_is_read_once_per_change_not_once_per_question(tmp_path, monkeypatch):
-    # pystray asks for a menu's items several times while it builds the menu (is it
+    # The tray asks for a menu's items several times while it builds the menu (is it
     # visible? has it a submenu? what are the entries?), and reading the history means
     # reading the whole file.
     _filed(tmp_path, "a.pdf")
@@ -168,7 +168,7 @@ def test_the_history_is_read_once_per_change_not_once_per_question(tmp_path, mon
     menu = _menu()
     item = _recent_item(menu)
 
-    list(menu)                       # pystray walks the visible items ...
+    list(menu)                       # the tray walks the visible items ...
     assert item.submenu and item.visible
     list(item.submenu)               # ... then builds the submenu
     list(item.submenu.items)

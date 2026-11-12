@@ -14,8 +14,7 @@ added_files = [
 ]
 
 hidden_imports = [
-    'pystray',
-    'pystray._win32',
+    'tray_qt',
     'PIL',
     'PIL.Image',
     'PIL.ImageDraw',

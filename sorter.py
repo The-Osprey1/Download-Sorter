@@ -763,35 +763,52 @@ def expand_path(value: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
 
 
+def load_config_from(target: Path, template: Path | None = None) -> dict:
+    """The one settings loader (the watcher, the window and the tools all use it).
+
+    In order: the settings file; if it is damaged, the ``.bak`` copy the window keeps beside it
+    (so a damaged file never means sorting with no rules); if there is no settings file yet and a
+    ``template`` is given, that template, copied into place; otherwise the built-in defaults.
+    """
+    target = Path(target)
+    if target.exists():
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return apply_v2_defaults(data)
+            logging.warning("Config at %s is not a dictionary", target)
+        except (OSError, ValueError) as exc:
+            logging.warning("Failed loading config from %s (%s)", target, exc)
+        backup = target.with_name(target.name + ".bak")
+        try:
+            data = json.loads(backup.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "keyword_rules" in data:
+                logging.warning("Using the backup settings %s", backup)
+                return apply_v2_defaults(data)
+        except (OSError, ValueError):
+            pass
+        logging.warning("No usable settings at %s; using default config", target)
+        return get_default_config()
+    if template is not None and Path(template).exists():
+        try:
+            data = json.loads(Path(template).read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(template, target)
+                    logging.info("Initialized user config from %s to %s", template, target)
+                except OSError:
+                    pass
+                return apply_v2_defaults(data)
+        except (OSError, ValueError) as exc:
+            logging.warning("Failed loading template config from %s (%s)", template, exc)
+    logging.info("Config file %s does not exist; using default config", target)
+    return get_default_config()
+
+
 def load_config() -> dict:
     target = CONFIG_PATH
-    if not target.exists():
-        if target == USER_CONFIG_PATH and DEFAULT_CONFIG_PATH.exists():
-            try:
-                with DEFAULT_CONFIG_PATH.open(encoding="utf-8") as handle:
-                    data = json.load(handle)
-                if isinstance(data, dict):
-                    try:
-                        LOG_DIR.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(DEFAULT_CONFIG_PATH, USER_CONFIG_PATH)
-                        logging.info("Initialized user config from %s to %s", DEFAULT_CONFIG_PATH, USER_CONFIG_PATH)
-                    except OSError:
-                        pass
-                    return apply_v2_defaults(data)
-            except Exception as exc:
-                logging.warning("Failed loading template config from %s (%s)", DEFAULT_CONFIG_PATH, exc)
-        logging.info("Config file %s does not exist; using default config", target)
-        return get_default_config()
-    try:
-        with target.open(encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, dict):
-            return apply_v2_defaults(data)
-        logging.warning("Config at %s is not a dictionary; using default config", target)
-        return get_default_config()
-    except (OSError, json.JSONDecodeError, Exception) as exc:
-        logging.warning("Failed loading config from %s (%s); using default config", target, exc)
-        return get_default_config()
+    return load_config_from(target, DEFAULT_CONFIG_PATH if target == USER_CONFIG_PATH else None)
 
 
 def read_saved_config() -> dict | None:

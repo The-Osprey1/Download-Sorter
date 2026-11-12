@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+* **Projects hub (new `projects_hub.py`, `projects_page.py`, RFC #1)**: a new **Projects** page lists project folders with their kind, state and Git status. **Add to hub** puts a junction to the project in `%USERPROFILE%\Projects Hub\<kind>`, so all projects can be opened from one place while staying where they are; **Remove from hub** removes only the junction. **Zip a copy** archives without touching the project.
+* **Route a download to a project (`ribbon_popup.py`, RFC #1)**: when you have projects in the hub, the moved-file ribbon has a **Route** button with a menu of them; picking one moves the file into that project (Undo still works).
+
+### Changed
+* **Signing and a home-built bootloader in the release workflow (`.github/workflows/release.yml`, `packaging/`, issue #9)**: the release build compiles PyInstaller's bootloader on the runner instead of using the prebuilt one antivirus engines flag, and signs the setup file with SignPath (`SignPath/github-action-submit-signing-request@v3`) once the SignPath variables and secret are set; until then signing is skipped. Winget manifest templates and the signing setup steps are in `packaging/`. The SignPath account, the winget submission and the Norton and Microsoft reports still need the maintainer.
+* **One settings loader (`sorter.py`, `config_manager.py`, RFC #2)**: the watcher and the window now load settings the same way. Before, a damaged settings file made the window fall back to its backup but the watcher to the built-in defaults, so it sorted without your rules.
+* **Tray icon on Qt (new `tray_qt.py`, `tray.py`, RFC #2)**: the tray uses PySide6's system tray, like the rest of the app, and pystray is no longer a dependency. The menu and its behaviour are unchanged. The ribbon and the quick switcher still use Tk.
+
+### Fixed
+* **Dragging a file out now works in every app (`batch_handoff.py`, issue #28)**: the drag object from the quick switcher and the recent-files shelf carried only the shell's own item list, which Explorer reads but browsers, chat apps and slicers do not. It now also carries the standard file list (CF_HDROP).
+
 ## [2.5.0] - Unreleased
 
 ### Added

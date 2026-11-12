@@ -56,49 +56,12 @@ def validate_sorter_config(config: Any) -> bool:
 
 
 def load_sorter_config(config_path: Path | str | None = None) -> dict[str, Any]:
-    """Load sorter configuration with fallback to .bak and safe defaults on corruption."""
+    """Load the settings: the same loader the watcher uses (sorter.load_config_from), so the
+    window and the sorter always agree, including falling back to the .bak copy."""
+    import sorter
+
     target = Path(config_path) if config_path else SORTER_CONFIG_FILE
-
-    # 1. Primary config attempt
-    if target.exists():
-        try:
-            raw = target.read_text(encoding="utf-8")
-            if raw.strip():
-                data = json.loads(raw)
-                if isinstance(data, dict) and "keyword_rules" in data and "extension_rules" in data:
-                    return apply_v2_defaults(data)
-        except Exception:
-            pass
-
-    # 2. Backup .bak fallback
-    bak_path = target.with_name(target.name + ".bak")
-    if bak_path.exists():
-        try:
-            raw_bak = bak_path.read_text(encoding="utf-8")
-            if raw_bak.strip():
-                bak_data = json.loads(raw_bak)
-                if isinstance(bak_data, dict) and "keyword_rules" in bak_data:
-                    return apply_v2_defaults(bak_data)
-        except Exception:
-            pass
-
-    # 3. Fallback to repo template if user config in AppData doesn't exist yet
-    if config_path is None and DEFAULT_CONFIG_PATH.exists():
-        try:
-            raw_tmpl = DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
-            if raw_tmpl.strip():
-                tmpl_data = json.loads(raw_tmpl)
-                if isinstance(tmpl_data, dict) and "keyword_rules" in tmpl_data:
-                    try:
-                        save_sorter_config(tmpl_data, config_path=target)
-                    except Exception:
-                        pass
-                    return apply_v2_defaults(tmpl_data)
-        except Exception:
-            pass
-
-    # 4. Safe fallback defaults
-    return copy.deepcopy(DEFAULT_SORTER_CONFIG)
+    return sorter.load_config_from(target, DEFAULT_CONFIG_PATH if config_path is None else None)
 
 
 def _backup_v1_config(target: Path) -> None:

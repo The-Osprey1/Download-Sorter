@@ -38,7 +38,6 @@ classifiers = [
 ]
 dependencies = [
     "watchdog>=6.0.0",
-    "pystray>=0.19.5",
     "pillow>=12.0.0",
     "PySide6>=6.8.0",
     "defusedxml>=0.7.1",
@@ -86,6 +85,9 @@ py-modules = [
     "onboarding",
     "main",
     "problem_report",
+    "projects_hub",
+    "projects_page",
+    "tray_qt",
     "quick_switcher",
     "refile",
     "remodel",
