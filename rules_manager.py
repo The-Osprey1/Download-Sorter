@@ -2194,6 +2194,7 @@ class RulesManagerDialog(QDialog):
 
         self._settings_widget = SettingsWidget(config=self._config, parent=self)
         self._settings_widget.persona_changed.connect(self._on_profile_changed)
+        self._settings_widget.projects_page_toggled.connect(self._show_projects_nav)
         self._view_stack.addWidget(self._padded(self._settings_widget))
 
         from projects_page import ProjectsWidget
@@ -2543,6 +2544,15 @@ class RulesManagerDialog(QDialog):
         else:
             self.close()
 
+    def _show_projects_nav(self, shown: bool) -> None:
+        """The Projects page is for people with project folders; the welcome choice or Settings hides it."""
+        btn = self._nav_buttons.get("projects")
+        if btn is None:
+            return
+        btn.setVisible(bool(shown))
+        if not shown and btn.isChecked():
+            self.switch_view("home")
+
     def _on_profile_changed(self, persona_id: str) -> None:
         """Settings changed the profile (which may add rules): reload and re-apply."""
         self.load_data()
@@ -2568,6 +2578,7 @@ class RulesManagerDialog(QDialog):
     def load_data(self) -> None:
         """Load persistent config and active project state into UI."""
         self._config = suite_data.load_sorter_config()
+        self._show_projects_nav(self._config.get("show_projects_page", True))
         self._loaded_rule_names = {str(r.get("name") or "").lower() for r in self._config.get("keyword_rules", [])}
         self._keyword_table.load_rules(self._config.get("keyword_rules", []))
         self._extension_table.load_rules(self._config.get("extension_rules", []))
