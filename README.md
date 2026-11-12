@@ -1,6 +1,6 @@
 # Download Sorter
 
-> **Made by Devyn Fidel (2026)** · v2.5.0 · [MIT License](LICENSE)
+> **Made by Devyn Fidel (2026)** · v2.6.0 · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
@@ -17,7 +17,7 @@
 
 ## Get it
 
-1. **Download** the installer, `DownloadSorter-Setup-v2.5.0-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
+1. **Download** the installer, `DownloadSorter-Setup-v2.6.0-windows-x64.exe`, from the [latest release](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
 2. **Run it.** Windows will probably show a blue "Windows protected your PC" screen the first time. [Here's why, and what to click](#windows-protected-your-pc).
    - It installs just for you, in `%LOCALAPPDATA%\Programs\DownloadSorter`. No administrator password is needed.
    - It adds Start menu and desktop shortcuts, and an entry in Installed apps.
@@ -145,7 +145,7 @@ To check that your download is exactly what was published:
 2. Run this in PowerShell, in the folder where the installer is:
 
    ```powershell
-   Get-FileHash .\DownloadSorter-Setup-v2.5.0-windows-x64.exe -Algorithm SHA256
+   Get-FileHash .\DownloadSorter-Setup-v2.6.0-windows-x64.exe -Algorithm SHA256
    ```
 
 3. The long code it prints should match the line for the installer in `checksums.txt`.
@@ -169,7 +169,7 @@ All the source code is in this repository, and the installer is built from it by
 - **Uninstall:** go to Windows Settings, then Apps, then Installed apps, then Download Sorter, then Uninstall. It asks whether to also delete your rules and history.
 - **Something went wrong?** Right-click the tray icon and choose **Report a problem...** (also in Settings → About). It opens a [bug report](https://github.com/The-Osprey1/Download-Sorter/issues/new?template=bug_report.yml) with your version and Windows version filled in. If you can, attach `sorter.log` from **Open log folder** (look it over first: it contains file names).
 
-*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.5.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
+*Unattended install, for IT folks:* `DownloadSorter-Setup-v2.6.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
 
 ---
 
@@ -182,11 +182,12 @@ With the **3D Printing, CAD & CNC** profile, stray CAD and 3D files (e.g. `.stl`
 ## Features in detail
 
 ### 1. The Download Sorter window (`rules_manager.py`, `onboarding.py`)
-A dark-mode window built with **PySide6**. A sidebar switches between four pages:
+A dark-mode window built with **PySide6**. A sidebar switches between five pages:
 * **Home**: whether sorting is on, **Sort Downloads now**, **Undo last sort**, pause and resume, and the files sorted most recently.
 * **Rules**: **Name rules** (words in a file's name, checked top to bottom) and **File types** (by extension). Add ready-made rules from the **rule library**, import or export them, and use **Try a filename** to see where a file would go before you save. With the 3D printing profile, **Project mode** sends all CAD, 3D and CNC downloads to one project folder for a while.
 * **Clean up a folder**: preview how a messy folder would be organized, choose **Organize by file type**, **Keep intact** or **Skip for now** for each folder inside it, then apply. Everything can be undone.
-* **Settings**: your profile, starting with Windows, the right-click menu, zip handling, and version information.
+* **Projects**: lists project folders (code, CAD, coursework) with their state. **Add to hub** makes a shortcut folder to a project under `Projects Hub` without moving it, and lets a sorted file's ribbon **Route** the file into that project. Hidden when you pick **Everyday files** in setup; turn it on in Settings.
+* **Settings**: the folder to sort, your profile, starting with Windows, the right-click menu, zip handling, your own names for type folders, folders that should not collect files, 3D printing options, and version information.
 * **Learning (on, turn it off in Settings)**: Download Sorter learns from the files you move into your own folders inside Downloads: the words in their names, their type and the website they came from. After 3 similar moves it asks before adding a rule, and never moves a file on a guess. "See what it has learned" shows how often its guesses would have been right. Nothing is sent anywhere, and "Forget everything" deletes it.
 
 Changes to rules are saved with schema checks, a `config.json.bak` backup and an atomic file replace.
@@ -194,7 +195,7 @@ Changes to rules are saved with schema checks, a `config.json.bak` backup and an
 ```powershell
 # Open the window
 download-sorter-gui
-# Or open a page directly: home, rules, remodel (Clean up a folder) or settings
+# Or open a page directly: home, rules, remodel (Clean up a folder), projects or settings
 download-sorter-gui --tab remodel
 ```
 
