@@ -282,6 +282,29 @@ def load_model() -> Model:
     return Model(data)
 
 
+_MODEL_CACHE: tuple[tuple, "Model"] | None = None
+
+
+def _cached_model() -> "Model":
+    """The learned model, re-read only when learning.json changes on disk.
+
+    For read-only use (predicting what it would suggest): one sorted file must not
+    re-parse the whole model. Callers that change the model use load_model().
+    """
+    global _MODEL_CACHE
+    target = _learning_file()
+    try:
+        st = target.stat()
+    except OSError:
+        return load_model()
+    signature = (str(target), st.st_mtime_ns, st.st_size)
+    if _MODEL_CACHE is not None and _MODEL_CACHE[0] == signature:
+        return _MODEL_CACHE[1]
+    model = load_model()
+    _MODEL_CACHE = (signature, model)
+    return model
+
+
 def save_model(model: Model) -> None:
     try:
         _write_json_atomic(_learning_file(), model.to_dict())
@@ -289,28 +312,49 @@ def save_model(model: Model) -> None:
         logging.debug("Could not save learning data: %s", exc)
 
 
+_LOG_COUNT: tuple[str, int] | None = None  # (log path, lines as this process last counted them)
+
+
 def _append_log(record: dict) -> None:
+    global _LOG_COUNT
     target = _log_file()
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
-        _trim_log(target)
+        # Count lines in memory: the file is only read when it really has to be trimmed,
+        # not on every sorted file.
+        if _LOG_COUNT is None or _LOG_COUNT[0] != str(target):
+            _LOG_COUNT = (str(target), _count_lines(target))
+        else:
+            _LOG_COUNT = (str(target), _LOG_COUNT[1] + 1)
+        if _LOG_COUNT[1] > MAX_LOG_LINES:
+            _LOG_COUNT = (str(target), _trim_log(target))
     except OSError as exc:
         logging.debug("Could not write learning log: %s", exc)
 
 
-def _trim_log(target: Path) -> None:
+def _count_lines(target: Path) -> int:
+    try:
+        with target.open("r", encoding="utf-8", errors="ignore") as handle:
+            return sum(1 for _ in handle)
+    except OSError:
+        return 0
+
+
+def _trim_log(target: Path) -> int:
+    """Keep the newest KEEP_LOG_LINES lines. Returns how many lines the log now has."""
     try:
         lines = target.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= MAX_LOG_LINES:
+            return len(lines)
+        kept_lines = lines[-KEEP_LOG_LINES:]
+        temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+        temp.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+        os.replace(temp, target)
+        return len(kept_lines)
     except OSError:
-        return
-    if len(lines) <= MAX_LOG_LINES:
-        return
-    kept = "\n".join(lines[-KEEP_LOG_LINES:]) + "\n"
-    temp = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
-    temp.write_text(kept, encoding="utf-8")
-    os.replace(temp, target)
+        return _count_lines(target)
 
 
 def read_log() -> list[dict]:
@@ -648,7 +692,7 @@ def observe_sorted(dest: Path, root: Path, config: dict) -> dict | None:
     if not is_enabled(config):
         return None
     with _LOCK:
-        model = load_model()
+        model = _cached_model()
         if not model.folders:
             return None
         guesses = model.predict(features(Path(dest)))

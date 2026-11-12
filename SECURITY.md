@@ -13,10 +13,10 @@ Download Sorter is built on the principle of **strict data privacy**:
 
 ## 🛡️ Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 2.3.x   | :white_check_mark: |
-| < 2.3   | :x:                |
+| Version | Supported |
+| ------- | --------- |
+| Latest release | :white_check_mark: |
+| Older releases | :x: |
 
 Download Sorter is in beta. Fixes go into the newest version only, and the app offers to update itself (Home → **Download and install**).
 

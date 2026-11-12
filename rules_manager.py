@@ -14,6 +14,7 @@ import copy
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -210,6 +211,25 @@ class PresetLibraryDialog(QDialog):
 
     def get_selected_preset_ids(self) -> list[str]:
         return list(self._selected_preset_ids)
+
+
+def _parse_sites(text: str) -> list[str]:
+    """"https://www.MakerWorld.com/models, printables.com" -> ["makerworld.com", "printables.com"].
+
+    Website rules match on the bare domain (sorter.py compares the download's host with it),
+    so a scheme, a path and a leading "www." are dropped here.
+    """
+    found: list[str] = []
+    for piece in text.split(","):
+        host = piece.strip().lower()
+        if not host:
+            continue
+        host = re.sub(r"^[a-z]+://", "", host).split("/")[0].split(":")[0].rstrip(".")
+        if host.startswith("www."):
+            host = host[4:]
+        if host and host not in found:
+            found.append(host)
+    return found
 
 
 # =====================================================================

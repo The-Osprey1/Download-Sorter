@@ -85,10 +85,11 @@ def test_duplicate_is_quarantined_not_deleted_and_undo_restores_it(downloads, co
 
     result = sorter.move_file(dup, config, batch_id="dup1", check_age=False)
 
-    assert result == downloads / "Documents" / "PDF" / "report.pdf"
     assert not dup.exists()
     parked = list((downloads / sorter.DUPLICATES_DIR_NAME).rglob("report.pdf"))
     assert len(parked) == 1, "duplicate must be kept in _Duplicates, not deleted"
+    # The return value is where the duplicate went, not the file it matched.
+    assert result == parked[0]
 
     batch = [r for r in _active_moves() if r.get("batch_id") == "dup1"]
     assert batch and batch[-1]["op"] == "quarantine"

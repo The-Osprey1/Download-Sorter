@@ -57,7 +57,8 @@ def get_watcher_process() -> tuple[int | None, float | None]:
     """Return (pid, memory_mb) of the active background watcher if running."""
     try:
         import subprocess
-        ps_script = "Get-Process pythonw -ErrorAction SilentlyContinue | Where-Object { $_.Path -match 'download-sorter' } | Select-Object -Last 1 Id, WorkingSet64 | ConvertTo-Json"
+        # Both the source run (pythonw) and the packaged DownloadSorter.exe.
+        ps_script = "Get-Process pythonw,DownloadSorter -ErrorAction SilentlyContinue | Where-Object { $_.Path -match 'download-sorter' } | Select-Object -Last 1 Id, WorkingSet64 | ConvertTo-Json"
         res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True)
         out = res.stdout.strip()
         if out:
@@ -114,11 +115,21 @@ def check_context_menu() -> bool:
         return False
 
 
-def get_reclaimable_space(root: Path, days: float = 30.0) -> tuple[int, int]:
+def get_reclaimable_space(root: Path, days: float | None = None) -> tuple[int, int]:
+    """Old files that the daily clean-up would send to the Recycle Bin: the folders and
+    age come from Settings (cleanup), so this matches what will actually be moved."""
     from clean_old import find_old_files, folder_path
+    from sorter import load_config
+    cfg = load_config()
+    block = cfg.get("cleanup") if isinstance(cfg.get("cleanup"), dict) else {}
+    if days is None:
+        days = float(block.get("days", 30) or 30)
+    names = block.get("folders") or ["Installers", "Archives"]
+    rule_folders = {str(r.get("name") or "").lower(): str(r.get("folder") or "")
+                    for r in cfg.get("extension_rules", []) if isinstance(r, dict)}
     candidates = []
-    for folder in ["Installers", "Archives"]:
-        d = folder_path(root, folder)
+    for name in names:
+        d = folder_path(root, rule_folders.get(str(name).lower()) or str(name))
         candidates.extend(find_old_files(d, days))
     total_bytes = sum(size for _, _, size in candidates)
     return len(candidates), total_bytes
@@ -175,7 +186,7 @@ def main() -> int:
 
     # Watcher Settings
     min_age = config.get("watch", {}).get("min_age_minutes", 0)
-    auto_3d = config.get("watch", {}).get("auto_unpack_3d_zips", True)
+    auto_3d = config.get("watch", {}).get("auto_unpack_3d_zips", False)
     auto_unzip = config.get("watch", {}).get("auto_unzip", config.get("auto_unzip", False))
     extracted_dest = config.get("extracted_destination", "Extracted")
     print(f"  Grace Period:        {min_age} minute(s)")

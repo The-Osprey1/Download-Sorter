@@ -154,6 +154,15 @@ def test_fetch_never_links_outside_github(monkeypatch):
 # Where the user sees it
 # ---------------------------------------------------------------------------
 
+def _close_widget(qapp, widget) -> None:
+    from PySide6.QtCore import QEvent
+
+    widget.close()
+    widget.deleteLater()
+    qapp.processEvents()
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+
+
 def test_home_shows_the_notice(qapp, monkeypatch, checks_on, tmp_path):
     pytest.importorskip("PySide6")
     import config_manager
@@ -174,7 +183,7 @@ def test_home_shows_the_notice(qapp, monkeypatch, checks_on, tmp_path):
         assert "Download Sorter 99.0.0 is available" in home._update_banner.text()
         assert home._update_banner.action_text() == "Download"
     finally:
-        home.close()
+        _close_widget(qapp, home)
 
 
 def test_settings_switch_saves_the_choice(qapp, monkeypatch):
@@ -188,7 +197,7 @@ def test_settings_switch_saves_the_choice(qapp, monkeypatch):
         widget._chk_updates.setChecked(False)
         assert saved[-1]["update_check"]["enabled"] is False
     finally:
-        widget.close()
+        _close_widget(qapp, widget)
 
 
 def test_tray_tooltip_stays_within_the_windows_limit(monkeypatch, checks_on):
@@ -242,7 +251,7 @@ def test_home_offers_the_right_button(qapp, monkeypatch, tmp_path, self_update, 
         home._on_update_ready(dict(_FULL_RELEASE))
         assert home._update_banner.action_text() == label
     finally:
-        home.close()
+        _close_widget(qapp, home)
 
 
 def test_home_shows_progress_then_ready(qapp, monkeypatch, tmp_path):
@@ -264,7 +273,7 @@ def test_home_shows_progress_then_ready(qapp, monkeypatch, tmp_path):
         assert home._update_banner.action_text() == "Restart and install"
         assert not home._update_bar.isVisible()
     finally:
-        home.close()
+        _close_widget(qapp, home)
 
 
 def test_home_falls_back_to_the_browser_on_failure(qapp, monkeypatch, tmp_path):
@@ -283,7 +292,7 @@ def test_home_falls_back_to_the_browser_on_failure(qapp, monkeypatch, tmp_path):
         home._on_update_finished(None, "cancelled")
         assert home._update_banner.action_text() == "Download and install", "cancel goes back to the offer"
     finally:
-        home.close()
+        _close_widget(qapp, home)
 
 
 def test_restart_and_install_hands_over_and_closes(qapp, monkeypatch, tmp_path):
@@ -302,7 +311,7 @@ def test_restart_and_install_hands_over_and_closes(qapp, monkeypatch, tmp_path):
         assert started == [tmp_path / "setup.exe"]
         assert quits == [1]
     finally:
-        home.close()
+        _close_widget(qapp, home)
 
 
 def test_restart_and_install_failure_keeps_the_window_open(qapp, monkeypatch, tmp_path):
@@ -324,7 +333,7 @@ def test_restart_and_install_failure_keeps_the_window_open(qapp, monkeypatch, tm
         assert quits == []
         assert home._update_banner.action_text() == "Open download page"
     finally:
-        home.close()
+        _close_widget(qapp, home)
 
 
 def test_fetch_includes_the_installer_files(monkeypatch):
