@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QRadioButton,
     QSpinBox,
     QProgressBar,
     QScrollArea,
@@ -384,6 +385,40 @@ class SorterMascotWidget(QWidget):
 # 2. WelcomeWizardDialog (3-Step Guided Setup)
 # ============================================================================
 
+# What the person mostly downloads, asked in the first welcome step. It decides which
+# folders start ticked and which pages show, so someone sorting bank statements and photos
+# is not shown 3D printing and project tools.
+USE_PROFILES: list[tuple[str, str, str]] = [
+    ("everyday", "Everyday files", "Documents, pictures, music, installers"),
+    ("maker", "3D printing", "3D printing, CAD and CNC. Adds the 3D Models and CAD folders, and the Projects page"),
+    ("developer", "Software", "Writing software. Adds the Projects page for code folders"),
+]
+MAKER_CATEGORY_FOLDERS = ("3d models", "cad")
+
+
+def suggested_use(scan: dict[str, Any], config: dict[str, Any]) -> str:
+    """The choice to start on: the saved one, 3D printing when such files are already there, else everyday."""
+    saved = str(config.get("use_profile") or "")
+    if saved in {use for use, _text, _hint in USE_PROFILES}:
+        return saved
+    if int(scan.get("maker_files", 0) or 0) >= 3 or config.get("show_maker_features"):
+        return "maker"
+    return "everyday"
+
+
+def apply_use_profile(config: dict[str, Any], use: str) -> dict[str, Any]:
+    """Record the choice and switch the maker tools and the Projects page to match it."""
+    config["use_profile"] = use
+    config["show_maker_features"] = use == "maker"
+    config["show_projects_page"] = use in ("maker", "developer")
+    return config
+
+
+def projects_page_shown(config: dict[str, Any]) -> bool:
+    """Shown unless a choice turned it off: installs from before the choice existed keep the page."""
+    return bool(config.get("show_projects_page", True)) if isinstance(config, dict) else True
+
+
 class WelcomeWizardDialog(QDialog):
     """3-step first-run wizard: the folders already in Downloads, how it works, and system setup."""
 
@@ -400,6 +435,7 @@ class WelcomeWizardDialog(QDialog):
         self._folder_checks: dict[str, QCheckBox] = {}
         self._category_checks: dict[str, QCheckBox] = {}
         self._starter_checks: dict[str, QCheckBox] = {}
+        self._use_buttons: dict[str, QRadioButton] = {}
 
         # Step 1 is built from the folders already in Downloads (folder_scan.py).
         scan_config = self._config if self._config.get("extension_rules") else (
@@ -520,10 +556,26 @@ class WelcomeWizardDialog(QDialog):
         layout.setContentsMargins(0, 8, 0, 8)
         layout.setSpacing(10)
 
+        # The step's title and the choice share a line, so the step still fits 640 px of height.
         folders = self._scan.get("folders", [])
+        use_row = QHBoxLayout()
+        use_row.setSpacing(8)
+        use_row.addWidget(ui_style.label("Your folders" if folders else "Pick your folders", "title"))
+        use_row.addStretch()
+        use_row.addWidget(ui_style.label("I mostly download:", "muted"))
+        start_use = suggested_use(self._scan, self._config)
+        for use, text, hint in USE_PROFILES:
+            btn = QRadioButton(text)
+            btn.setProperty("role", "segment")
+            btn.setToolTip(hint)
+            btn.setChecked(use == start_use)
+            btn.toggled.connect(lambda checked, u=use: checked and self._on_use_changed(u))
+            use_row.addWidget(btn)
+            self._use_buttons[use] = btn
+        layout.addLayout(use_row)
+
         existing = {str(r.get("folder") or "").lower(): r for r in self._config.get("keyword_rules", [])}
         if folders:
-            layout.addWidget(ui_style.label("Your folders", "title"))
             layout.addWidget(ui_style.label(
                 "These folders are already in your Downloads folder. New files that fit one go "
                 "into it. Untick any you'd rather not use.", "muted", wrap=True))
@@ -550,7 +602,6 @@ class WelcomeWizardDialog(QDialog):
             layout.addWidget(scroll)
             layout.addWidget(ui_style.label("Everything else is sorted by type into:", "muted"))
         else:
-            layout.addWidget(ui_style.label("Pick your folders", "title"))
             layout.addWidget(ui_style.label(
                 "Each kind of file gets its own folder inside Downloads. Untick any you don't "
                 "want; those files go to Other. You can add folders of your own any time.",
@@ -571,6 +622,7 @@ class WelcomeWizardDialog(QDialog):
             seen.add(folder.lower())
             chk = QCheckBox(folder)
             chk.setChecked(bool(rule.get("enabled", True)))
+            chk.setProperty("maker_folder", folder.split("\\")[0].lower() in MAKER_CATEGORY_FOLDERS)
             idx = len(self._category_checks)
             grid.addWidget(chk, idx // 4, idx % 4)
             self._category_checks[name] = chk
@@ -592,7 +644,18 @@ class WelcomeWizardDialog(QDialog):
             layout.addWidget(starter_card)
 
         layout.addStretch()
+        if start_use != "maker":
+            self._on_use_changed(start_use)
         return page
+
+    def chosen_use(self) -> str:
+        return next((use for use, btn in self._use_buttons.items() if btn.isChecked()), "everyday")
+
+    def _on_use_changed(self, use: str) -> None:
+        """The 3D Models and CAD folders are ticked for 3D printing and unticked for the others."""
+        for chk in self._category_checks.values():
+            if chk.property("maker_folder"):
+                chk.setChecked(use == "maker")
 
     def _build_step2_preview(self) -> QWidget:
         page = QWidget()
@@ -782,7 +845,8 @@ class WelcomeWizardDialog(QDialog):
         chosen = [n for n, c in self._folder_checks.items() if c.isEnabled() and c.isChecked()]
         off = [n for n, c in self._category_checks.items() if not c.isChecked()]
         starters = [k for k, c in self._starter_checks.items() if c.isChecked()]
-        return folder_scan.apply_scan(self._config, self._scan, chosen, off, starters)
+        return apply_use_profile(
+            folder_scan.apply_scan(self._config, self._scan, chosen, off, starters), self.chosen_use())
 
     def _confirm_first_sort(self, plan: list) -> bool:
         """Ask before the first big sort. True = sort them now."""
@@ -2068,6 +2132,7 @@ class SettingsWidget(QWidget):
     """Settings page: profile, Windows integration, zip handling, and About."""
 
     persona_changed = Signal(str)
+    projects_page_toggled = Signal(bool)
 
     def __init__(self, config: dict[str, Any] | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -2076,6 +2141,10 @@ class SettingsWidget(QWidget):
         )
         self._init_ui()
         self.refresh_data()
+
+    def _on_projects_page_toggled(self, checked: bool) -> None:
+        self._update_config(lambda cfg: cfg.__setitem__("show_projects_page", bool(checked)))
+        self.projects_page_toggled.emit(bool(checked))
 
     def _section(self, layout: QVBoxLayout, title: str, description: str = "") -> QVBoxLayout:
         frame, body = ui_style.card(spacing=10)
@@ -2144,6 +2213,10 @@ class SettingsWidget(QWidget):
         self._btn_rerun_tour.clicked.connect(self._on_rerun_tour)
         row.addWidget(self._btn_rerun_tour)
         profile.addLayout(row)
+
+        self._chk_projects_page = QCheckBox("Show the Projects page (for code, CAD and other project folders)")
+        self._chk_projects_page.toggled.connect(self._on_projects_page_toggled)
+        profile.addWidget(self._chk_projects_page)
 
         windows = self._section(layout, "Windows")
         self._chk_startup = QCheckBox("Start Download Sorter when I sign in")
@@ -2394,6 +2467,9 @@ class SettingsWidget(QWidget):
             chk.blockSignals(False)
         self._refresh_watch_folder()
         self._chk_by_designer.blockSignals(True)
+        self._chk_projects_page.blockSignals(True)
+        self._chk_projects_page.setChecked(projects_page_shown(self._config))
+        self._chk_projects_page.blockSignals(False)
         self._chk_by_designer.setChecked(bool(self._config.get("makerworld_by_designer")))
         self._chk_by_designer.blockSignals(False)
         for spin, block_name, name, default in (

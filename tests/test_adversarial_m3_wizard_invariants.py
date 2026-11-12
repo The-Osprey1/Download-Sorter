@@ -178,7 +178,8 @@ class TestWelcomeWizardNavigationTransitions:
             assert checks["Invoices"].isChecked() and checks["Music"].isChecked()
             assert not checks["Odds and ends"].isEnabled()
             assert len(dlg._category_checks) == len(sorter.DEFAULT_CONFIG["extension_rules"])
-            assert all(c.isChecked() for c in dlg._category_checks.values())
+            # Everyday files is the starting choice here, so the 3D Models and CAD folders start unticked.
+            assert all(c.isChecked() != bool(c.property("maker_folder")) for c in dlg._category_checks.values())
             assert list(dlg._starter_checks) == ["school_sites"], \
                 "only the course-websites folder when Downloads already has folders"
             assert "found 2 folders" in dlg._mascot_speech_lbl.text()
