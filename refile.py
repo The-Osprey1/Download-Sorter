@@ -153,7 +153,7 @@ def rule_draft_for(filename: str, dest_dir: Path | str, root: Path | str | None)
         name = "My rule"
     return {
         "name": name,
-        "folder": where(dest_dir, root),
+        "folder": where(dest_dir, root) if str(dest_dir) else "",  # "" when there is no folder yet
         "match": [word] if word else [],
         "extensions": [extension] if extension else [],
         "enabled": True,

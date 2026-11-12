@@ -326,15 +326,24 @@
     ]
   },
   "photos": {
-    "by_month": false
+    "by_month": false,
+    "split_by_kind": true
   },
   "pdf_text": {
     "enabled": false,
     "max_mb": 10
   },
+  "desktop_sweep": {
+    "enabled": false,
+    "days": 7
+  },
   "bambu_recent": {
     "enabled": false,
     "asked": false
+  },
+  "shelf": {
+    "enabled": true,
+    "hotkey": "Ctrl+Shift+Space"
   },
   "rename": {
     "tidy": false,

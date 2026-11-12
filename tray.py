@@ -520,6 +520,15 @@ def main() -> int:
     SERVICE_DISABLED_FILE.unlink(missing_ok=True)
     logging.info("Download Sorter tray starting (PID %s)", os.getpid())
     write_runtime_state("starting", "tray initializing")
+    shelf_cfg = config.get("shelf") if isinstance(config.get("shelf"), dict) else {}
+    if shelf_cfg.get("enabled", True):
+        spec = str(shelf_cfg.get("hotkey") or "Ctrl+Shift+Space")
+        try:
+            import hotkey
+            if not hotkey.start(lambda: spawn_window("--shelf"), spec=spec):
+                logging.info("Recent-files shortcut (%s) not registered", spec)
+        except Exception:
+            logging.exception("Could not start the recent-files shortcut")
     try:
         result = SorterTray(wait_for_setup=first_run).run()
     except BaseException as exc:

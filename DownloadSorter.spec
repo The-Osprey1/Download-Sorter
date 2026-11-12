@@ -67,6 +67,15 @@ hidden_imports = [
     'bambu_recent',
     'kits',
     'zip_members',
+    'desktop_sweep',
+    'hotkey',
+    'pdf_content',
+    'photo_kind',
+    'prints',
+    'rule_check',
+    'setup_export',
+    'shelf',
+    'space_report',
 ]
 
 a = Analysis(

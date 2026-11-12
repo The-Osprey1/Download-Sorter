@@ -33,6 +33,8 @@ Tick these off as you go. You don't have to do them all, and anything that surpr
 
 - [ ] Use your PC as normal. Did any file end up somewhere you didn't expect?
 - [ ] Move 3 similar files (for example, 3 bank statements) into one of your own folders inside Downloads. Did a ribbon ask "Put files like this in ...?" Was the question clear?
+- [ ] A file went to the wrong folder? On **Home**, open the **...** menu on its row in **Recently sorted** and try **Put back where it was**, **Move to...** or **Always file like this...**. Did each do what its name says?
+- [ ] On **Rules**, type a file name that no rule matches into **Try a filename**, click **Make a rule for this...**, pick a folder and click **Save changes**. Did that name then go where you chose?
 - [ ] Restart your PC. Did Download Sorter start again by itself (if you chose that)?
 - [ ] If a new version comes out during the test: did **Download and install** on Home work, and were your rules kept?
 

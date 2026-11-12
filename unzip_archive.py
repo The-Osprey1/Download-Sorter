@@ -197,6 +197,35 @@ def _publish_staging(staging: Path, extract_dir: Path) -> None:
     shutil.rmtree(staging, ignore_errors=True)
 
 
+SINGLE_ITEM_EXTENSIONS = {
+    ".pdf", ".ttf", ".otf", ".woff", ".woff2",
+    ".stl", ".3mf", ".step", ".stp", ".f3d", ".obj",
+}
+
+
+def _file_single_item(extract_dir: Path, extracted: Path, config: dict, downloads: Path, batch_id: str) -> Path | None:
+    """A zip holding just one PDF, font or model goes straight to the folder that file belongs in,
+    instead of a folder of its own under Extracted. Code and CAD projects (several files) stay together.
+    Returns the new location, or None when the file was left where it was."""
+    import shutil
+    import sorter
+    import safe_ops
+
+    if extracted.suffix.lower() not in SINGLE_ITEM_EXTENSIONS or not extracted.is_file():
+        return None
+    route = sorter.evaluate_routing(extracted.name, config, file_path=extracted)
+    destination = sorter.folder_path(downloads, str(route.get("destination") or "Other"))
+    target = unique_destination(destination, extracted.name)
+    try:
+        safe_ops.move(extracted, target, batch_id=batch_id, settle_seconds=0.0, honor_keep=False, skip_preflight=True)
+    except Exception as exc:
+        logging.warning("Kept %s in Extracted (%s)", extracted.name, exc)
+        return None
+    shutil.rmtree(extract_dir, ignore_errors=True)
+    logging.info("Single file from a zip filed as %s", target)
+    return target
+
+
 def unpack_archive(
     archive_path: Path,
     config: dict | None = None,
@@ -343,6 +372,12 @@ def unpack_archive(
                 raise
 
             logging.info("Extracted %d file(s) to %s", len(entries_to_extract), dest_display)
+
+        # A zip with just one PDF, font or model: file that item where it belongs.
+        if not dry_run and not active_proj and target_folder is None and len(entries_to_extract) == 1:
+            filed = _file_single_item(extract_dir, entries_to_extract[0][1], config, downloads, batch_id)
+            if filed is not None:
+                extract_dir = filed.parent
 
         # Move original zip to Archives (undoable: Undo brings the zip back)
         if not dry_run:

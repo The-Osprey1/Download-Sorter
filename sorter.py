@@ -82,9 +82,11 @@ V2_DEFAULTS: dict = {
     # Optional extras, all off unless the user turns them on in Settings:
     # pictures into a folder per month, rule words found inside PDFs, and
     # tidier file names (Undo always puts the old name back).
-    "photos": {"by_month": False},
+    "photos": {"by_month": False, "split_by_kind": True},
     "pdf_text": {"enabled": False, "max_mb": 10},
+    "desktop_sweep": {"enabled": False, "days": 7},
     "bambu_recent": {"enabled": False, "asked": False},
+    "shelf": {"enabled": True, "hotkey": "Ctrl+Shift+Space"},
     "rename": {"tidy": False, "add_date": False},
     # Once a day, ask GitHub which version is newest (see update_check.py).
     "update_check": {"enabled": True},
@@ -273,6 +275,12 @@ def apply_v2_defaults(config: dict) -> dict:
     learning_block = config.get("learning")
     if isinstance(learning_block, dict) and "suggest" not in learning_block:
         learning_block["enabled"] = True
+    # Upgraded installs keep existing image routing until the user opts in under Experimental.
+    photos_block = config.get("photos")
+    if isinstance(photos_block, dict) and "split_by_kind" not in photos_block:
+        photos_block["split_by_kind"] = False
+    elif config.get("onboarding_completed") and "photos" not in config:
+        config["photos"] = {"by_month": False, "split_by_kind": False}
     for key, default in V2_DEFAULTS.items():
         if key not in config:
             config[key] = copy.deepcopy(default)
@@ -1122,6 +1130,7 @@ def is_managed_path(path: Path, root: Path, folders: list[str]) -> bool:
     return any(top.lower() == split_folder(folder)[0].lower() for folder in folders)
 
 
+PHOTO_KIND_EXTENSIONS = frozenset({".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp", ".tif", ".tiff"})
 KIT_FILE_EXTENSIONS = frozenset({".stl", ".step", ".stp", ".pdf"})
 
 
@@ -1949,6 +1958,41 @@ def evaluate_routing(
                 "match_type": "makerworld_kit",
                 "winning_rule": f"MakerWorld model ({kit_name})",
                 "matched_trigger": f"downloaded from MakerWorld model '{kit_name}'",
+                "is_active_project": False,
+                "sniffer_details": None,
+                "rule_trace": rule_trace,
+            }
+
+    # --- Tier 3.7: PDFs told apart by their first page (opt-in, needs pypdf) ---
+    if ext == ".pdf" and file_path is not None and _option(config, "pdf_text", "enabled"):
+        import pdf_content
+        content_folder = pdf_content.folder_for_text(head_of_pdf())
+        if content_folder:
+            rule_trace.append({"tier": "pdf_content", "status": "matched", "destination": content_folder})
+            return {
+                "destination": content_folder,
+                "match_type": "pdf_content",
+                "winning_rule": f"PDF content ({content_folder})",
+                "matched_trigger": "words on the first page",
+                "is_active_project": False,
+                "sniffer_details": None,
+                "rule_trace": rule_trace,
+            }
+
+    # --- Tier 3.8: camera photos and screenshots kept apart (Images) ---
+    if file_path is not None and _option(config, "photos", "split_by_kind") and ext in PHOTO_KIND_EXTENSIONS:
+        import photo_kind
+        kind = photo_kind.image_kind(Path(file_path))
+        if kind:
+            kind_folder = "Images\\Camera" if kind == "camera" else "Images\\Screenshots"
+            if kind == "camera" and _option(config, "photos", "by_month"):
+                kind_folder = f"{kind_folder}\\{photo_month(Path(file_path))}"
+            rule_trace.append({"tier": "photo_kind", "status": "matched", "destination": kind_folder})
+            return {
+                "destination": kind_folder,
+                "match_type": "photo_kind",
+                "winning_rule": f"Photos ({kind})",
+                "matched_trigger": f"{kind} photo",
                 "is_active_project": False,
                 "sniffer_details": None,
                 "rule_trace": rule_trace,

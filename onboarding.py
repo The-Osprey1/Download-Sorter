@@ -1358,8 +1358,15 @@ class HomeDashboardWidget(QWidget):
         query = self._filter_edit.text().strip().lower()
         if not query:
             return list(self._records)
+        # 3D print files also match on their print details (printer, filament, plates).
+        try:
+            import prints
+            print_names = prints.matching_files(query)
+        except Exception:
+            print_names = set()
         return [r for r in self._records
-                if query in str(r.get("filename", "")).lower() or query in str(r.get("folder", "")).lower()]
+                if query in str(r.get("filename", "")).lower() or query in str(r.get("folder", "")).lower()
+                or str(r.get("filename", "")) in print_names]
 
     def _render_rows(self, new_ids: set[str]) -> list[int]:
         """Fill the table from the loaded records (through the filter). Returns the rows that are new."""
@@ -2118,8 +2125,6 @@ class SettingsWidget(QWidget):
         for key, text in (
             (("photos", "by_month"), "Put pictures into a folder for each month (Images\\2026-11), "
                                      "by the date a photo was taken"),
-            (("pdf_text", "enabled"), "Also look for rule words at the top of PDFs, so a "
-                                      "“document (3).pdf” that says Invoice still goes to Invoices"),
             (("rename", "tidy"), "Tidy file names: “My_File (1).pdf” becomes “My File.pdf”"),
             (("rename", "add_date"), "Put the date in front of file names: “2026-11-09 Invoice.pdf”"),
             (("cleanup", "enabled"), "Move installers and zip files older than 30 days to the Recycle Bin, "
@@ -2129,6 +2134,48 @@ class SettingsWidget(QWidget):
             chk.toggled.connect(lambda checked, k=key: self._on_option_toggled(k, checked))
             extras.addWidget(chk)
             self._option_checks[key] = chk
+
+        experimental = self._section(
+            layout, "Experimental",
+            "New features you can turn on or off here anytime. Existing installs start with these off.",
+        )
+        for key, text in (
+            (("photos", "split_by_kind"), "Keep camera photos and screenshots in separate folders "
+                                          "(Images\\Camera, Images\\Screenshots)"),
+            (("pdf_text", "enabled"), "Look for rule words at the top of PDFs, so a "
+                                      "“document (3).pdf” that says Invoice still goes to Invoices"),
+            (("desktop_sweep", "enabled"), "Move loose files left on the Desktop for 7 days into Downloads"),
+            (("bambu_recent", "enabled"), "Keep Bambu Studio's Recently Opened list pointing at moved .3mf files "
+                                          "(writes to BambuStudio.conf when closed; keeps a backup)"),
+        ):
+            chk = QCheckBox(text)
+            chk.toggled.connect(lambda checked, k=key: self._on_option_toggled(k, checked))
+            experimental.addWidget(chk)
+            self._option_checks[key] = chk
+
+        bambu_row = QHBoxLayout()
+        bambu_row.setSpacing(8)
+        self._btn_restore_bambu = ui_style.button("Restore Bambu Studio backup", "ghost")
+        self._btn_restore_bambu.clicked.connect(self._on_restore_bambu)
+        self._bambu_status_lbl = ui_style.label("", "muted")
+        bambu_row.addWidget(self._btn_restore_bambu)
+        bambu_row.addWidget(self._bambu_status_lbl)
+        bambu_row.addStretch()
+        experimental.addLayout(bambu_row)
+
+        shelf_row = QHBoxLayout()
+        shelf_row.setSpacing(8)
+        chk_shelf = QCheckBox("Recent files shelf shortcut (takes effect next tray start)")
+        chk_shelf.toggled.connect(lambda checked: self._on_option_toggled(("shelf", "enabled"), checked))
+        self._option_checks[("shelf", "enabled")] = chk_shelf
+        self._shelf_hotkey_combo = QComboBox()
+        for spec in ("Ctrl+Shift+Space", "Ctrl+Alt+Space", "Alt+Shift+Space", "Ctrl+Shift+R"):
+            self._shelf_hotkey_combo.addItem(spec, spec)
+        self._shelf_hotkey_combo.currentIndexChanged.connect(self._on_shelf_hotkey_changed)
+        shelf_row.addWidget(chk_shelf)
+        shelf_row.addWidget(self._shelf_hotkey_combo)
+        shelf_row.addStretch()
+        experimental.addLayout(shelf_row)
 
         learn = self._section(
             layout, "Learning",
@@ -2207,9 +2254,25 @@ class SettingsWidget(QWidget):
         for (block_name, key), chk in self._option_checks.items():
             block = self._config.get(block_name)
             chk.blockSignals(True)
-            on_by_default = block_name in ("type_folders", "my_folders")
+            on_by_default = block_name in ("type_folders", "my_folders", "shelf")
             chk.setChecked(bool(block.get(key, on_by_default)) if isinstance(block, dict) else on_by_default)
             chk.blockSignals(False)
+        shelf_block = self._config.get("shelf")
+        hotkey_spec = str(shelf_block.get("hotkey") or "Ctrl+Shift+Space") if isinstance(shelf_block, dict) else "Ctrl+Shift+Space"
+        idx = self._shelf_hotkey_combo.findData(hotkey_spec)
+        if idx < 0:
+            self._shelf_hotkey_combo.addItem(hotkey_spec, hotkey_spec)
+            idx = self._shelf_hotkey_combo.findData(hotkey_spec)
+        self._shelf_hotkey_combo.blockSignals(True)
+        self._shelf_hotkey_combo.setCurrentIndex(max(0, idx))
+        self._shelf_hotkey_combo.blockSignals(False)
+        try:
+            import bambu_recent
+            has_bak = bambu_recent.has_backup()
+        except Exception:
+            has_bak = False
+        self._btn_restore_bambu.setVisible(has_bak)
+        self._bambu_status_lbl.setVisible(False)
         days = _storage_sense_days()
         if days:
             self._storage_sense_lbl.setText(
@@ -2275,6 +2338,20 @@ class SettingsWidget(QWidget):
     def _on_option_toggled(self, key: tuple[str, str], checked: bool) -> None:
         block_name, name = key
         self._update_config(lambda cfg: self._set_option(cfg, block_name, name, bool(checked)))
+
+    def _on_shelf_hotkey_changed(self, index: int) -> None:
+        spec = self._shelf_hotkey_combo.itemData(index)
+        if spec:
+            self._update_config(lambda cfg: self._set_option(cfg, "shelf", "hotkey", str(spec)))
+
+    def _on_restore_bambu(self) -> None:
+        import bambu_recent
+        ok = bambu_recent.restore_backup()
+        self._bambu_status_lbl.setText(
+            "Restored BambuStudio.conf from backup." if ok
+            else "Close Bambu Studio first to restore its settings."
+        )
+        self._bambu_status_lbl.setVisible(True)
 
     def _on_unpack_toggled(self, checked: bool) -> None:
         self._update_config(lambda cfg: _set_auto_unzip(cfg, checked))

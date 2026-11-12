@@ -90,3 +90,49 @@ def test_welcome_wizard_fits_the_promised_size(qapp, real_font, tmp_path, own_fo
         wizard.close()
         wizard.deleteLater()
         qapp.processEvents()
+
+
+def test_clean_up_after_a_scan_of_many_long_folders_still_fits_the_promised_size(window, qapp, tmp_path):
+    import remodel
+
+    long_name = "A folder with a very long name that goes on and on "
+    cards = [
+        remodel.FolderCard(tmp_path / f"{long_name * 3}{index}", "keep_intact", 5, 1.2,
+                           remodel.ProtectionCheck(True, "Python virtual environment detected " * 3), {})
+        for index in range(12)
+    ]
+    plan = remodel.RemodelPlan(
+        remodel_id="fit", target_root=tmp_path, created_at="2026-01-01T00:00:00Z", cards=cards,
+        loose_files_to_organize=[], duplicates_to_quarantine=[], protected_items=[],
+        total_files_scanned=60, reclaimable_duplicate_bytes=0,
+    )
+    window.switch_view("cleanup")
+    window._remodel_widget._on_scan_finished(plan)
+    qapp.processEvents()
+
+    page = window._view_stack.widget(window.PAGES.index("cleanup"))
+    hint = page.minimumSizeHint()
+    assert hint.height() <= MAIN_LIMIT[1], f"the Clean up page needs {hint.height()} px of height after a scan"
+    assert hint.width() <= MAIN_LIMIT[0] - SIDEBAR_WIDTH, f"the Clean up page needs {hint.width()} px of width"
+    assert window.minimumSizeHint().height() <= MAIN_LIMIT[1]
+
+
+def test_rules_page_with_many_long_rules_still_fits_the_promised_size(window, qapp):
+    rules = [
+        {"name": f"A rule with a rather long name number {index}", "folder": "Documents\\" + "Deeply\\Nested\\" * 3,
+         "match": ["alpha", "beta", "gamma", "delta"] * 3, "extensions": [".pdf", ".docx", ".xlsx", ".pptx"],
+         "enabled": True, "origin": "learned" if index % 2 else "scan"}
+        for index in range(30)
+    ]
+    window._keyword_table.load_rules(rules)
+    window.switch_view("rules")
+    window.resize(window.minimumWidth(), window.height())  # as narrow as the window can be
+    qapp.processEvents()
+
+    page = window._view_stack.widget(window.PAGES.index("rules"))
+    hint = page.minimumSizeHint()
+    assert hint.height() <= MAIN_LIMIT[1], f"the Rules page needs {hint.height()} px of height"
+    assert hint.width() <= MAIN_LIMIT[0] - SIDEBAR_WIDTH, f"the Rules page needs {hint.width()} px of width"
+    table = window._keyword_table._table
+    assert table.columnWidth(3) >= 80, "the words column keeps room to read, even in the narrowest window"
+    assert not table.horizontalScrollBar().isVisible(), "the table fits its page without a sideways scroll bar"

@@ -236,6 +236,15 @@ def main() -> int:
         print("                       Run: python clean_old.py --dry-run")
     else:
         print("  Janitor Notice:      All installers/archives are clean (<30 days)")
+    try:
+        import space_report
+        from sorter import load_config
+        room = space_report.report(load_config())
+        print("  Leftovers kept:      "
+              f"{room['duplicates']['files']} duplicate(s) ({format_size(room['duplicates']['bytes'])}), "
+              f"{room['quarantine']['files']} quarantined ({format_size(room['quarantine']['bytes'])})")
+    except Exception:
+        pass
 
     print("=" * 55 + "\n")
     return 0

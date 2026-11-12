@@ -8,9 +8,9 @@ look by role instead of carrying their own inline styles:
 * frames: ``objectName="card"`` for a raised panel; ``tone="success"``,
   ``"warning"``, ``"info"`` or ``"critical"`` tints it (``set_tone``), and
   ``hero="true"`` gives the main status card its soft gradient
-* labels: ``role="title"``, ``"section"``, ``"muted"``, ``"caption"``, and
-  ``role="badge"`` with ``kind="neutral"|"success"|"info"|"warning"|"critical"``
-  (``badge()``)
+* labels: ``role="title"``, ``"section"``, ``"muted"``, ``"caption"``, ``"error"``
+  (a problem next to a field), ``"stat"`` (a big number), and ``role="badge"``
+  with ``kind="neutral"|"success"|"info"|"warning"|"critical"`` (``badge()``)
 * checkboxes: ``role="switch"`` draws an on/off switch (``switch_row()``)
 * radio buttons: ``role="segment"`` draws a button-style choice
 
@@ -149,6 +149,8 @@ def stylesheet() -> str:
     /* captions are small, so they use the muted color (6:1 on surface); textFaint is only for disabled text */
     QLabel[role="caption"] {{ color: {c['textMuted']}; font-size: 12px; }}
     QLabel[role="mono"] {{ font-family: '{MONO}'; }}
+    QLabel[role="error"] {{ color: {c['critical']}; font-size: 12px; }}
+    QLabel[role="stat"] {{ font-size: 22px; font-weight: 600; }}
 
     /* small rounded tags: Learned, Left alone, ... */
     QLabel[role="badge"] {{
@@ -254,6 +256,7 @@ def stylesheet() -> str:
         selection-background-color: {c['successBorder']};
     }}
     QLineEdit:focus, QComboBox:focus {{ border-color: {c['focus']}; }}
+    QLineEdit[invalid="true"], QLineEdit[invalid="true"]:focus {{ border-color: {c['critical']}; }}
     QLineEdit[role="mono"] {{ font-family: '{MONO}'; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
     QComboBox QAbstractItemView {{
@@ -312,6 +315,17 @@ def stylesheet() -> str:
     QRadioButton[role="segment"]:hover {{ background: {c['surfaceHover']}; border-color: {c['borderStrong']}; color: {c['text']}; }}
     QRadioButton[role="segment"]:checked {{ background: {c['successSubtle']}; border-color: {ACCENT}; color: {ACCENT}; }}
     QRadioButton[role="segment"]:focus {{ border-color: {c['focus']}; }}
+
+    /* the suggestions under a text box (a QCompleter's own window) */
+    QListView#completerPopup {{
+        background: {c['surfaceRaised']};
+        border: 1px solid {c['border']};
+        border-radius: {RADII['control']}px;
+        padding: 4px;
+        outline: none;
+        selection-background-color: {c['surfaceHover']};
+    }}
+    QListView#completerPopup::item {{ padding: 6px 10px; border-radius: 6px; }}
 
     /* ---- tables and lists ---- */
     QTableWidget, QListWidget, QTreeWidget {{
@@ -466,9 +480,12 @@ def set_status_dot(dot: QLabel, color: str) -> None:
     dot.setStyleSheet(f"background: {color}; border-radius: {size // 2}px;")
 
 
-def badge(text: str, kind: str = "neutral", parent: QWidget | None = None) -> QLabel:
-    """A small rounded tag ("Learned", "Left alone"). ``kind``: neutral, success, info, warning or critical."""
-    tag = QLabel(text, parent)
+def badge(text: str, kind: str = "neutral", parent: QWidget | None = None, label_class: type[QLabel] = QLabel) -> QLabel:
+    """A small rounded tag ("Learned", "Left alone"). ``kind``: neutral, success, info, warning or critical.
+
+    Pass ``ui_widgets.ElidedLabel`` as ``label_class`` for text of unknown length: it shortens itself with "...".
+    """
+    tag = label_class(text, parent)
     tag.setProperty("role", "badge")
     tag.setProperty("kind", kind)
     tag.setTextFormat(Qt.TextFormat.PlainText)

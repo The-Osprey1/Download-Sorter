@@ -12,7 +12,17 @@ from typing import Callable, Iterable, Sequence
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QFrame, QLabel, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QMenu,
+    QSizePolicy,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 import ui_categories
 import ui_icons
@@ -221,6 +231,141 @@ def fill_menu(menu: QMenu, actions: Sequence["MenuEntry | None"]) -> None:
         action = menu.addAction(ui_icons.icon(icon_name) if icon_name else QIcon(), text)
         action.setEnabled(bool(enabled))
         action.triggered.connect(lambda _checked=False, run=callback: run())
+
+
+# ---------------------------------------------------------------------------
+# a badge at the end of a table cell
+# ---------------------------------------------------------------------------
+
+BADGE_ROLE = Qt.ItemDataRole.UserRole + 1  # a cell's badge, as ("Learned", "success")
+
+_BADGE_COLORS = {  # kind: (text, background, border) token names, as in ui_style's role="badge"
+    "success": ("success", "successSubtle", "successBorder"),
+    "info": ("info", "infoSubtle", "infoBorder"),
+    "warning": ("warning", "warningSubtle", "warningBorder"),
+    "critical": ("critical", "criticalSubtle", "criticalBorder"),
+    "neutral": ("textMuted", "surfaceRaised", "border"),
+}
+
+
+class BadgeDelegate(QStyledItemDelegate):
+    """Draws a small badge at the right end of a table cell.
+
+    A cell gets one by storing ``(text, kind)`` under ``BADGE_ROLE``; the cell's own
+    text is shortened to leave room for it. Cells without one are drawn as usual.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._hide_text = False
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        if self._hide_text:
+            option.text = ""
+
+    @staticmethod
+    def _badge(index) -> tuple[str, str] | None:
+        data = index.data(BADGE_ROLE)
+        try:
+            text, kind = data
+        except (TypeError, ValueError):
+            return None
+        return (str(text), str(kind)) if text else None
+
+    def paint(self, painter, option, index) -> None:
+        badge = self._badge(index)
+        if badge is None:
+            super().paint(painter, option, index)
+            return
+        text, kind = badge
+        font = QFont(option.font)
+        font.setPixelSize(11)
+        font.setWeight(QFont.Weight.DemiBold)
+        width = QFontMetrics(font).horizontalAdvance(text) + 14
+
+        # The cell's background and icon over its whole width...
+        self._hide_text = True
+        try:
+            super().paint(painter, option, index)
+        finally:
+            self._hide_text = False
+        # ...then its text again, shortened to leave room for the badge.
+        narrowed = QStyleOptionViewItem(option)
+        narrowed.rect = option.rect.adjusted(0, 0, -(width + 14), 0)
+        super().paint(painter, narrowed, index)
+
+        fg, bg, border = (COLORS[name] for name in _BADGE_COLORS.get(kind, _BADGE_COLORS["neutral"]))
+        box = QRectF(option.rect.right() - width - 8, option.rect.center().y() - 9 + 0.5, width, 18)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(border), 1))
+        painter.setBrush(QColor(bg))
+        painter.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4)
+        painter.setPen(QColor(fg))
+        painter.setFont(font)
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
+
+
+# ---------------------------------------------------------------------------
+# text that shortens itself instead of making its row wider
+# ---------------------------------------------------------------------------
+
+class ElidedLabel(QLabel):
+    """A label that ends in "..." when it has less room than its text needs; hover shows all of it.
+
+    ``text()`` is what is showing and ``full_text()`` is everything. A long folder
+    name or reason can't push the rest of a row (or the window) wider, because the
+    label is allowed to shrink below the width of its text.
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None,
+                 mode: Qt.TextElideMode = Qt.TextElideMode.ElideRight) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self._mode = mode
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setText(text)
+
+    def full_text(self) -> str:
+        return self._full
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt's name)
+        self._full = str(text or "")
+        self.setAccessibleName(self._full)
+        self._elide()
+        self.updateGeometry()
+
+    def _chrome(self) -> int:
+        """The width the style adds around the text (padding and border)."""
+        return max(0, QLabel.sizeHint(self).width() - self.fontMetrics().horizontalAdvance(QLabel.text(self)))
+
+    def _elide(self) -> None:
+        metrics = self.fontMetrics()
+        if self.width() <= 1:  # not laid out yet: show it whole, and shorten it once it has a size
+            shown = self._full
+        else:
+            shown = metrics.elidedText(self._full, self._mode, max(0, self.width() - self._chrome()))
+        if shown != QLabel.text(self):
+            QLabel.setText(self, shown)
+        self.setToolTip(self._full if shown != self._full else "")
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self.fontMetrics().horizontalAdvance(self._full) + self._chrome(), QLabel.sizeHint(self).height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self._chrome() + self.fontMetrics().horizontalAdvance("…"), QLabel.minimumSizeHint(self).height())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._elide()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._elide()
 
 
 # ---------------------------------------------------------------------------
