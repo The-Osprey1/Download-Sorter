@@ -1,21 +1,26 @@
-"""A test run leaves the Download Sorter the person is using, and their Windows settings, alone.
+"""A test run leaves the Download Sorter the person is using, their Windows settings and their
+Downloads folder alone.
 
-Before tests/conftest.py gave each test a quit event of its own and a scratch area in the registry,
-a full run closed the tray that was open, replaced the "start with Windows" and right-click entries
-(they ended up pointing at the source folder), and overwrote the "Installed apps" entry with a fake
-2.1.0 whose Uninstall pointed at a deleted temp folder. These tests fail if that comes back.
+Before tests/conftest.py gave each test a quit event of its own, a scratch area in the registry and
+a home folder of its own, a full run closed the tray that was open, replaced the "start with
+Windows" and right-click entries (they ended up pointing at the source folder), overwrote the
+"Installed apps" entry with a fake 2.1.0 whose Uninstall pointed at a deleted temp folder, and
+left empty XYZFiles and Finance\\Taxes folders in Downloads. These tests fail if that comes back.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
+from pathlib import Path
 
 import pytest
 
 import config_manager as cm
 import installer_builder
 import quit_signal
+import sorter
 
 windows_only = pytest.mark.skipif(sys.platform != "win32", reason="named events and the registry are Windows features")
 
@@ -124,9 +129,43 @@ def test_every_registry_area_the_app_writes_goes_to_the_scratch_area(registry_sc
 def test_other_registry_reads_still_see_the_real_registry(registry_scratch):
     import winreg
 
-    shell_folders = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+    shell_folders = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, shell_folders) as key:  # not redirected
         assert winreg.QueryValueEx(key, "Desktop")[0]
+
+
+# ---------------------------------------------------------------------------
+# The Downloads folder
+# ---------------------------------------------------------------------------
+
+def test_a_test_has_a_home_folder_of_its_own(own_home_folder):
+    assert Path.home() == own_home_folder
+    assert os.path.expandvars("${USERPROFILE}") == str(own_home_folder)
+    assert sorter.watch_root({}) == (own_home_folder / "Downloads").resolve()
+
+
+@windows_only
+def test_a_missing_downloads_folder_never_turns_into_the_real_one(tmp_path, registry_scratch):
+    # watch_root falls back to the Downloads folder the registry knows when the one in the
+    # settings does not exist (yet). In a test that was the Downloads folder of whoever ran it.
+    missing = tmp_path / "not made yet"
+
+    assert sorter.watch_root({"watch": {"folder": str(missing)}}) == missing.resolve()
+
+
+def test_the_rule_folders_a_wizard_makes_stay_in_the_tests_own_downloads(own_home_folder):
+    # What tests/test_adversarial_m3_wizard_invariants.py did: settings with rules but no
+    # Downloads folder. ensure_tree made XYZFiles and Finance\Taxes in the real one, every run.
+    config = {
+        "keyword_rules": [{"name": "PreExistingTaxRule", "pattern": "w2_2025", "folder": "Finance\\Taxes"}],
+        "extension_rules": [{"name": "XYZ Rule", "folder": "XYZFiles", "extensions": [".xyz"], "enabled": True}],
+    }
+    downloads = (own_home_folder / "Downloads").resolve()
+    assert sorter.watch_root(config) == downloads, "stop here: this would create folders in the real Downloads"
+
+    assert sorter.ensure_tree(config) == downloads
+
+    assert (downloads / "XYZFiles").is_dir() and (downloads / "Finance" / "Taxes").is_dir()
 
 
 # ---------------------------------------------------------------------------

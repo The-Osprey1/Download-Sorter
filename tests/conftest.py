@@ -1,13 +1,14 @@
 """Keep the test run away from the Download Sorter the person is actually using.
 
 The code under test closes running copies of the app, writes the "start with Windows" value and
-the right-click menu entries, and registers an installer. All of that is shared with a real
-install: one named Windows event that every running copy listens on, and per-user registry keys.
-Without the fixtures below, a full test run quits the tray that is open, replaces its startup and
-right-click entries with ones that point at this checkout, and overwrites its "Installed apps"
-entry (so Uninstall in Windows Settings stops working).
+the right-click menu entries, registers an installer, and creates the folders of the rules it is
+given. All of that is shared with a real install: one named Windows event that every running copy
+listens on, per-user registry keys, and the real Downloads folder. Without the fixtures below, a
+full test run quits the tray that is open, replaces its startup and right-click entries with ones
+that point at this checkout, overwrites its "Installed apps" entry (so Uninstall in Windows
+Settings stops working), and leaves empty folders such as XYZFiles and Finance\\Taxes in Downloads.
 
-Both fixtures apply to every test on their own. tests/test_machine_isolation.py checks them.
+The fixtures apply to every test on their own. tests/test_machine_isolation.py checks them.
 """
 
 from __future__ import annotations
@@ -26,10 +27,13 @@ REAL_QUIT_EVENT = quit_signal.EVENT_NAME
 SCRATCH_KEY = r"Software\Pytest\DownloadSorter"
 
 # The per-user registry paths the app or its installer writes, and the tests' own scratch keys.
-# Anything else (such as where the Downloads folder is) is read from the real registry as usual.
+# "User Shell Folders" is only read, but it is where sorter.watch_root finds the real Downloads
+# folder when the one in the settings does not exist (yet), so a test must not see it either.
+# Everything else is read from the real registry as usual.
 _REDIRECTED = (
     r"software\microsoft\windows\currentversion\run",
     r"software\microsoft\windows\currentversion\uninstall",
+    r"software\microsoft\windows\currentversion\explorer\user shell folders",
     r"software\classes",
     r"software\downloadsorter",
 )
@@ -46,6 +50,23 @@ def own_quit_event(monkeypatch):
         quit_signal, "EVENT_NAME", f"{REAL_QUIT_EVENT}_pytest_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     )
     yield REAL_QUIT_EVENT
+
+
+@pytest.fixture(autouse=True)
+def own_home_folder(monkeypatch, tmp_path_factory):
+    """Give each test a home folder of its own, with an empty Downloads and Documents in it.
+
+    Settings that name no Downloads folder fall back to ``${USERPROFILE}\\Downloads``. A test that
+    built its own settings and ran the welcome wizard therefore created the wizard's rule folders
+    (an empty XYZFiles and Finance\\Taxes, on every run) in the Downloads of whoever ran the tests.
+    Yields the home folder.
+    """
+    home = tmp_path_factory.mktemp("home")
+    for name in ("Downloads", "Documents"):
+        (home / name).mkdir()
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    yield home
 
 
 class RegistryScratch:
