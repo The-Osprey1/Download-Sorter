@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-import pystray
+import tray_qt
 
 import about
 import problem_report
@@ -197,7 +197,7 @@ def _recent_label(record: dict) -> str:
 
 
 def _reveal_action(path: str):
-    """The menu action for one file: show it in Explorer (pystray calls it with the icon and the item)."""
+    """The menu action for one file: show it in Explorer (the tray calls it with the icon and the item)."""
     def reveal(_icon=None, _item=None) -> None:
         reveal_in_explorer(path)
     return reveal
@@ -212,7 +212,7 @@ class SorterTray:
         self.watcher_failed = False
         self._recent_cache: tuple[object, list[dict]] | None = None
         self._recent_lock = threading.Lock()
-        self.icon = pystray.Icon(
+        self.icon = tray_qt.Icon(
             "download-sorter",
             icon=make_icon(is_paused(), self._held_count()),
             title=self.tooltip(),
@@ -261,7 +261,7 @@ class SorterTray:
             pass
         text = f"{about.APP_NAME} - {state}\n{_count_text(moves_today(), 'file')} filed today{held_line}{update_line}"
         with_credit = f"{text}\n{about.CREDIT}"
-        # Windows tray tooltips hold at most 127 characters (pystray raises on
+        # Windows tray tooltips hold at most 127 characters (Windows rejects
         # longer ones), so the credit is the first thing to go.
         if len(with_credit) <= TOOLTIP_MAX:
             return with_credit
@@ -275,7 +275,7 @@ class SorterTray:
     def _recent_records(self) -> list[dict]:
         """The last few files filed, newest first.
 
-        pystray asks for a menu's items several times each time it builds the menu,
+        The tray builds its menu each time it opens,
         and reading the history is a pass over the whole file, so the answer is kept
         until the history file changes.
         """
@@ -297,51 +297,51 @@ class SorterTray:
             self._recent_cache = (signature, records)
         return records
 
-    def _recent_menu_items(self) -> list[pystray.MenuItem]:
+    def _recent_menu_items(self) -> list[tray_qt.MenuItem]:
         """The "Recently sorted" submenu: the last files filed, each one opens Explorer on it."""
         items = []
         for record in self._recent_records():
             dest = str(record.get("dest") or "")
             if dest:
                 # A file that was moved or deleted since stays listed but greyed out.
-                items.append(pystray.MenuItem(_recent_label(record), _reveal_action(dest),
+                items.append(tray_qt.MenuItem(_recent_label(record), _reveal_action(dest),
                                               enabled=Path(dest).exists()))
-        return items or [pystray.MenuItem("Nothing sorted yet", None, enabled=False)]
+        return items or [tray_qt.MenuItem("Nothing sorted yet", None, enabled=False)]
 
-    def build_menu(self) -> pystray.Menu:
-        return pystray.Menu(
-            pystray.MenuItem("Open Download Sorter", self.on_open_home, default=True),
-            pystray.MenuItem(
+    def build_menu(self) -> tray_qt.Menu:
+        return tray_qt.Menu(
+            tray_qt.MenuItem("Open Download Sorter", self.on_open_home, default=True),
+            tray_qt.MenuItem(
                 "Finish setup...",
                 self.on_finish_setup,
                 visible=lambda _i: watch.SETUP_PENDING.is_set(),
             ),
-            pystray.Menu.SEPARATOR,
+            tray_qt.SEPARATOR,
             # What you do from here most often sits together at the top.
-            pystray.MenuItem("Sort Downloads now", self.on_sort_now),
-            pystray.MenuItem("Undo last sort", self.on_undo),
-            pystray.MenuItem(
+            tray_qt.MenuItem("Sort Downloads now", self.on_sort_now),
+            tray_qt.MenuItem("Undo last sort", self.on_undo),
+            tray_qt.MenuItem(
                 lambda _i: "Resume sorting" if is_paused() else "Pause sorting",
                 self.on_toggle_pause,
             ),
-            pystray.Menu.SEPARATOR,
+            tray_qt.SEPARATOR,
             # What has happened: the last files filed, and the counts.
-            pystray.MenuItem("Recently sorted", pystray.Menu(lambda: self._recent_menu_items())),
-            pystray.MenuItem(lambda _i: _count_text(moves_today(), "file") + " filed today", None, enabled=False),
-            pystray.MenuItem(lambda _i: _count_text(self._held_count(), "3MF file") + " held in Downloads",
+            tray_qt.MenuItem("Recently sorted", tray_qt.Menu(lambda: self._recent_menu_items())),
+            tray_qt.MenuItem(lambda _i: _count_text(moves_today(), "file") + " filed today", None, enabled=False),
+            tray_qt.MenuItem(lambda _i: _count_text(self._held_count(), "3MF file") + " held in Downloads",
                              None, enabled=False, visible=lambda _i: self._held_count() > 0),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Rules...", self.on_open_rules_manager),
-            pystray.MenuItem("Clean up a folder...", self.on_remodel),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Open Downloads", self.on_open_downloads),
-            pystray.MenuItem("Open log folder", self.on_open_logs),
-            pystray.MenuItem("Report a problem...", self.on_report_problem),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem(f"About {about.APP_NAME}", self.on_about),
-            pystray.MenuItem(about.CREDIT, None, enabled=False),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quit", self.on_quit),
+            tray_qt.SEPARATOR,
+            tray_qt.MenuItem("Rules...", self.on_open_rules_manager),
+            tray_qt.MenuItem("Clean up a folder...", self.on_remodel),
+            tray_qt.SEPARATOR,
+            tray_qt.MenuItem("Open Downloads", self.on_open_downloads),
+            tray_qt.MenuItem("Open log folder", self.on_open_logs),
+            tray_qt.MenuItem("Report a problem...", self.on_report_problem),
+            tray_qt.SEPARATOR,
+            tray_qt.MenuItem(f"About {about.APP_NAME}", self.on_about),
+            tray_qt.MenuItem(about.CREDIT, None, enabled=False),
+            tray_qt.SEPARATOR,
+            tray_qt.MenuItem("Quit", self.on_quit),
         )
 
     def notify(self, message: str, title: str = "Download Sorter") -> None:

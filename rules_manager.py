@@ -2026,7 +2026,7 @@ class RulesManagerDialog(QDialog):
     """Main window: Home, Rules, Clean up a folder, and Settings, chosen from a sidebar."""
 
     # Page order in self._view_stack
-    PAGES = ("home", "rules", "cleanup", "settings")
+    PAGES = ("home", "rules", "cleanup", "settings", "projects")
 
     def __init__(self, parent: QWidget | None = None, initial_view: str = "customize"):
         if isinstance(parent, str):
@@ -2113,6 +2113,7 @@ class RulesManagerDialog(QDialog):
             ("home", "Home", "home"),
             ("rules", "Rules", "rules"),
             ("cleanup", "Clean up a folder", "cleanup"),
+            ("projects", "Projects", "folder"),
             ("settings", "Settings", "settings"),
         ):
             btn = ui_style.button(text, "nav", icon_name)
@@ -2194,6 +2195,13 @@ class RulesManagerDialog(QDialog):
         self._settings_widget = SettingsWidget(config=self._config, parent=self)
         self._settings_widget.persona_changed.connect(self._on_profile_changed)
         self._view_stack.addWidget(self._padded(self._settings_widget))
+
+        from projects_page import ProjectsWidget
+
+        self._projects_widget = ProjectsWidget(parent=self)
+        self._projects_widget.notice.connect(
+            lambda text, kind, action_text, action: self.notify(text, kind, action_text, action))
+        self._view_stack.addWidget(self._padded(self._projects_widget))  # index follows PAGES
 
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(5000)
@@ -2285,7 +2293,7 @@ class RulesManagerDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _add_shortcuts(self) -> None:
-        """Ctrl+1..4 switch pages, Ctrl+S saves rules, Ctrl+Z on Home undoes the last sort, F5 refreshes."""
+        """Ctrl+1..5 switch pages, Ctrl+S saves rules, Ctrl+Z on Home undoes the last sort, F5 refreshes."""
         for index, page in enumerate(self.PAGES, start=1):
             QShortcut(QKeySequence(f"Ctrl+{index}"), self, activated=lambda p=page: self.switch_view(p))
         QShortcut(QKeySequence.StandardKey.Save, self, activated=self._save_shortcut)
@@ -2317,6 +2325,7 @@ class RulesManagerDialog(QDialog):
             "extension": "rules", "extensions": "rules",
             "cleanup": "cleanup", "remodel": "cleanup", "2": "cleanup",
             "settings": "settings", "3": "settings",
+            "projects": "projects", "project": "projects", "4": "projects",
         }
         page = aliases.get(name, "rules")
         idx = self.PAGES.index(page)

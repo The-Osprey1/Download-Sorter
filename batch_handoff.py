@@ -524,21 +524,36 @@ def create_file_data_object(paths: Iterable[str | Path]):
         ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
     ]
     ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+    shell32.ILFindLastID.argtypes = [ctypes.c_void_p]
+    shell32.ILFindLastID.restype = ctypes.c_void_p
+    # The shell only offers CF_HDROP (the file list most apps read on a drop or paste) when the
+    # items are given relative to their folder. With absolute items and no folder, only Explorer
+    # understood the drag. Files from one folder use that folder; mixed folders keep the old form.
+    parents = {os.path.dirname(p).lower() for p in resolved}
+    same_folder = len(parents) == 1
     pidls = (ctypes.c_void_p * len(resolved))()
-    parsed = 0
+    owned: list[int] = []
+    folder_pidl = ctypes.c_void_p()
     try:
+        if same_folder:
+            if shell32.SHParseDisplayName(os.path.dirname(resolved[0]), None, ctypes.byref(folder_pidl), 0, None) != 0:
+                same_folder = False
+                folder_pidl = ctypes.c_void_p()
         for index, path in enumerate(resolved):
             pidl = ctypes.c_void_p()
             if shell32.SHParseDisplayName(path, None, ctypes.byref(pidl), 0, None) != 0 or not pidl.value:
                 return None
-            pidls[index] = pidl.value
-            parsed += 1
+            owned.append(pidl.value)
+            pidls[index] = shell32.ILFindLastID(pidl.value) if same_folder else pidl.value
         data_object = ctypes.c_void_p()
-        hr = shell32.CIDLData_CreateFromIDArray(None, len(resolved), pidls, ctypes.byref(data_object))
+        hr = shell32.CIDLData_CreateFromIDArray(
+            folder_pidl if same_folder else None, len(resolved), pidls, ctypes.byref(data_object))
         return data_object if hr == 0 and data_object.value else None
     finally:
-        for index in range(parsed):
-            ole32.CoTaskMemFree(pidls[index])
+        for value in owned:
+            ole32.CoTaskMemFree(value)
+        if folder_pidl.value:
+            ole32.CoTaskMemFree(folder_pidl.value)
 
 
 def release_com(obj) -> None:

@@ -902,7 +902,25 @@ class RibbonPopup:
             self.undo_btn.bind("<Enter>", self.on_enter)
             self.undo_btn.bind("<Leave>", self.on_leave)
             pills = [self.jump_btn, self.undo_btn]
-
+            # Quick Route: send the file on to one of your hub projects (Projects page).
+            self.route_btn = None
+            self._route_targets = self._route_targets_available()
+            if self._route_targets:
+                self.route_btn = tk.Label(
+                    self.bottom_row,
+                    text="Route ›",
+                    font=(FONT_FAMILY, 8, "bold"),
+                    fg=ACTION_COLOR,
+                    bg=SURFACE_RAISED,
+                    cursor="hand2",
+                    padx=int(6 * scale),
+                    pady=int(1 * scale),
+                )
+                self.route_btn.pack(side="right", padx=(0, pill_gap))
+                self.route_btn.bind("<Button-1>", lambda e: (self._show_route_menu(e), "break")[1])
+                self.route_btn.bind("<Enter>", self.on_enter)
+                self.route_btn.bind("<Leave>", self.on_leave)
+                pills.append(self.route_btn)
             # A sorted .3mf can be opened in Bambu Studio from here: Bambu then remembers
             # the sorted path in its Recently Opened list from the start.
             self.open_bambu_btn = None
@@ -1116,6 +1134,35 @@ class RibbonPopup:
             return bambu_recent.bambu_exe() is not None
         except Exception:
             return False
+
+    @staticmethod
+    def _route_targets_available() -> list:
+        try:
+            import projects_hub
+            return projects_hub.route_targets()[:8]
+        except Exception:
+            return []
+
+    def _show_route_menu(self, event) -> None:
+        """A small menu of hub projects; picking one moves the file into that project."""
+        menu = tk.Menu(self.root, tearoff=0)
+        for project in self._route_targets:
+            menu.add_command(label=f"Route to {project.get('name')}",
+                             command=lambda p=project: self._route_to(p))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _route_to(self, project: dict) -> None:
+        try:
+            import projects_hub
+            target = projects_hub.route_file(self.dest_path, project)
+            self.dest_path = target
+        except Exception as exc:
+            print(f"Could not route to {project.get('name')}: {exc}", file=sys.stderr)
+        finally:
+            self.close()
 
     def _on_open_in_bambu(self) -> None:
         try:

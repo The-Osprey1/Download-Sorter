@@ -388,7 +388,7 @@ class TestRulesManagerViewSwitcherInvariants:
 
             assert hasattr(dlg, "_tabs"), "RulesManagerDialog missing self._tabs"
             assert hasattr(dlg, "_view_stack"), "RulesManagerDialog missing self._view_stack"
-            assert dlg._view_stack.count() == 4
+            assert dlg._view_stack.count() == len(dlg.PAGES)  # one stack page per nav page
 
             assert dlg._tabs.count() == 2
             assert dlg._tabs.tabText(0) == "Name rules"
