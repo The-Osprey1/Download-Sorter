@@ -50,11 +50,20 @@ if sys.platform == "win32":
             except Exception:
                 pass
 
-import tkinter as tk
-from tkinter import font as tkfont
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtGui import QCursor, QFont, QFontMetrics, QGuiApplication, QImage, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 try:
-    from PIL import Image, ImageDraw, ImageTk
+    from PIL import Image, ImageDraw
     HAS_PIL = True
 except Exception:
     HAS_PIL = False
@@ -552,7 +561,496 @@ def scaled_ribbon_geometry(
     return width, height, right - width - offset_x, top + offset_y + slot * (height + gap)
 
 
-class RibbonPopup:
+def _ensure_app() -> tuple[QApplication, bool]:
+    app = QApplication.instance()
+    if app is not None:
+        return app, False
+    try:
+        QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+    except Exception:
+        pass
+    return QApplication(sys.argv[:1]), True
+
+
+def _get_display_dpi(widget: QWidget | None = None) -> float:
+    """Return logical/system DPI for scaling ribbons cleanly across 96..192 DPI displays."""
+    if sys.platform == "win32":
+        try:
+            hwnd = int(widget.winId()) if widget is not None else 0
+            if hwnd > 0 and hasattr(ctypes.windll.user32, "GetDpiForWindow"):
+                dpi = float(ctypes.windll.user32.GetDpiForWindow(hwnd))
+                if dpi >= 72.0:
+                    return dpi
+            dc = ctypes.windll.user32.GetDC(0)
+            if dc:
+                try:
+                    dpi = float(ctypes.windll.gdi32.GetDeviceCaps(dc, 88))
+                    if dpi >= 72.0:
+                        return dpi
+                finally:
+                    ctypes.windll.user32.ReleaseDC(0, dc)
+        except Exception:
+            pass
+    try:
+        screen = (widget.screen() if widget is not None else None) or QGuiApplication.primaryScreen()
+        if screen is not None:
+            dpi = float(screen.logicalDotsPerInch())
+            if dpi >= 72.0:
+                return dpi
+    except Exception:
+        pass
+    return 96.0
+
+
+def _pil_to_pixmap(icon_img) -> QPixmap | None:
+    if icon_img is None:
+        return None
+    rgba = icon_img.convert("RGBA")
+    raw = rgba.tobytes("raw", "RGBA")
+    qimg = QImage(raw, rgba.width, rgba.height, rgba.width * 4, QImage.Format.Format_RGBA8888).copy()
+    return QPixmap.fromImage(qimg)
+
+
+def _apply_dwm_round_shadow(widget: QWidget) -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        hwnd = int(widget.winId())
+        if hwnd <= 0:
+            return
+        pref = ctypes.c_int(2)  # DWMWCP_ROUND
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)
+        )
+
+        class MARGINS(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_int), ("right", ctypes.c_int),
+                        ("top", ctypes.c_int), ("bottom", ctypes.c_int)]
+
+        m = MARGINS(1, 1, 1, 1)
+        ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(m))
+    except Exception:
+        pass
+
+
+class _RibbonWindow(QFrame):
+    """Frameless topmost tool window backing every Download Sorter ribbon popup."""
+
+    def __init__(self, owner: _BaseRibbonPopup) -> None:
+        super().__init__(None)
+        self._owner = owner
+        self.setObjectName("ribbonRoot")
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+
+    def enterEvent(self, event) -> None:
+        self._owner.on_enter(event)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._owner.on_leave(event)
+        super().leaveEvent(event)
+
+
+class _SurfaceClickFilter(QObject):
+    """Forwards left-clicks on non-button ribbon regions to the popup's click action."""
+
+    def __init__(self, owner: _BaseRibbonPopup, handler) -> None:
+        super().__init__(owner.root)
+        self._handler = handler
+
+    def eventFilter(self, _obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.MouseButtonRelease and getattr(event, "button", lambda: None)() == Qt.MouseButton.LeftButton:
+            self._handler()
+            return True
+        return False
+
+
+class _BaseRibbonPopup:
+    """Shared Qt window chrome, slot lock, entrance/exit slide, progress bar, and hover behavior."""
+
+    def _init_window(
+        self,
+        accent_color: str,
+        timeout_ms: int,
+        enable_animation: bool,
+    ) -> None:
+        self.app, self._owns_app = _ensure_app()
+        self.accent_color = accent_color
+        self.timeout_ms = max(500, int(timeout_ms))
+        self.enable_animation = enable_animation
+        self.pid = os.getpid()
+        self.slot = claim_slot(self.pid)
+
+        self.normal_border = blend_colors(self.accent_color, BORDER_COLOR, 0.32)
+        self.hover_border = blend_colors(self.accent_color, COLORS.get("borderStrong", "#3A4352"), 0.50)
+        self.accent_glow = blend_colors(self.accent_color, "#FFFFFF", 0.25)
+
+        self.root = _RibbonWindow(self)
+        dpi = _get_display_dpi(self.root)
+        self.scale = max(1.0, float(dpi) / 96.0)
+
+        width, height, self.target_x, self.target_y = scaled_ribbon_geometry(
+            self.scale, self.slot, self._work_area()
+        )
+        self.target_w = width
+        self.target_h = height
+        self.root.setFixedSize(width, height)
+
+        self.slide_distance = round(140 * self.scale)
+        self.remaining_ms = float(self.timeout_ms)
+        self.dismiss_started = 0.0
+        self.is_hovered = False
+        self.is_closing = False
+        self._running = False
+        self.icon_pixmap: QPixmap | None = None
+        self.slide_job = None
+
+        self._slide_timer = QTimer(self.root)
+        self._slide_timer.setInterval(16)
+        self._dismiss_timer = QTimer(self.root)
+        self._dismiss_timer.setSingleShot(True)
+        self._dismiss_timer.timeout.connect(self.close)
+        self._progress_timer = QTimer(self.root)
+        self._progress_timer.setInterval(20)
+        self._progress_timer.timeout.connect(self._tick_progress)
+        self._leave_timer = QTimer(self.root)
+        self._leave_timer.setSingleShot(True)
+        self._leave_timer.timeout.connect(self._resume_if_pointer_left)
+
+    def _finish_window_setup(self) -> None:
+        _apply_dwm_round_shadow(self.root)
+        if self.enable_animation:
+            start_x = self.target_x + self.slide_distance
+            self.root.setGeometry(start_x, self.target_y, self.target_w, self.target_h)
+            self._animate_slide_in(start_x, self.target_x, self.target_y, duration_ms=220)
+        else:
+            self.root.setGeometry(self.target_x, self.target_y, self.target_w, self.target_h)
+            self._schedule_dismiss()
+
+    def _work_area(self) -> tuple[int, int, int, int]:
+        """Return the foreground monitor's work area, excluding its taskbar."""
+        if sys.platform == "win32":
+            try:
+                class RECT(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+                class MONITORINFO(ctypes.Structure):
+                    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT),
+                                ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
+
+                hwnd = ctypes.windll.user32.GetForegroundWindow()
+                monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)
+                info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+                if monitor and ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                    work = info.rcWork
+                    return work.left, work.top, work.right, work.bottom
+            except Exception:
+                pass
+        screen = (self.root.screen() if hasattr(self, "root") else None) or QGuiApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            return geo.left(), geo.top(), geo.left() + geo.width(), geo.top() + geo.height()
+        return 0, 0, 1920, 1080
+
+    @staticmethod
+    def _px(pt: float, scale: float) -> int:
+        return max(9, round(pt * (96.0 / 72.0) * scale))
+
+    def _build_chrome(self, scale: float, icon_img, fallback_glyph: str, tag_text: str) -> None:
+        pad_y = max(4, int(7 * scale))
+        stripe_w = max(4, int(4 * scale))
+        icon_size = max(32, int(38 * scale))
+        progress_h = max(2, int(2.5 * scale))
+        status_pad_l = int(8 * scale)
+        status_pad_r = int(2 * scale)
+        content_padx = int(8 * scale)
+
+        root_layout = QVBoxLayout(self.root)
+        root_layout.setContentsMargins(1, 1, 1, 1)
+        root_layout.setSpacing(0)
+
+        self.container = QWidget(self.root)
+        self.container.setObjectName("ribbonContainer")
+        self.container.setCursor(Qt.CursorShape.PointingHandCursor)
+        container_vbox = QVBoxLayout(self.container)
+        container_vbox.setContentsMargins(0, 0, 0, 0)
+        container_vbox.setSpacing(0)
+        root_layout.addWidget(self.container)
+
+        body_widget = QWidget(self.container)
+        body_row = QHBoxLayout(body_widget)
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(0)
+        container_vbox.addWidget(body_widget, 1)
+
+        self.stripe = QFrame(body_widget)
+        self.stripe.setFixedWidth(stripe_w)
+        self.stripe.setStyleSheet(f"background: {self.accent_color}; border: none;")
+        body_row.addWidget(self.stripe)
+
+        self.status = QLabel(body_widget)
+        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status.setContentsMargins(status_pad_l, 0, status_pad_r, 0)
+        self.icon_pixmap = _pil_to_pixmap(icon_img) if icon_img is not None else None
+        if self.icon_pixmap is not None and not self.icon_pixmap.isNull():
+            self.status.setPixmap(self.icon_pixmap)
+            status_w = icon_size + status_pad_l + status_pad_r
+        else:
+            self.status.setText(fallback_glyph)
+            self.status.setStyleSheet(
+                f"color: {self.accent_color}; font-family: '{FONT_FAMILY}';"
+                f" font-size: {self._px(14, scale)}px; font-weight: 700;"
+            )
+            status_w = max(icon_size, int(30 * scale)) + status_pad_l + status_pad_r
+        self.status.setFixedWidth(status_w)
+        body_row.addWidget(self.status)
+
+        self.content = QWidget(body_widget)
+        self.content.setObjectName("ribbonContent")
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(content_padx, pad_y, content_padx, pad_y)
+        self.content_layout.setSpacing(max(1, int(2 * scale)))
+        body_row.addWidget(self.content, 1)
+
+        self._row_width = self.target_w - 2 - stripe_w - status_w - 2 * content_padx
+
+        # Top row: eyebrow + optional trailing action buttons + close button
+        self.top_row = QWidget(self.content)
+        self.top_row_layout = QHBoxLayout(self.top_row)
+        self.top_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.top_row_layout.setSpacing(int(4 * scale))
+        self.content_layout.addWidget(self.top_row)
+
+        self.tag_lbl = QLabel(tag_text, self.top_row)
+        self.tag_lbl.setStyleSheet(
+            f"color: {self.accent_color}; font-family: '{FONT_FAMILY}';"
+            f" font-size: {self._px(8, scale)}px; font-weight: 700;"
+        )
+        self.top_row_layout.addWidget(self.tag_lbl)
+        self.top_row_layout.addStretch(1)
+
+        hit_target = max(24, int(24 * scale))
+        self.close_frame = QWidget(self.top_row)
+        self.close_frame.setFixedSize(hit_target, hit_target)
+        close_layout = QHBoxLayout(self.close_frame)
+        close_layout.setContentsMargins(0, 0, 0, 0)
+        self.close_btn = QPushButton("✕", self.close_frame)
+        self.close_btn.setFixedSize(hit_target, hit_target)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.close_btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {CLOSE_COLOR}; border: none; border-radius: 4px;"
+            f" font-family: '{FONT_FAMILY}'; font-size: {self._px(9, scale)}px; font-weight: 700; }}"
+            f"QPushButton:hover {{ background: {SURFACE_HOVER}; color: {CLOSE_HOVER}; }}"
+        )
+        self.close_btn.clicked.connect(lambda _c=False: self.close())
+        close_layout.addWidget(self.close_btn)
+        self.top_row_layout.addWidget(self.close_frame)
+
+        # Progress bar strip at the very bottom
+        progress_row = QWidget(self.container)
+        progress_row.setFixedHeight(progress_h)
+        progress_hbox = QHBoxLayout(progress_row)
+        progress_hbox.setContentsMargins(stripe_w, 0, 0, 0)
+        progress_hbox.setSpacing(0)
+
+        self.progress_track = QFrame(progress_row)
+        self.progress_track.setFixedHeight(progress_h)
+        self.progress_track.setStyleSheet(f"background: {SURFACE_RAISED}; border: none;")
+        progress_hbox.addWidget(self.progress_track, 1)
+
+        self.progress = QFrame(self.progress_track)
+        self.progress.setGeometry(0, 0, max(1, self.target_w - stripe_w - 2), progress_h)
+        self.progress.setStyleSheet(f"background: {self.accent_color}; border: none;")
+        container_vbox.addWidget(progress_row)
+
+        self._apply_surface_style(hovered=False)
+
+    def _make_pill_button(
+        self,
+        parent: QWidget,
+        text: str,
+        fg: str,
+        bg: str,
+        handler,
+        scale: float,
+        pad_x: int = 6,
+        pad_y: int = 2,
+        font_pt: float = 8.0,
+    ) -> QPushButton:
+        btn = QPushButton(text, parent)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setProperty("fg_color", fg)
+        btn.setProperty("bg_color", bg)
+        btn._pill_pad = (int(pad_x * scale), int(pad_y * scale), font_pt)  # type: ignore[attr-defined]
+        btn.setStyleSheet(
+            f"QPushButton {{ background: {bg}; color: {fg}; border: none; border-radius: 4px;"
+            f" padding: {int(pad_y * scale)}px {int(pad_x * scale)}px;"
+            f" font-family: '{FONT_FAMILY}'; font-size: {self._px(font_pt, scale)}px; font-weight: 700; }}"
+            f"QPushButton:hover {{ background: {SURFACE_HOVER}; }}"
+        )
+        btn.clicked.connect(lambda _c=False: handler())
+        return btn
+
+    def _apply_surface_style(self, hovered: bool) -> None:
+        bg = HOVER_BG if hovered else BG_COLOR
+        border = self.hover_border if hovered else self.normal_border
+        bar_col = self.accent_glow if hovered else self.accent_color
+        self.root.setStyleSheet(
+            f"#ribbonRoot {{ background: {border}; border: none; }}"
+            f"#ribbonContainer {{ background: {bg}; }}"
+            f"#ribbonContent {{ background: {bg}; }}"
+            f"QLabel {{ background: transparent; border: none; }}"
+        )
+        if hasattr(self, "progress"):
+            self.progress.setStyleSheet(f"background: {bar_col}; border: none;")
+
+    def _animate_slide_in(self, start_x: int, target_x: int, target_y: int, duration_ms: float = 220.0) -> None:
+        t0 = time.monotonic()
+
+        def step() -> None:
+            if self.is_closing:
+                self._slide_timer.stop()
+                return
+            p = min(1.0, max(0.0, (time.monotonic() - t0) * 1000.0 / duration_ms))
+            ease_out = 1.0 - (1.0 - p) ** 3
+            curr_x = round(start_x + (target_x - start_x) * ease_out)
+            self.root.move(curr_x, target_y)
+            if p >= 1.0:
+                self._slide_timer.stop()
+                self.slide_job = None
+                self.root.move(target_x, target_y)
+                self._schedule_dismiss()
+
+        try:
+            self._slide_timer.timeout.disconnect()
+        except Exception:
+            pass
+        self._slide_timer.timeout.connect(step)
+        self.slide_job = self._slide_timer
+        self._slide_timer.start()
+
+    def _schedule_dismiss(self) -> None:
+        self.dismiss_started = time.monotonic()
+        self._dismiss_timer.start(max(1, int(self.remaining_ms)))
+        self._tick_progress()
+
+    def _tick_progress(self) -> None:
+        if self.is_hovered or self.is_closing:
+            self._progress_timer.stop()
+            return
+        elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
+        fraction = max(0.0, min(1.0, (self.remaining_ms - elapsed_ms) / float(self.timeout_ms)))
+        track_w = max(1, self.progress_track.width() or (self.target_w - 6))
+        bar_w = max(0, round(track_w * fraction))
+        self.progress.setGeometry(0, 0, bar_w, self.progress_track.height())
+        if fraction > 0 and not self._progress_timer.isActive():
+            self._progress_timer.start()
+        elif fraction <= 0:
+            self._progress_timer.stop()
+
+    def on_enter(self, _event=None) -> None:
+        if self.is_hovered or self.is_closing:
+            return
+        self.is_hovered = True
+        self._leave_timer.stop()
+        if self._dismiss_timer.isActive():
+            elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
+            self.remaining_ms = max(1.0, self.remaining_ms - elapsed_ms)
+            self._dismiss_timer.stop()
+        self._progress_timer.stop()
+        self._set_hover_state(True)
+
+    def on_leave(self, _event=None) -> None:
+        if not self.is_closing:
+            self._leave_timer.start(20)
+
+    def _resume_if_pointer_left(self) -> None:
+        if self.is_closing:
+            return
+        try:
+            under = QApplication.widgetAt(QCursor.pos())
+            if under is not None and under.window() is self.root:
+                return
+        except Exception:
+            pass
+        self.is_hovered = False
+        self._set_hover_state(False)
+        self._schedule_dismiss()
+
+    def _set_hover_state(self, hovered: bool) -> None:
+        self._apply_surface_style(hovered)
+
+    def _destroy_window(self) -> None:
+        try:
+            self.root.close()
+            self.root.deleteLater()
+            self.app.processEvents()
+            self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+        except Exception:
+            pass
+        if self._running:
+            self._running = False
+            try:
+                self.app.exit(0)
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        if self.is_closing:
+            return
+        self.is_closing = True
+        self._dismiss_timer.stop()
+        self._progress_timer.stop()
+        self._slide_timer.stop()
+        self._leave_timer.stop()
+        release_slot(self.slot, self.pid)
+
+        if not self.enable_animation:
+            self._destroy_window()
+            return
+
+        curr_x = self.root.x() if self.root.isVisible() else self.target_x
+        curr_y = self.root.y() if self.root.isVisible() else self.target_y
+        end_x = curr_x + self.slide_distance
+        t0 = time.monotonic()
+        duration_ms = 160.0
+
+        def out_step() -> None:
+            p = min(1.0, max(0.0, (time.monotonic() - t0) * 1000.0 / duration_ms))
+            x = round(curr_x + (end_x - curr_x) * (p * p))
+            self.root.move(x, curr_y)
+            if p >= 1.0:
+                self._slide_timer.stop()
+                self._destroy_window()
+
+        try:
+            self._slide_timer.timeout.disconnect()
+        except Exception:
+            pass
+        self._slide_timer.timeout.connect(out_step)
+        self._slide_timer.start()
+
+    def run(self) -> None:
+        self._running = True
+        self.root.show()
+        try:
+            self.app.exec()
+        finally:
+            release_slot(self.slot, self.pid)
+
+
+class RibbonPopup(_BaseRibbonPopup):
     def __init__(
         self,
         dest_path: Path,
@@ -575,18 +1073,14 @@ class RibbonPopup:
                 pass
         self.dest_path = dest_path.resolve()
         self.downloads_root = downloads_root.resolve() if downloads_root else Path.home() / "Downloads"
-        self.pid = os.getpid()
-        self.slot = claim_slot(self.pid)
-        self.enable_animation = enable_animation
 
-        # Calculate relative folder display
         try:
             rel = self.dest_path.relative_to(self.downloads_root)
             self.folder_disp = str(rel.parent) if rel.parent != Path(".") else "Downloads"
         except ValueError:
             self.folder_disp = self.dest_path.parent.name
 
-        self.category_type, self.accent_color = get_category_info(self.dest_path, self.folder_disp)
+        self.category_type, accent_color = get_category_info(self.dest_path, self.folder_disp)
         add_to_recent_docs(self.dest_path)
         try:
             from quick_switcher import record_recent_file
@@ -594,113 +1088,19 @@ class RibbonPopup:
         except Exception:
             pass
 
-        # Theme-derived color tokens & reactive border styling
-        self.normal_border = blend_colors(self.accent_color, BORDER_COLOR, 0.32)
-        self.hover_border = blend_colors(self.accent_color, COLORS.get("borderStrong", "#3A4352"), 0.50)
-        self.accent_glow = blend_colors(self.accent_color, "#FFFFFF", 0.25)
-
-        self.root = tk.Tk()
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        self.root.config(bg=self.normal_border)
-
-        # Enable DWM rounded corners + native drop shadow on Windows 11
-        if sys.platform == "win32":
-            try:
-                self.root.update_idletasks()
-                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-                # DWMWA_WINDOW_CORNER_PREFERENCE (33) = DWMWCP_ROUND (2)
-                pref = ctypes.c_int(2)
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)
-                )
-                # Enable DWM shadow via DwmExtendFrameIntoClientArea
-                class MARGINS(ctypes.Structure):
-                    _fields_ = [("left", ctypes.c_int), ("right", ctypes.c_int),
-                                ("top", ctypes.c_int), ("bottom", ctypes.c_int)]
-                m = MARGINS(1, 1, 1, 1)
-                ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(m))
-            except Exception:
-                pass
-
-        # Calculate DPI-scaled dimensions
-        try:
-            dpi = float(self.root.winfo_fpixels("1i"))
-            self.scale = max(1.0, dpi / 96.0)
-        except Exception:
-            self.scale = 1.0
-
-        width, height, self.target_x, self.target_y = scaled_ribbon_geometry(
-            self.scale, self.slot, self._work_area()
-        )
-        self.target_w = width
-        self.target_h = height
-
-        # Animation parameters (220ms ease-out enter, 160ms ease-in exit)
-        self.slide_distance = round(140 * self.scale)
-        self.slide_job: str | None = None
-        self.dismiss_job: str | None = None
-        self.progress_job: str | None = None
-        self.remaining_ms = float(AUTO_DISMISS_MS)
-        self.dismiss_started = 0.0
-        self.is_hovered = False
-        self.is_closing = False
-        self.icon_photo: ImageTk.PhotoImage | None = None
         self.start_time = time.time()
-        self.dismiss_signal_job: str | None = None
+        self._init_window(accent_color, AUTO_DISMISS_MS, enable_animation)
+
+        self._dismiss_signal_timer = QTimer(self.root)
+        self._dismiss_signal_timer.setInterval(100)
+        self._dismiss_signal_timer.timeout.connect(self._check_dismiss_signal)
 
         self._build_ui(self.scale)
-
-        if self.enable_animation:
-            start_x = self.target_x + self.slide_distance
-            self.root.geometry(f"{width}x{height}+{start_x}+{self.target_y}")
-            self._animate_slide_in(start_x, self.target_x, self.target_y, duration_ms=220)
-        else:
-            self.root.geometry(f"{width}x{height}+{self.target_x}+{self.target_y}")
-            self._schedule_dismiss()
-
-        # Poll external dismiss signals (e.g. file injected in Quick Switcher)
-        try:
-            self.dismiss_signal_job = self.root.after(100, self._check_dismiss_signal)
-        except tk.TclError:
-            pass
-
-    def _work_area(self) -> tuple[int, int, int, int]:
-        """Return the foreground monitor's work area, excluding its taskbar."""
-        if sys.platform == "win32":
-            try:
-                class RECT(ctypes.Structure):
-                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
-
-                class MONITORINFO(ctypes.Structure):
-                    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT),
-                                ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
-
-                hwnd = ctypes.windll.user32.GetForegroundWindow()
-                monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)
-                info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
-                if monitor and ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-                    work = info.rcWork
-                    return work.left, work.top, work.right, work.bottom
-            except Exception:
-                pass
-        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        self._finish_window_setup()
+        self._dismiss_signal_timer.start()
 
     def _build_ui(self, scale: float) -> None:
-        pad_y = int(9 * scale)
-        stripe_w = max(4, int(4 * scale))
         icon_size = max(32, int(38 * scale))
-        progress_h = max(2, int(2.5 * scale))
-
-        self.container = tk.Frame(self.root, bg=BG_COLOR, cursor="hand2")
-        self.container.pack(fill="both", expand=True, padx=1, pady=1)
-
-        # Left accent stripe (vertical colored border indicator)
-        self.stripe = tk.Frame(self.container, bg=self.accent_color, width=stripe_w)
-        self.stripe.pack(side="left", fill="y")
-
-        # Category Emblem Badge (anti-aliased Pillow icon or high-contrast fallback)
         icon_img = None
         if self.dest_path.suffix.lower() == ".3mf" and HAS_PIL:
             try:
@@ -715,371 +1115,110 @@ class RibbonPopup:
                 pass
         if icon_img is None:
             icon_img = render_category_icon(self.category_type, self.accent_color, size=icon_size)
-        if icon_img and HAS_PIL:
-            self.icon_photo = ImageTk.PhotoImage(icon_img)
-            self.status = tk.Label(
-                self.container,
-                image=self.icon_photo,
-                bg=BG_COLOR,
-                bd=0,
-                cursor="hand2",
-            )
-            status_padx = (int(10 * scale), int(2 * scale))
-            self.status.pack(side="left", padx=status_padx, pady=int(6 * scale))
-        else:
-            fallback_glyph = CATEGORY_GLYPHS.get(self.category_type, "✓")
-            self.status = tk.Label(
-                self.container,
-                text=fallback_glyph,
-                font=(FONT_FAMILY, 14, "bold"),
-                fg=self.accent_color,
-                bg=BG_COLOR,
-                width=2,
-                anchor="center",
-            )
-            status_padx = (int(8 * scale), int(2 * scale))
-            self.status.pack(side="left", padx=status_padx, fill="y")
-
-        # Main content area
-        content_padx = int(8 * scale)
-        self.content = tk.Frame(self.container, bg=BG_COLOR, padx=content_padx, pady=pad_y)
-        self.content.pack(side="left", fill="both", expand=True)
-
-        # Tk has not laid anything out yet, so work out how wide the bottom row will be
-        # from what is packed to its left: the frame around the container (1 px each
-        # side), the stripe, the icon with its padding, and the content padding.
-        row_width = self.target_w - 2 - stripe_w - self.status.winfo_reqwidth() - sum(status_padx) - 2 * content_padx
-
-        # Top row: Eyebrow tag badge + Close button
-        self.top_row = tk.Frame(self.content, bg=BG_COLOR)
-        self.top_row.pack(fill="x")
 
         folder_upper = self.folder_disp.upper()
         if len(folder_upper) > 22:
             folder_upper = folder_upper[:20] + "…"
-        if self.is_held:
-            tag_text = f"●  3MF HOLD  ·  {folder_upper}"
-        else:
-            tag_text = f"●  SORTED  ·  {folder_upper}"
+        tag_text = f"●  3MF HOLD  ·  {folder_upper}" if self.is_held else f"●  SORTED  ·  {folder_upper}"
+        fallback_glyph = CATEGORY_GLYPHS.get(self.category_type, "✓")
+        self._build_chrome(scale, icon_img, fallback_glyph, tag_text)
 
-        self.tag_lbl = tk.Label(
-            self.top_row,
-            text=tag_text,
-            font=(FONT_FAMILY, 8, "bold"),
-            fg=self.accent_color,
-            bg=BG_COLOR,
-            anchor="w",
-        )
-        self.tag_lbl.pack(side="left")
-
-        # Close button with guaranteed minimum 24px hit target per RIBBON_SPEC.md
-        hit_target = max(24, int(24 * scale))
-        self.close_frame = tk.Frame(
-            self.top_row,
-            bg=BG_COLOR,
-            width=hit_target,
-            height=hit_target,
-            cursor="hand2",
-        )
-        self.close_frame.pack_propagate(False)
-        self.close_frame.pack(side="right")
-
-        self.close_btn = tk.Label(
-            self.close_frame,
-            text="✕",
-            font=(FONT_FAMILY, 9, "bold"),
-            fg=CLOSE_COLOR,
-            bg=BG_COLOR,
-            cursor="hand2",
-            anchor="center",
-        )
-        self.close_btn.pack(fill="both", expand=True)
-        self.close_btn.bind("<Button-1>", lambda e: (self.close(), "break")[1])
-        self.close_frame.bind("<Button-1>", lambda e: (self.close(), "break")[1])
-
-        def on_close_enter(_e):
-            self.close_btn.config(fg=CLOSE_HOVER, bg=SURFACE_HOVER)
-            self.close_frame.config(bg=SURFACE_HOVER)
-
-        def on_close_leave(_e):
-            curr_bg = HOVER_BG if self.is_hovered else BG_COLOR
-            self.close_btn.config(fg=CLOSE_COLOR, bg=curr_bg)
-            self.close_frame.config(bg=curr_bg)
-
-        self.close_btn.bind("<Enter>", on_close_enter)
-        self.close_btn.bind("<Leave>", on_close_leave)
-        self.close_frame.bind("<Enter>", on_close_enter)
-        self.close_frame.bind("<Leave>", on_close_leave)
-
-        # Middle row: Filename (Title)
         fname = self.dest_path.name
         if len(fname) > 36:
             fname = fname[:33] + "..."
-
-        self.name_lbl = tk.Label(
-            self.content,
-            text=fname,
-            font=(FONT_FAMILY, 10, "bold"),
-            fg=TEXT_MAIN,
-            bg=BG_COLOR,
-            anchor="w",
+        self.name_lbl = QLabel(fname, self.content)
+        self.name_lbl.setStyleSheet(
+            f"color: {TEXT_MAIN}; font-family: '{FONT_FAMILY}';"
+            f" font-size: {self._px(10, scale)}px; font-weight: 700;"
         )
-        self.name_lbl.pack(fill="x", pady=(2, 1))
+        self.content_layout.addWidget(self.name_lbl)
 
-        # Bottom row: where the file went on the left, the action pills on the right
-        self.bottom_row = tk.Frame(self.content, bg=BG_COLOR)
-        self.bottom_row.pack(fill="x", pady=(1, 0))
+        self.bottom_row = QWidget(self.content)
+        self.bottom_row_layout = QHBoxLayout(self.bottom_row)
+        self.bottom_row_layout.setContentsMargins(0, 0, 0, 0)
+        pill_gap = max(2, int(3 * scale))
+        self.bottom_row_layout.setSpacing(pill_gap)
+        self.content_layout.addWidget(self.bottom_row)
 
-        # The text is measured with this same font object, so it is drawn as wide as it measured
-        self._action_font = tkfont.Font(root=self.root, family=FONT_FAMILY, size=9)
-        self.action_lbl = tk.Label(
-            self.bottom_row,
-            text=f"Saved to {self.folder_disp}",
-            font=self._action_font,
-            fg=TEXT_MUTED,
-            bg=BG_COLOR,
-            anchor="w",
+        self._action_font = QFont(FONT_FAMILY)
+        self._action_font.setPixelSize(self._px(9, scale))
+        self.action_lbl = QLabel(f"Saved to {self.folder_disp}", self.bottom_row)
+        self.action_lbl.setFont(self._action_font)
+        self.action_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-family: '{FONT_FAMILY}'; font-size: {self._px(9, scale)}px;"
         )
+        self.bottom_row_layout.addWidget(self.action_lbl, 1)
 
-        # Explicit interactive "Jump to File" pill button (or File now / Keep here when held)
-        self.jump_btn = tk.Label(
-            self.bottom_row,
-            text="Jump to File ›",
-            font=(FONT_FAMILY, 8, "bold"),
-            fg=ACTION_COLOR,
-            bg=SURFACE_RAISED,
-            cursor="hand2",
-            padx=int(6 * scale),
-            pady=int(1 * scale),
+        self.jump_btn = self._make_pill_button(
+            self.bottom_row, "Jump to File ›", ACTION_COLOR, SURFACE_RAISED, self.on_click, scale, pad_x=6, pad_y=1
         )
-        pill_gap = int(3 * scale)
+        pills: list[QPushButton] = []
         if self.is_held:
-            self.file_now_btn = tk.Label(
-                self.bottom_row,
-                text="File now",
-                font=(FONT_FAMILY, 8, "bold"),
-                fg=COLORS.get("canvas", "#0B0D12"),
-                bg=self.accent_color,
-                cursor="hand2",
-                padx=int(5 * scale),
-                pady=int(1 * scale),
+            self.jump_btn.hide()
+            self.keep_here_btn = self._make_pill_button(
+                self.bottom_row, "Keep here", TEXT_MAIN, SURFACE_RAISED, self._on_keep_here, scale, pad_x=5, pad_y=1
             )
-            self.file_now_btn.pack(side="right", padx=(pill_gap, 0))
-            self.file_now_btn.bind("<Button-1>", lambda e: (self._on_file_now(), "break")[1])
-            self.file_now_btn.bind("<Enter>", self.on_enter)
-            self.file_now_btn.bind("<Leave>", self.on_leave)
-
-            self.keep_here_btn = tk.Label(
-                self.bottom_row,
-                text="Keep here",
-                font=(FONT_FAMILY, 8, "bold"),
-                fg=TEXT_MAIN,
-                bg=SURFACE_RAISED,
-                cursor="hand2",
-                padx=int(5 * scale),
-                pady=int(1 * scale),
+            self.file_now_btn = self._make_pill_button(
+                self.bottom_row, "File now", fg=COLORS["canvas"], bg=self.accent_color, handler=self._on_file_now, scale=scale, pad_x=5, pad_y=1
             )
-            self.keep_here_btn.pack(side="right")
-            self.keep_here_btn.bind("<Button-1>", lambda e: (self._on_keep_here(), "break")[1])
-            self.keep_here_btn.bind("<Enter>", self.on_enter)
-            self.keep_here_btn.bind("<Leave>", self.on_leave)
+            self.bottom_row_layout.addWidget(self.keep_here_btn)
+            self.bottom_row_layout.addWidget(self.file_now_btn)
             pills = [self.file_now_btn, self.keep_here_btn]
         else:
-            # Undo sits left of "Jump to File": the file is already filed, so this puts it back
-            self.undo_btn = tk.Label(
-                self.bottom_row,
-                text="Undo",
-                font=(FONT_FAMILY, 8, "bold"),
-                fg=TEXT_MAIN,
-                bg=SURFACE_RAISED,
-                cursor="hand2",
-                padx=int(6 * scale),
-                pady=int(1 * scale),
-            )
-            self.jump_btn.pack(side="right")
-            self.undo_btn.pack(side="right", padx=(0, pill_gap))
-            self.undo_btn.bind("<Button-1>", lambda e: (self._on_undo(), "break")[1])
-            self.undo_btn.bind("<Enter>", self.on_enter)
-            self.undo_btn.bind("<Leave>", self.on_leave)
-            pills = [self.jump_btn, self.undo_btn]
-
-            # A sorted .3mf can be opened in Bambu Studio from here: Bambu then remembers
-            # the sorted path in its Recently Opened list from the start.
             self.open_bambu_btn = None
             if self.dest_path.suffix.lower() == ".3mf" and self._bambu_available():
-                self.open_bambu_btn = tk.Label(
-                    self.bottom_row,
-                    text="Open in Bambu ›",
-                    font=(FONT_FAMILY, 8, "bold"),
-                    fg=ACTION_COLOR,
-                    bg=SURFACE_RAISED,
-                    cursor="hand2",
-                    padx=int(6 * scale),
-                    pady=int(1 * scale),
+                self.open_bambu_btn = self._make_pill_button(
+                    self.bottom_row, "Open in Bambu ›", ACTION_COLOR, SURFACE_RAISED, self._on_open_in_bambu, scale, pad_x=6, pad_y=1
                 )
-                self.open_bambu_btn.pack(side="right", padx=(0, pill_gap))
-                self.open_bambu_btn.bind("<Button-1>", lambda e: (self._on_open_in_bambu(), "break")[1])
-                self.open_bambu_btn.bind("<Enter>", self.on_enter)
-                self.open_bambu_btn.bind("<Leave>", self.on_leave)
+                self.bottom_row_layout.addWidget(self.open_bambu_btn)
                 pills.append(self.open_bambu_btn)
 
-        # The text goes in last: Tk lays out in packing order, so a long folder name can
-        # only squeeze the text and never push a pill out of view.
-        self.action_lbl.pack(side="left")
-        self._fit_action_text(row_width, pills, pill_gap, scale)
+            self.undo_btn = self._make_pill_button(
+                self.bottom_row, "Undo", TEXT_MAIN, SURFACE_RAISED, self._on_undo, scale, pad_x=6, pad_y=1
+            )
+            self.bottom_row_layout.addWidget(self.undo_btn)
+            self.bottom_row_layout.addWidget(self.jump_btn)
+            pills.extend([self.jump_btn, self.undo_btn])
 
-        # Bind hover and click events across all interactive surface widgets
-        interactive_widgets = [
-            self.container, self.content, self.top_row,
-            self.tag_lbl, self.name_lbl, self.bottom_row,
-            self.action_lbl, self.jump_btn, self.stripe, self.status
-        ]
-        for widget in interactive_widgets:
-            widget.bind("<Button-1>", self.on_click)
-            widget.bind("<Enter>", self.on_enter)
-            widget.bind("<Leave>", self.on_leave)
+        for p in pills:
+            p.setMinimumWidth(p.sizeHint().width())
 
-        # Subtle progress track underlay & active timer progress bar
-        self.progress_track = tk.Frame(self.container, bg=SURFACE_RAISED, height=progress_h)
-        self.progress_track.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
+        self._fit_action_text(self._row_width, pills, pill_gap, scale)
+        self.root.layout().activate()
+        self.bottom_row_layout.activate()
 
-        self.progress = tk.Frame(self.container, bg=self.accent_color, height=progress_h)
-        self.progress.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
+        self._click_filter = _SurfaceClickFilter(self, self.on_click)
+        for widget in (self.container, self.content, self.top_row, self.tag_lbl,
+                       self.name_lbl, self.bottom_row, self.action_lbl, self.stripe, self.status):
+            widget.installEventFilter(self._click_filter)
 
-    def _fit_action_text(self, row_width: int, pills: list, pill_gap: int, scale: float) -> None:
-        """Show as much of "Saved to <folder>" as the pills leave room for.
-
-        Widths come from Tk (``Font.measure`` for the text, ``winfo_reqwidth`` for the
-        pills), not from counting characters, so it holds at every display scale.
-        """
-        measure = self._action_font.measure
-        text_padding = self.action_lbl.winfo_reqwidth() - measure(self.action_lbl.cget("text"))
+    def _fit_action_text(self, row_width: int, pills: list[QPushButton], pill_gap: int, scale: float) -> None:
+        measure = QFontMetrics(self._action_font).horizontalAdvance
         room = (
             row_width
-            - sum(pill.winfo_reqwidth() for pill in pills)
-            - pill_gap * max(0, len(pills) - 1)  # between the pills
-            - int(6 * scale)    # between the text and the first pill
-            - text_padding
+            - sum(pill.sizeHint().width() for pill in pills)
+            - pill_gap * max(0, len(pills))
+            - int(4 * scale)
         )
         if self.is_held:
             text = fit_text(HELD_TEXTS, room, measure)
         else:
             text = fit_folder_text(self.folder_disp, room, measure)
-        self.action_lbl.config(text=text)
-
-    def _animate_slide_in(
-        self,
-        start_x: int,
-        target_x: int,
-        target_y: int,
-        duration_ms: float = 220.0,
-    ) -> None:
-        """Silky 60fps entrance slide using a cubic ease-out curve."""
-        t0 = time.monotonic()
-
-        def step() -> None:
-            if self.is_closing:
-                return
-            now = time.monotonic()
-            elapsed = (now - t0) * 1000.0
-            p = min(1.0, max(0.0, elapsed / duration_ms))
-            # Cubic ease-out: 1 - (1 - p)^3
-            ease_out = 1.0 - (1.0 - p) ** 3
-            curr_x = round(start_x + (target_x - start_x) * ease_out)
-            try:
-                self.root.geometry(f"{self.target_w}x{self.target_h}+{curr_x}+{target_y}")
-                if p < 1.0:
-                    self.slide_job = self.root.after(16, step)
-                else:
-                    self.root.geometry(f"{self.target_w}x{self.target_h}+{target_x}+{target_y}")
-                    self.slide_job = None
-                    self._schedule_dismiss()
-            except tk.TclError:
-                pass
-
-        self.slide_job = self.root.after(10, step)
-
-    def _schedule_dismiss(self) -> None:
-        if self.dismiss_job:
-            self.root.after_cancel(self.dismiss_job)
-        self.dismiss_started = time.monotonic()
-        self.dismiss_job = self.root.after(max(1, int(self.remaining_ms)), self.close)
-        self._tick_progress()
-
-    def _tick_progress(self) -> None:
-        if self.progress_job:
-            self.root.after_cancel(self.progress_job)
-            self.progress_job = None
-        if self.is_hovered or self.is_closing:
-            return
-        elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
-        fraction = max(0.0, min(1.0, (self.remaining_ms - elapsed_ms) / AUTO_DISMISS_MS))
-        try:
-            self.progress.place_configure(relwidth=fraction)
-            if fraction > 0:
-                self.progress_job = self.root.after(20, self._tick_progress)
-        except tk.TclError:
-            pass
-
-    def on_enter(self, _event=None) -> None:
-        if self.is_hovered or self.is_closing:
-            return
-        self.is_hovered = True
-        if self.dismiss_job:
-            elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
-            self.remaining_ms = max(1.0, self.remaining_ms - elapsed_ms)
-            self.root.after_cancel(self.dismiss_job)
-            self.dismiss_job = None
-        if self.progress_job:
-            self.root.after_cancel(self.progress_job)
-            self.progress_job = None
-        self._set_hover_state(True)
-
-    def on_leave(self, _event=None) -> None:
-        if self.is_closing:
-            return
-        self.root.after(20, self._resume_if_pointer_left)
-
-    def _resume_if_pointer_left(self) -> None:
-        if self.is_closing:
-            return
-        try:
-            pointer_widget = self.root.winfo_containing(
-                self.root.winfo_pointerx(), self.root.winfo_pointery()
-            )
-            if pointer_widget is not None and pointer_widget.winfo_toplevel() == self.root:
-                return
-        except Exception:
-            pass
-        self.is_hovered = False
-        self._set_hover_state(False)
-        self._schedule_dismiss()
+        self.action_lbl.setText(text)
 
     def _set_hover_state(self, hovered: bool) -> None:
-        bg = HOVER_BG if hovered else BG_COLOR
-        border = self.hover_border if hovered else self.normal_border
+        super()._set_hover_state(hovered)
         action_col = ACTION_COLOR if hovered else TEXT_MUTED
-        bar_col = self.accent_glow if hovered else self.accent_color
         btn_bg = SURFACE_HOVER if hovered else SURFACE_RAISED
         btn_fg = self.accent_color if hovered else ACTION_COLOR
-
-        self.root.config(bg=border)
-        self.container.config(bg=bg)
-        self.content.config(bg=bg)
-        self.top_row.config(bg=bg)
-        self.tag_lbl.config(bg=bg)
-        self.name_lbl.config(bg=bg)
-        self.bottom_row.config(bg=bg)
-        self.action_lbl.config(bg=bg, fg=action_col)
-        self.jump_btn.config(bg=btn_bg, fg=btn_fg)
-        if hasattr(self, "keep_here_btn"):
-            self.keep_here_btn.config(bg=btn_bg)
-        if hasattr(self, "undo_btn"):
-            self.undo_btn.config(bg=btn_bg)
-        self.status.config(bg=bg)
-        self.close_frame.config(bg=bg)
-        self.close_btn.config(bg=bg)
-        self.progress.config(bg=bar_col)
+        self.action_lbl.setStyleSheet(
+            f"color: {action_col}; font-family: '{FONT_FAMILY}'; font-size: {self._px(9, self.scale)}px;"
+        )
+        self.jump_btn.setStyleSheet(
+            f"QPushButton {{ background: {btn_bg}; color: {btn_fg}; border: none; border-radius: 4px;"
+            f" padding: {int(1 * self.scale)}px {int(6 * self.scale)}px;"
+            f" font-family: '{FONT_FAMILY}'; font-size: {self._px(8, self.scale)}px; font-weight: 700; }}"
+        )
 
     def _on_file_now(self) -> None:
         try:
@@ -1098,12 +1237,6 @@ class RibbonPopup:
         self.close()
 
     def _on_undo(self) -> None:
-        """Put this one file back where it came from, then close.
-
-        Another process does the work (``--undo --file``) and shows a short ribbon
-        when it is done, so this one can close at once. A second click while it
-        slides out does nothing, so the file is not undone twice.
-        """
         if self.is_closing:
             return
         _spawn(_app_command("--undo", "--file", str(self.dest_path), "--quiet-toast"))
@@ -1137,7 +1270,6 @@ class RibbonPopup:
                     elif self.downloads_root.exists():
                         os.startfile(str(self.downloads_root))
                 elif "," in dest_str:
-                    # Windows explorer.exe /select splits on commas. PowerShell handles it safely.
                     cmd = (
                         "Start-Process explorer.exe -ArgumentList "
                         f"('/select,\"' + [System.IO.Path]::GetFullPath('{dest_str}') + '\"')"
@@ -1147,7 +1279,6 @@ class RibbonPopup:
                         creationflags=subprocess.CREATE_NO_WINDOW
                     )
                 else:
-                    # Pass unquoted string command line so CreateProcess does not wrap /select
                     cmd = f'explorer.exe /select,"{dest_str}"'
                     subprocess.Popen(cmd)
             else:
@@ -1159,6 +1290,7 @@ class RibbonPopup:
 
     def _check_dismiss_signal(self) -> None:
         if self.is_closing:
+            self._dismiss_signal_timer.stop()
             return
         if RIBBON_DISMISS_FILE.exists():
             try:
@@ -1173,76 +1305,11 @@ class RibbonPopup:
                         return
             except Exception:
                 pass
-        try:
-            self.dismiss_signal_job = self.root.after(100, self._check_dismiss_signal)
-        except tk.TclError:
-            pass
 
     def close(self) -> None:
-        """Dismiss the ribbon with a snappy slide-out exit animation."""
-        if self.is_closing:
-            return
-        self.is_closing = True
-
-        if self.dismiss_signal_job:
-            try:
-                self.root.after_cancel(self.dismiss_signal_job)
-            except Exception:
-                pass
-            self.dismiss_signal_job = None
-        if self.dismiss_job:
-            self.root.after_cancel(self.dismiss_job)
-            self.dismiss_job = None
-        if self.progress_job:
-            self.root.after_cancel(self.progress_job)
-            self.progress_job = None
-        if self.slide_job:
-            self.root.after_cancel(self.slide_job)
-            self.slide_job = None
-
-        release_slot(self.slot, self.pid)
-
-        if not self.enable_animation:
-            try:
-                self.root.destroy()
-            except tk.TclError:
-                pass
-            return
-
-        try:
-            curr_x = self.root.winfo_x()
-            curr_y = self.root.winfo_y()
-        except Exception:
-            curr_x = self.target_x
-            curr_y = self.target_y
-
-        end_x = curr_x + self.slide_distance
-        t0 = time.monotonic()
-        duration_ms = 160.0
-
-        def out_step() -> None:
-            now = time.monotonic()
-            elapsed = (now - t0) * 1000.0
-            p = min(1.0, max(0.0, elapsed / duration_ms))
-            # Quadratic ease-in: p^2
-            ease_in = p * p
-            x = round(curr_x + (end_x - curr_x) * ease_in)
-            try:
-                self.root.geometry(f"{self.target_w}x{self.target_h}+{x}+{curr_y}")
-                if p < 1.0:
-                    self.slide_job = self.root.after(16, out_step)
-                else:
-                    self.root.destroy()
-            except tk.TclError:
-                pass
-
-        out_step()
-
-    def run(self) -> None:
-        try:
-            self.root.mainloop()
-        finally:
-            release_slot(self.slot, self.pid)
+        if hasattr(self, "_dismiss_signal_timer"):
+            self._dismiss_signal_timer.stop()
+        super().close()
 
 
 def _ribbon_command(*args: str) -> list[str]:
@@ -1404,7 +1471,7 @@ def notify_file_moved(
     _spawn(_ribbon_command(str(dest), *([str(root)] if root else [])))
 
 
-class SummaryRibbonPopup:
+class SummaryRibbonPopup(_BaseRibbonPopup):
     def __init__(
         self,
         title: str,
@@ -1415,380 +1482,51 @@ class SummaryRibbonPopup:
     ) -> None:
         self.title = title
         self.message = message
-        self.accent_color = accent
-        self.timeout_ms = max(500, timeout_ms)
-        self.enable_animation = enable_animation
-        self.pid = os.getpid()
-        self.slot = claim_slot(self.pid)
-
-        self.normal_border = blend_colors(self.accent_color, BORDER_COLOR, 0.32)
-        self.hover_border = blend_colors(self.accent_color, COLORS.get("borderStrong", "#3A4352"), 0.50)
-        self.accent_glow = blend_colors(self.accent_color, "#FFFFFF", 0.25)
-
-        self.root = tk.Tk()
-        self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True)
-        self.root.config(bg=self.normal_border)
-
-        # Enable DWM rounded corners + native drop shadow on Windows 11
-        if sys.platform == "win32":
-            try:
-                self.root.update_idletasks()
-                hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-                pref = ctypes.c_int(2)
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)
-                )
-                class MARGINS(ctypes.Structure):
-                    _fields_ = [("left", ctypes.c_int), ("right", ctypes.c_int),
-                                ("top", ctypes.c_int), ("bottom", ctypes.c_int)]
-                m = MARGINS(1, 1, 1, 1)
-                ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, ctypes.byref(m))
-            except Exception:
-                pass
-
-        try:
-            dpi = float(self.root.winfo_fpixels("1i"))
-            self.scale = max(1.0, dpi / 96.0)
-        except Exception:
-            self.scale = 1.0
-
-        width, height, self.target_x, self.target_y = scaled_ribbon_geometry(
-            self.scale, self.slot, self._work_area()
-        )
-        self.target_w = width
-        self.target_h = height
-
-        self.slide_distance = round(140 * self.scale)
-        self.slide_job: str | None = None
-        self.dismiss_job: str | None = None
-        self.progress_job: str | None = None
-        self.remaining_ms = float(self.timeout_ms)
-        self.dismiss_started = 0.0
-        self.is_hovered = False
-        self.is_closing = False
-        self.icon_photo: ImageTk.PhotoImage | None = None
-
+        self.action_buttons: list[QPushButton] = []
+        self._init_window(accent, timeout_ms, enable_animation)
         self._build_ui(self.scale)
-
-        if self.enable_animation:
-            start_x = self.target_x + self.slide_distance
-            self.root.geometry(f"{width}x{height}+{start_x}+{self.target_y}")
-            self._animate_slide_in(start_x, self.target_x, self.target_y, duration_ms=220)
-        else:
-            self.root.geometry(f"{width}x{height}+{self.target_x}+{self.target_y}")
-            self._schedule_dismiss()
-
-    def _work_area(self) -> tuple[int, int, int, int]:
-        if sys.platform == "win32":
-            try:
-                class RECT(ctypes.Structure):
-                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
-
-                class MONITORINFO(ctypes.Structure):
-                    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", RECT),
-                                ("rcWork", RECT), ("dwFlags", ctypes.c_ulong)]
-
-                hwnd = ctypes.windll.user32.GetForegroundWindow()
-                monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)
-                info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
-                if monitor and ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-                    work = info.rcWork
-                    return work.left, work.top, work.right, work.bottom
-            except Exception:
-                pass
-        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        self._finish_window_setup()
 
     def _build_ui(self, scale: float) -> None:
-        pad_y = int(9 * scale)
-        stripe_w = max(4, int(4 * scale))
         icon_size = max(32, int(38 * scale))
-        progress_h = max(2, int(2.5 * scale))
-
-        self.container = tk.Frame(self.root, bg=BG_COLOR, cursor="hand2")
-        self.container.pack(fill="both", expand=True, padx=1, pady=1)
-
-        self.stripe = tk.Frame(self.container, bg=self.accent_color, width=stripe_w)
-        self.stripe.pack(side="left", fill="y")
-
         icon_img = render_category_icon("other", self.accent_color, size=icon_size) if HAS_PIL else None
-        if icon_img and HAS_PIL:
-            self.icon_photo = ImageTk.PhotoImage(icon_img)
-            self.status = tk.Label(
-                self.container,
-                image=self.icon_photo,
-                bg=BG_COLOR,
-                bd=0,
-                cursor="hand2",
-            )
-            self.status.pack(side="left", padx=(int(10 * scale), int(2 * scale)), pady=int(6 * scale))
-        else:
-            fallback_glyph = "↺" if "undo" in self.title.lower() else "✓"
-            self.status = tk.Label(
-                self.container,
-                text=fallback_glyph,
-                font=(FONT_FAMILY, 14, "bold"),
-                fg=self.accent_color,
-                bg=BG_COLOR,
-                width=2,
-                anchor="center",
-            )
-            self.status.pack(side="left", padx=(int(8 * scale), int(2 * scale)), fill="y")
-
-        self.content = tk.Frame(self.container, bg=BG_COLOR, padx=int(8 * scale), pady=pad_y)
-        self.content.pack(side="left", fill="both", expand=True)
-
-        self.top_row = tk.Frame(self.content, bg=BG_COLOR)
-        self.top_row.pack(fill="x")
-
-        self.tag_lbl = tk.Label(
-            self.top_row,
-            text=f"●  {about.APP_NAME.upper()}",
-            font=(FONT_FAMILY, 8, "bold"),
-            fg=self.accent_color,
-            bg=BG_COLOR,
-            anchor="w",
-        )
-        self.tag_lbl.pack(side="left")
-
-        hit_target = max(24, int(24 * scale))
-        self.close_frame = tk.Frame(
-            self.top_row,
-            bg=BG_COLOR,
-            width=hit_target,
-            height=hit_target,
-            cursor="hand2",
-        )
-        self.close_frame.pack_propagate(False)
-        self.close_frame.pack(side="right")
-
-        self.close_btn = tk.Label(
-            self.close_frame,
-            text="✕",
-            font=(FONT_FAMILY, 9, "bold"),
-            fg=CLOSE_COLOR,
-            bg=BG_COLOR,
-            cursor="hand2",
-            anchor="center",
-        )
-        self.close_btn.pack(fill="both", expand=True)
-        self.close_btn.bind("<Button-1>", lambda e: (self.close(), "break")[1])
-        self.close_frame.bind("<Button-1>", lambda e: (self.close(), "break")[1])
-
-        def on_close_enter(_e):
-            self.close_btn.config(fg=CLOSE_HOVER, bg=SURFACE_HOVER)
-            self.close_frame.config(bg=SURFACE_HOVER)
-
-        def on_close_leave(_e):
-            curr_bg = HOVER_BG if self.is_hovered else BG_COLOR
-            self.close_btn.config(fg=CLOSE_COLOR, bg=curr_bg)
-            self.close_frame.config(bg=curr_bg)
-
-        self.close_btn.bind("<Enter>", on_close_enter)
-        self.close_btn.bind("<Leave>", on_close_leave)
-        self.close_frame.bind("<Enter>", on_close_enter)
-        self.close_frame.bind("<Leave>", on_close_leave)
+        fallback_glyph = "↺" if "undo" in self.title.lower() else "✓"
+        self._build_chrome(scale, icon_img, fallback_glyph, f"●  {about.APP_NAME.upper()}")
 
         title_text = self.title
         if len(title_text) > 36:
             title_text = title_text[:33] + "..."
-        self.title_lbl = tk.Label(
-            self.content,
-            text=title_text,
-            font=(FONT_FAMILY, 10, "bold"),
-            fg=TEXT_MAIN,
-            bg=BG_COLOR,
-            anchor="w",
+        self.title_lbl = QLabel(title_text, self.content)
+        self.title_lbl.setStyleSheet(
+            f"color: {TEXT_MAIN}; font-family: '{FONT_FAMILY}';"
+            f" font-size: {self._px(10, scale)}px; font-weight: 700;"
         )
-        self.title_lbl.pack(fill="x", pady=(2, 1))
+        self.content_layout.addWidget(self.title_lbl)
 
         msg_text = self.message
         if len(msg_text) > 48:
             msg_text = msg_text[:45] + "…"
-        self.msg_lbl = tk.Label(
-            self.content,
-            text=msg_text,
-            font=(FONT_FAMILY, 9),
-            fg=TEXT_MUTED,
-            bg=BG_COLOR,
-            anchor="w",
+        self.msg_lbl = QLabel(msg_text, self.content)
+        self.msg_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-family: '{FONT_FAMILY}'; font-size: {self._px(9, scale)}px;"
         )
-        self.msg_lbl.pack(fill="x", pady=(1, 0))
+        self.content_layout.addWidget(self.msg_lbl)
 
-        interactive_widgets = [
-            self.container, self.content, self.top_row,
-            self.tag_lbl, self.title_lbl, self.msg_lbl,
-            self.stripe, self.status,
-        ]
-        for widget in interactive_widgets:
-            widget.bind("<Button-1>", lambda _e: self.close())
-            widget.bind("<Enter>", self.on_enter)
-            widget.bind("<Leave>", self.on_leave)
+        self._click_filter = _SurfaceClickFilter(self, self.close)
+        for widget in (self.container, self.content, self.top_row,
+                       self.tag_lbl, self.title_lbl, self.msg_lbl, self.stripe, self.status):
+            widget.installEventFilter(self._click_filter)
 
-        self.progress_track = tk.Frame(self.container, bg=SURFACE_RAISED, height=progress_h)
-        self.progress_track.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
-
-        self.progress = tk.Frame(self.container, bg=self.accent_color, height=progress_h)
-        self.progress.place(x=stripe_w, rely=1.0, anchor="sw", relwidth=1.0)
-
-    def _animate_slide_in(self, start_x: int, target_x: int, target_y: int, duration_ms: float = 220.0) -> None:
-        t0 = time.monotonic()
-
-        def step() -> None:
-            if self.is_closing:
-                return
-            now = time.monotonic()
-            elapsed = (now - t0) * 1000.0
-            p = min(1.0, max(0.0, elapsed / duration_ms))
-            ease_out = 1.0 - (1.0 - p) ** 3
-            curr_x = round(start_x + (target_x - start_x) * ease_out)
-            try:
-                self.root.geometry(f"{self.target_w}x{self.target_h}+{curr_x}+{target_y}")
-                if p < 1.0:
-                    self.slide_job = self.root.after(16, step)
-                else:
-                    self.root.geometry(f"{self.target_w}x{self.target_h}+{target_x}+{target_y}")
-                    self.slide_job = None
-                    self._schedule_dismiss()
-            except tk.TclError:
-                pass
-
-        self.slide_job = self.root.after(10, step)
-
-    def _schedule_dismiss(self) -> None:
-        if self.dismiss_job:
-            self.root.after_cancel(self.dismiss_job)
-        self.dismiss_started = time.monotonic()
-        self.dismiss_job = self.root.after(max(1, int(self.remaining_ms)), self.close)
-        self._tick_progress()
-
-    def _tick_progress(self) -> None:
-        if self.progress_job:
-            self.root.after_cancel(self.progress_job)
-            self.progress_job = None
-        if self.is_hovered or self.is_closing:
-            return
-        elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
-        fraction = max(0.0, min(1.0, (self.remaining_ms - elapsed_ms) / self.timeout_ms))
-        try:
-            self.progress.place_configure(relwidth=fraction)
-            if fraction > 0:
-                self.progress_job = self.root.after(20, self._tick_progress)
-        except tk.TclError:
-            pass
-
-    def on_enter(self, _event=None) -> None:
-        if self.is_hovered or self.is_closing:
-            return
-        self.is_hovered = True
-        if self.dismiss_job:
-            elapsed_ms = (time.monotonic() - self.dismiss_started) * 1000.0
-            self.remaining_ms = max(1.0, self.remaining_ms - elapsed_ms)
-            self.root.after_cancel(self.dismiss_job)
-            self.dismiss_job = None
-        if self.progress_job:
-            self.root.after_cancel(self.progress_job)
-            self.progress_job = None
-        self._set_hover_state(True)
-
-    def on_leave(self, _event=None) -> None:
-        if self.is_closing:
-            return
-        self.root.after(20, self._resume_if_pointer_left)
-
-    def _resume_if_pointer_left(self) -> None:
-        if self.is_closing:
-            return
-        try:
-            pointer_widget = self.root.winfo_containing(
-                self.root.winfo_pointerx(), self.root.winfo_pointery()
+    def _add_top_actions(self, pairs: tuple[tuple[str, object], ...]) -> None:
+        """Add compact header action buttons left of the close button."""
+        insert_at = max(1, self.top_row_layout.count() - 1)
+        for text, handler in pairs:
+            btn = self._make_pill_button(
+                self.top_row, text, ACTION_COLOR, "transparent", handler, self.scale, pad_x=6, pad_y=1, font_pt=9.0
             )
-            if pointer_widget is not None and pointer_widget.winfo_toplevel() == self.root:
-                return
-        except Exception:
-            pass
-        self.is_hovered = False
-        self._set_hover_state(False)
-        self._schedule_dismiss()
-
-    def _set_hover_state(self, hovered: bool) -> None:
-        bg = HOVER_BG if hovered else BG_COLOR
-        border = self.hover_border if hovered else self.normal_border
-        bar_col = self.accent_glow if hovered else self.accent_color
-
-        self.root.config(bg=border)
-        self.container.config(bg=bg)
-        self.content.config(bg=bg)
-        self.top_row.config(bg=bg)
-        self.tag_lbl.config(bg=bg)
-        self.title_lbl.config(bg=bg)
-        self.msg_lbl.config(bg=bg)
-        self.status.config(bg=bg)
-        self.close_frame.config(bg=bg)
-        self.close_btn.config(bg=bg)
-        self.progress.config(bg=bar_col)
-
-    def close(self) -> None:
-        if self.is_closing:
-            return
-        self.is_closing = True
-        if self.slide_job:
-            try:
-                self.root.after_cancel(self.slide_job)
-            except Exception:
-                pass
-        if self.dismiss_job:
-            try:
-                self.root.after_cancel(self.dismiss_job)
-            except Exception:
-                pass
-        if self.progress_job:
-            try:
-                self.root.after_cancel(self.progress_job)
-            except Exception:
-                pass
-
-        if not self.enable_animation:
-            try:
-                self.root.destroy()
-            except tk.TclError:
-                pass
-            return
-
-        try:
-            curr_x = self.root.winfo_x()
-            curr_y = self.root.winfo_y()
-        except Exception:
-            curr_x = self.target_x
-            curr_y = self.target_y
-
-        end_x = curr_x + self.slide_distance
-        t0 = time.monotonic()
-        duration_ms = 160.0
-
-        def out_step() -> None:
-            now = time.monotonic()
-            elapsed = (now - t0) * 1000.0
-            p = min(1.0, max(0.0, elapsed / duration_ms))
-            ease_in = p * p
-            x = round(curr_x + (end_x - curr_x) * ease_in)
-            try:
-                self.root.geometry(f"{self.target_w}x{self.target_h}+{x}+{curr_y}")
-                if p < 1.0:
-                    self.slide_job = self.root.after(16, out_step)
-                else:
-                    self.root.destroy()
-            except tk.TclError:
-                pass
-
-        out_step()
-
-    def run(self) -> None:
-        try:
-            self.root.mainloop()
-        finally:
-            release_slot(self.slot, self.pid)
+            self.top_row_layout.insertWidget(insert_at, btn)
+            insert_at += 1
+            self.action_buttons.append(btn)
 
 
 class BatchRibbonPopup(SummaryRibbonPopup):
@@ -1805,7 +1543,6 @@ class BatchRibbonPopup(SummaryRibbonPopup):
         self.burst_id = self.state.get("id")
         self.last_seen = self.state.get("last")
         title, message = batch_summary(self.state)
-        self.poll_job: str | None = None
         super().__init__(
             title=title,
             message=message,
@@ -1813,48 +1550,29 @@ class BatchRibbonPopup(SummaryRibbonPopup):
             timeout_ms=BATCH_IDLE_CLOSE_MS,
             enable_animation=enable_animation,
         )
-        self.action_labels: list[tk.Label] = []
-        for text, handler in (("Undo", self.undo), ("Open", self.open_folder)):
-            label = tk.Label(
-                self.top_row, text=text, font=(FONT_FAMILY, 9, "bold"),
-                fg=ACTION_COLOR, bg=BG_COLOR, cursor="hand2", padx=int(6 * self.scale),
-            )
-            label.pack(side="right")
-            label.bind("<Button-1>", lambda _e, h=handler: (h(), "break")[1])
-            label.bind("<Enter>", self.on_enter)
-            label.bind("<Leave>", self.on_leave)
-            self.action_labels.append(label)
-        self.poll_job = self.root.after(BATCH_POLL_MS, self._poll)
+        self._add_top_actions((("Open", self.open_folder), ("Undo", self.undo)))
+        self._poll_timer = QTimer(self.root)
+        self._poll_timer.setInterval(BATCH_POLL_MS)
+        self._poll_timer.timeout.connect(self._poll)
+        self._poll_timer.start()
 
     def _poll(self) -> None:
         if self.is_closing:
+            self._poll_timer.stop()
             return
         state = read_batch_state()
         if state.get("id") != self.burst_id:
-            self.close()  # a newer batch has its own ribbon
+            self.close()
             return
         if state.get("last") != self.last_seen:
             self.state = state
             self.last_seen = state.get("last")
             title, message = batch_summary(state)
-            try:
-                self.title_lbl.config(text=title)
-                self.msg_lbl.config(text=message if len(message) <= 48 else message[:45] + "…")
-            except tk.TclError:
-                return
+            self.title_lbl.setText(title)
+            self.msg_lbl.setText(message if len(message) <= 48 else message[:45] + "…")
             self.remaining_ms = float(self.timeout_ms)
             if not self.is_hovered and self.slide_job is None:
                 self._schedule_dismiss()
-        try:
-            self.poll_job = self.root.after(BATCH_POLL_MS, self._poll)
-        except tk.TclError:
-            pass
-
-    def _set_hover_state(self, hovered: bool) -> None:
-        super()._set_hover_state(hovered)
-        bg = HOVER_BG if hovered else BG_COLOR
-        for label in getattr(self, "action_labels", []):
-            label.config(bg=bg)
 
     def folder_to_open(self) -> Path | None:
         root = self.state.get("root")
@@ -1884,22 +1602,13 @@ class BatchRibbonPopup(SummaryRibbonPopup):
         self.close()
 
     def close(self) -> None:
-        if self.poll_job:
-            try:
-                self.root.after_cancel(self.poll_job)
-            except Exception:
-                pass
-            self.poll_job = None
+        if hasattr(self, "_poll_timer"):
+            self._poll_timer.stop()
         super().close()
 
 
 class SuggestionRibbonPopup(SummaryRibbonPopup):
-    """Asks before learning adds a rule: "Put files like this in Banking?" Yes / No.
-
-    Yes adds the rule (it then shows on the Rules page); No means it won't ask
-    about that word or website for that folder again. Closing it, or letting it
-    time out, answers nothing.
-    """
+    """Asks before learning adds a rule: "Put files like this in Banking?" Yes / No."""
 
     TIMEOUT_MS = 20000
 
@@ -1917,25 +1626,8 @@ class SuggestionRibbonPopup(SummaryRibbonPopup):
             timeout_ms=self.TIMEOUT_MS if self.suggestion else 2000,
             enable_animation=enable_animation,
         )
-        self.action_labels: list[tk.Label] = []
-        if not self.suggestion:
-            return
-        for text, handler in (("No", self.no), ("Yes", self.yes)):
-            label = tk.Label(
-                self.top_row, text=text, font=(FONT_FAMILY, 9, "bold"),
-                fg=ACTION_COLOR, bg=BG_COLOR, cursor="hand2", padx=int(6 * self.scale),
-            )
-            label.pack(side="right")
-            label.bind("<Button-1>", lambda _e, h=handler: (h(), "break")[1])
-            label.bind("<Enter>", self.on_enter)
-            label.bind("<Leave>", self.on_leave)
-            self.action_labels.append(label)
-
-    def _set_hover_state(self, hovered: bool) -> None:
-        super()._set_hover_state(hovered)
-        bg = HOVER_BG if hovered else BG_COLOR
-        for label in getattr(self, "action_labels", []):
-            label.config(bg=bg)
+        if self.suggestion:
+            self._add_top_actions((("Yes", self.yes), ("No", self.no)))
 
     def yes(self) -> None:
         import learning
@@ -1982,23 +1674,7 @@ class BambuPromptRibbonPopup(SummaryRibbonPopup):
             timeout_ms=self.TIMEOUT_MS,
             enable_animation=enable_animation,
         )
-        self.action_labels: list[tk.Label] = []
-        for text, handler in (("No", self.no), ("Yes", self.yes)):
-            label = tk.Label(
-                self.top_row, text=text, font=(FONT_FAMILY, 9, "bold"),
-                fg=ACTION_COLOR, bg=BG_COLOR, cursor="hand2", padx=int(6 * self.scale),
-            )
-            label.pack(side="right")
-            label.bind("<Button-1>", lambda _e, h=handler: (h(), "break")[1])
-            label.bind("<Enter>", self.on_enter)
-            label.bind("<Leave>", self.on_leave)
-            self.action_labels.append(label)
-
-    def _set_hover_state(self, hovered: bool) -> None:
-        super()._set_hover_state(hovered)
-        bg = HOVER_BG if hovered else BG_COLOR
-        for label in getattr(self, "action_labels", []):
-            label.config(bg=bg)
+        self._add_top_actions((("Yes", self.yes), ("No", self.no)))
 
     def yes(self) -> None:
         import bambu_recent

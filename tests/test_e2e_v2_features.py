@@ -25,28 +25,6 @@ import zipfile
 # Set headless platform before any Qt import
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-# Ensure Tkinter finds tcl and tk libraries
-for base in [Path(sys.base_prefix), Path(sys.executable).parent]:
-    tcl_c = base / "tcl" / "tcl8.6"
-    tk_c = base / "tcl" / "tk8.6"
-    if tcl_c.exists():
-        os.environ.setdefault("TCL_LIBRARY", str(tcl_c))
-    if tk_c.exists():
-        os.environ.setdefault("TK_LIBRARY", str(tk_c))
-
-_MODULE_TK_ROOT = None
-
-def get_module_tk_root():
-    global _MODULE_TK_ROOT
-    if _MODULE_TK_ROOT is None:
-        import tkinter as tk
-        try:
-            _MODULE_TK_ROOT = tk.Tk()
-            _MODULE_TK_ROOT.withdraw()
-        except Exception:
-            _MODULE_TK_ROOT = None
-    return _MODULE_TK_ROOT
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -223,20 +201,8 @@ class TestBatchHandoffQuickSwitcherTier1AndTier2(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        import tkinter as tk
-        try:
-            cls.shared_tk = tk.Tk()
-            cls.shared_tk.withdraw()
-        except Exception:
-            cls.shared_tk = None
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.shared_tk is not None:
-            try:
-                cls.shared_tk.destroy()
-            except Exception:
-                pass
+        from PySide6.QtWidgets import QApplication
+        cls.qapp = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -270,23 +236,18 @@ class TestBatchHandoffQuickSwitcherTier1AndTier2(unittest.TestCase):
             "batch_id": "test_batch_1",
         }
 
-        import tkinter as tk
-        with patch("quick_switcher.tk.Tk", side_effect=lambda: tk.Toplevel(self.shared_tk) if self.shared_tk else MagicMock()), \
-             patch("quick_switcher.render_category_icon", return_value=None), \
+        with patch("quick_switcher.render_category_icon", return_value=None), \
              patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
             pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=recent_batch)
-            pill.root.withdraw()
             try:
                 self.assertTrue(pill.is_batch)
                 self.assertIsNotNone(pill.action_btn, "Missing '↵ Latest' button")
                 self.assertIsNotNone(pill.all_btn, "Missing '⇉ All N' button in batch mode")
                 self.assertIsNotNone(pill.copy_btn, "Missing '⧉ Copy' button in batch mode")
-                txt = pill.action_btn.cget("text")
-                if isinstance(txt, str):
-                    self.assertIn("Latest", txt)
-                    self.assertIn("All 2", pill.all_btn.cget("text"))
-                    self.assertIn("Copy", pill.copy_btn.cget("text"))
+                self.assertIn("Latest", pill.action_btn.text())
+                self.assertIn("All 2", pill.all_btn.text())
+                self.assertIn("Copy", pill.copy_btn.text())
             finally:
                 pill.close()
 
@@ -305,13 +266,10 @@ class TestBatchHandoffQuickSwitcherTier1AndTier2(unittest.TestCase):
             "items": [{"name": "single.pdf", "path": str(f1), "category": "documents"}],
         }
 
-        import tkinter as tk
-        with patch("quick_switcher.tk.Tk", side_effect=lambda: tk.Toplevel(self.shared_tk) if self.shared_tk else MagicMock()), \
-             patch("quick_switcher.render_category_icon", return_value=None), \
+        with patch("quick_switcher.render_category_icon", return_value=None), \
              patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
             pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=recent_single)
-            pill.root.withdraw()
             try:
                 self.assertFalse(pill.is_batch)
                 self.assertIsNotNone(pill.action_btn)
@@ -335,35 +293,56 @@ class TestBatchHandoffQuickSwitcherTier1AndTier2(unittest.TestCase):
             "batch_id": "batch_toggle_test",
         }
 
-        import tkinter as tk
-        with patch("quick_switcher.tk.Tk", side_effect=lambda: tk.Toplevel(self.shared_tk) if self.shared_tk else MagicMock()), \
-             patch("quick_switcher.render_category_icon", return_value=None), \
+        with patch("quick_switcher.render_category_icon", return_value=None), \
              patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
             pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=recent_batch)
-            pill.root.withdraw()
             try:
                 self.assertEqual(len(pill._checked_paths()), 3)
-                # Toggle one item off
-                var = MagicMock()
-                var.get.return_value = False
-                pill._on_toggle(str(files[0]), var)
+                pill._expand_checklist()
+                self.assertIsNotNone(pill.checklist_win)
+                pill._check_boxes[str(files[0])].setChecked(False)
                 self.assertEqual(len(pill._checked_paths()), 2)
-                txt = pill.all_btn.cget("text")
-                if isinstance(txt, str):
-                    self.assertIn("All 2", txt)
+                self.assertIn("All 2", pill.all_btn.text())
             finally:
                 pill.close()
 
     def test_t1_hover_checklist_label_click_toggles_checkbox(self) -> None:
         """F2-T1-4: Clicking the filename label in the hover checklist toggles the checkbox."""
-        qs_source = (REPO_ROOT / "quick_switcher.py").read_text(encoding="utf-8")
-        # In quick_switcher.py: _expand_checklist row label must bind <Button-1> to toggle
-        # (Survey D5: Currently only <B1-Motion> is bound to drag)
-        self.assertTrue(
-            'lbl.bind("<Button-1>"' in qs_source or "lbl.bind('<Button-1>'" in qs_source,
-            "Checklist row filename label must bind <Button-1> to toggle checkbox selection",
-        )
+        from PySide6.QtCore import QEvent, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtWidgets import QLabel
+        import quick_switcher
+
+        files = [self.test_root / f"item_{i}.pdf" for i in range(2)]
+        for f in files:
+            f.write_text("data")
+        recent_batch = {
+            "name": files[1].name,
+            "path": str(files[1]),
+            "is_batch": True,
+            "items": [{"name": f.name, "path": str(f)} for f in files],
+            "batch_id": "batch_label_click",
+        }
+        with patch("quick_switcher.render_category_icon", return_value=None), \
+             patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
+             patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
+            pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=recent_batch)
+            try:
+                pill._expand_checklist()
+                target_path = str(files[0])
+                cb = pill._check_boxes[target_path]
+                labels = [lbl for lbl in pill.checklist_win.findChildren(QLabel) if lbl.text() == files[0].name]
+                self.assertTrue(labels)
+                lbl = labels[0]
+                press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(2, 2), QPointF(2, 2), Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+                release = QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(2, 2), QPointF(2, 2), Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+                self.qapp.sendEvent(lbl, press)
+                self.qapp.sendEvent(lbl, release)
+                self.assertFalse(cb.isChecked())
+                self.assertEqual(len(pill._checked_paths()), 1)
+            finally:
+                pill.close()
 
     def test_t1_copy_files_creates_hdrop_clipboard_payload(self) -> None:
         """F2-T1-5: 'Copy' action constructs Win32 CF_HDROP clipboard payload."""
@@ -392,13 +371,10 @@ class TestBatchHandoffQuickSwitcherTier1AndTier2(unittest.TestCase):
             "batch_id": "b_empty",
         }
 
-        import tkinter as tk
-        with patch("quick_switcher.tk.Tk", side_effect=lambda: tk.Toplevel(self.shared_tk) if self.shared_tk else MagicMock()), \
-             patch("quick_switcher.render_category_icon", return_value=None), \
+        with patch("quick_switcher.render_category_icon", return_value=None), \
              patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
             pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=recent_batch)
-            pill.root.withdraw()
             try:
                 # Untick all files
                 pill.checked[str(f1)] = False
@@ -413,20 +389,16 @@ class TestBatchHandoffQuickSwitcherTier1AndTier2(unittest.TestCase):
             finally:
                 pill.close()
 
-    def test_t2_checklist_mousewheel_cleanup_on_collapse(self) -> None:
-        """F2-T2-2: Global <MouseWheel> binding is cleaned up when checklist collapses to prevent TclError."""
+    def test_t2_checklist_scroll_cleanup_on_collapse(self) -> None:
+        """F2-T2-2: Checklist scroll container is cleanly released when collapsed."""
         qs_source = (REPO_ROOT / "quick_switcher.py").read_text(encoding="utf-8")
-        if 'bind_all("<MouseWheel>"' in qs_source:
-            self.assertIn(
-                "unbind_all", qs_source,
-                "Global <MouseWheel> binding in quick_switcher must be unbound in _collapse_checklist",
-            )
+        self.assertIn("_collapse_checklist", qs_source)
+        self.assertIn("deleteLater", qs_source)
 
-    def test_t2_checklist_canvas_geometry_stretching(self) -> None:
-        """F2-T2-3: Checklist canvas inner window stretches to full width on configure."""
+    def test_t2_checklist_scroll_widget_resizable(self) -> None:
+        """F2-T2-3: Checklist scroll area stretches inner rows to full width."""
         qs_source = (REPO_ROOT / "quick_switcher.py").read_text(encoding="utf-8")
-        self.assertIn("inner", qs_source)
-        self.assertIn("canvas", qs_source)
+        self.assertIn("setWidgetResizable(True)", qs_source)
 
     def test_t2_batch_handoff_special_characters_and_spaces(self) -> None:
         """F2-T2-4: Batch handoff handles spaces, unicode, brackets, and plus symbols in filenames."""
@@ -869,14 +841,10 @@ class TestCrossFeatureCombinationsTier3(unittest.TestCase):
         self.assertIsNotNone(rec)
         self.assertIn(rec.get("category"), ("3d", "cad"))
 
-        import tkinter as tk
-        shared = get_module_tk_root()
-        with patch("quick_switcher.tk.Tk", side_effect=lambda: tk.Toplevel(shared) if shared else MagicMock()), \
-             patch("quick_switcher.render_category_icon", return_value=None), \
+        with patch("quick_switcher.render_category_icon", return_value=None), \
              patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
             pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=rec)
-            pill.root.withdraw()
             try:
                 self.assertEqual(pill.category, rec["category"])
                 self.assertEqual(pill.filename, "Held_Print.3mf")
@@ -989,19 +957,13 @@ class TestRealWorldApplicationScenariosTier4(unittest.TestCase):
         self.assertEqual(recent.get("batch_count"), 4)
         self.assertEqual(len(recent.get("items", [])), 4)
 
-        import tkinter as tk
-        shared = get_module_tk_root()
-        with patch("quick_switcher.tk.Tk", side_effect=lambda: tk.Toplevel(shared) if shared else MagicMock()), \
-             patch("quick_switcher.render_category_icon", return_value=None), \
+        with patch("quick_switcher.render_category_icon", return_value=None), \
              patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
             pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=recent)
-            pill.root.withdraw()
             try:
                 # User unticks one file
-                var = MagicMock()
-                var.get.return_value = False
-                pill._on_toggle(str(files[3]), var)
+                pill._on_toggle(str(files[3]), False)
                 self.assertEqual(len(pill._checked_paths()), 3)
 
                 # User triggers select_all

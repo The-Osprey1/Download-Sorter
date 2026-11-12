@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tkinter as tk
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -316,7 +315,7 @@ def test_summary_ribbon_popup_stress_parameters_no_crash():
     - Empty strings
     - Unicode characters and emojis
     - Accent overrides (#FA7183, #61A5FF, #D74A4A, #A855F7, #69E6AD)
-    Ensure no crashes or Tkinter geometry exceptions occur.
+    Ensure no crashes or Qt geometry exceptions occur.
     """
     test_cases = [
         ("Normal Title", "Regular message", "#69E6AD", 5000),
@@ -338,10 +337,10 @@ def test_summary_ribbon_popup_stress_parameters_no_crash():
         try:
             # Check title truncation
             if len(title) > 36:
-                assert popup.title_lbl.cget("text").endswith("...")
+                assert popup.title_lbl.text().endswith("...")
             # Check message truncation
             if len(message) > 48:
-                assert popup.msg_lbl.cget("text").endswith("…")
+                assert popup.msg_lbl.text().endswith("…")
             # Check timeout clamping
             assert popup.timeout_ms >= 500
         finally:

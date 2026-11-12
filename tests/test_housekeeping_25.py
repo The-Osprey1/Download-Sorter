@@ -169,5 +169,51 @@ class HotkeyTests(unittest.TestCase):
         self.assertIsNone(hotkey.parse_shelf_hotkey("not-a-key"))
 
 
+def _close_widget(qapp, widget) -> None:
+    from PySide6.QtCore import QEvent
+
+    widget.close()
+    widget.deleteLater()
+    qapp.processEvents()
+    qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+
+
+def test_shelf_window_empty_and_actions(qapp, monkeypatch) -> None:
+    import shelf
+
+    empty_win = shelf._build_shelf_window([])
+    try:
+        assert empty_win.listbox.count() == 1
+        assert "Nothing has been filed yet." in empty_win.listbox.item(0).text()
+        assert not empty_win.show_btn.isEnabled()
+        assert not empty_win.copy_btn.isEnabled()
+        assert empty_win.chosen() is None
+    finally:
+        _close_widget(qapp, empty_win)
+
+    opened: list[str] = []
+    copied: list[str] = []
+    monkeypatch.setattr(shelf, "open_in_explorer", lambda dest: opened.append(dest))
+    monkeypatch.setattr(shelf, "copy_file", lambda dest: copied.append(dest))
+
+    records = [
+        {"filename": "bracket.stl", "folder": "3D Printing", "dest": r"C:\tmp\bracket.stl"},
+        {"filename": "invoice.pdf", "folder": "Documents", "dest": r"C:\tmp\invoice.pdf"},
+    ]
+    win = shelf._build_shelf_window(records)
+    try:
+        assert win.listbox.count() == 2
+        assert win.chosen() == records[0]
+        assert win.show_btn.isEnabled()
+        assert win.copy_btn.isEnabled()
+        win.show_btn.click()
+        win.listbox.setCurrentRow(1)
+        win.copy_btn.click()
+        assert opened == [r"C:\tmp\bracket.stl"]
+        assert copied == [r"C:\tmp\invoice.pdf"]
+    finally:
+        _close_widget(qapp, win)
+
+
 if __name__ == "__main__":
     unittest.main()

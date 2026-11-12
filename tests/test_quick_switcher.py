@@ -199,12 +199,7 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             recent = get_recent_file()
             self.assertIsNotNone(recent)
 
-            mock_tk_inst = MagicMock()
-            mock_tk_inst.winfo_id.return_value = 0
-            mock_tk_inst.winfo_fpixels.return_value = 96.0
-
-            with patch("quick_switcher.tk.Tk", return_value=mock_tk_inst), \
-                 patch.object(QuickSwitcherPill, "_build_ui"), \
+            with patch.object(QuickSwitcherPill, "_build_ui"), \
                  patch.object(QuickSwitcherPill, "_position_pill"), \
                  patch.object(QuickSwitcherPill, "_register_hotkey"):
                 pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=recent)
@@ -240,12 +235,7 @@ class QuickSwitcherWin32SafetyTests(unittest.TestCase):
             sample_file.write_text("step data")
             record_recent_file(sample_file)
 
-            mock_tk_inst = MagicMock()
-            mock_tk_inst.winfo_id.return_value = 0
-            mock_tk_inst.winfo_fpixels.return_value = 96.0
-
-            with patch("quick_switcher.tk.Tk", return_value=mock_tk_inst), \
-                 patch.object(QuickSwitcherPill, "_build_ui"), \
+            with patch.object(QuickSwitcherPill, "_build_ui"), \
                  patch.object(QuickSwitcherPill, "_position_pill"), \
                  patch.object(QuickSwitcherPill, "_register_hotkey"):
                 pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=get_recent_file())
@@ -331,12 +321,7 @@ class QuickSwitcherBatchTests(unittest.TestCase):
         self.assertIsNotNone(recent)
         self.assertTrue(len(recent["items"]) == 2)
 
-        mock_tk = MagicMock()
-        mock_tk.winfo_id.return_value = 0
-        mock_tk.winfo_fpixels.return_value = 96.0
-
-        with patch("quick_switcher.tk.Tk", return_value=mock_tk), \
-             patch.object(QuickSwitcherPill, "_build_ui"), \
+        with patch.object(QuickSwitcherPill, "_build_ui"), \
              patch.object(QuickSwitcherPill, "_position_pill"), \
              patch.object(QuickSwitcherPill, "_register_hotkey"):
             pill = QuickSwitcherPill(dialog_hwnd=12345, recent_data=recent)
@@ -434,12 +419,7 @@ class QuickSwitcherFixesTests(unittest.TestCase):
             "items": [{"name": f1.name, "path": str(f1)}],
             "batch_id": "b_test",
         }
-        mock_tk_inst = MagicMock()
-        mock_tk_inst.winfo_id.return_value = 0
-        mock_tk_inst.winfo_fpixels.return_value = 96.0
-
-        with patch("quick_switcher.tk.Tk", return_value=mock_tk_inst), \
-             patch.object(quick_switcher.QuickSwitcherPill, "_build_ui"), \
+        with patch.object(quick_switcher.QuickSwitcherPill, "_build_ui"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
             pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=123, recent_data=recent)
@@ -467,36 +447,33 @@ class QuickSwitcherFixesTests(unittest.TestCase):
 
             pill.close()
 
-    def test_checklist_collapse_mousewheel_cleanup(self) -> None:
-        """_collapse_checklist must call unbind_all('<MouseWheel>') on canvas."""
+    def test_checklist_collapse_cleanup(self) -> None:
+        """_collapse_checklist must close and clear the Qt hover checklist window."""
         import quick_switcher
         f1 = self.test_root / "part1.stl"
+        f2 = self.test_root / "part2.stl"
         f1.write_text("mesh")
+        f2.write_text("mesh")
         recent = {
-            "name": f1.name,
-            "path": str(f1),
+            "name": f2.name,
+            "path": str(f2),
             "is_batch": True,
-            "items": [{"name": f1.name, "path": str(f1)}],
+            "items": [{"name": f1.name, "path": str(f1)}, {"name": f2.name, "path": str(f2)}],
         }
-        mock_tk_inst = MagicMock()
-        mock_tk_inst.winfo_id.return_value = 0
-        mock_tk_inst.winfo_fpixels.return_value = 96.0
 
-        with patch("quick_switcher.tk.Tk", return_value=mock_tk_inst), \
-             patch.object(quick_switcher.QuickSwitcherPill, "_build_ui"), \
-             patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
+        with patch.object(quick_switcher.QuickSwitcherPill, "_position_pill"), \
              patch.object(quick_switcher.QuickSwitcherPill, "_register_hotkey"):
             pill = quick_switcher.QuickSwitcherPill(dialog_hwnd=0, recent_data=recent)
-            mock_canvas = MagicMock()
-            mock_win = MagicMock()
-            pill.checklist_canvas = mock_canvas
-            pill.checklist_win = mock_win
+            try:
+                pill._expand_checklist()
+                self.assertIsNotNone(pill.checklist_win)
+                self.assertIsNotNone(pill.checklist_scroll)
 
-            pill._collapse_checklist()
-            mock_canvas.unbind_all.assert_called_once_with("<MouseWheel>")
-            mock_win.destroy.assert_called_once()
-            self.assertIsNone(pill.checklist_canvas)
-            self.assertIsNone(pill.checklist_win)
+                pill._collapse_checklist()
+                self.assertIsNone(pill.checklist_scroll)
+                self.assertIsNone(pill.checklist_win)
+            finally:
+                pill.close()
 
             pill.close()
 
