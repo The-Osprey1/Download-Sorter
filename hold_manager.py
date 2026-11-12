@@ -365,6 +365,24 @@ def file_now(path: Path | str, config: dict | None = None) -> Path | None:
     return final_dest
 
 
+def _folder_is_away(path: Path, config: dict) -> bool:
+    """True when ``path`` is inside the folder being sorted and that folder is not there right now.
+
+    A file on a drive that is not plugged in does not exist either, but it is not gone: it is
+    back with the drive, and its hold (a "Keep here" choice too) must not be forgotten for that.
+    A hold whose file is gone from a folder that is there is dropped, as it always was.
+    """
+    try:
+        root = sorter.watch_root(config)
+        try:
+            there = root.is_dir()
+        except OSError:  # a folder that cannot be looked at is not there for this purpose
+            there = False
+        return not there and sorter.is_under(path, root)
+    except (OSError, ValueError):
+        return False
+
+
 def check_releases(
     config: dict,
     now: float | None = None,
@@ -389,7 +407,8 @@ def check_releases(
         for key, rec in list(held.items()):
             p = Path(key)
             if not p.exists():
-                to_delete.append(key)
+                if not _folder_is_away(p, config):
+                    to_delete.append(key)
                 continue
 
             if rec.get("keep_here"):
