@@ -7,6 +7,7 @@ history and folders are never read or changed.
     .\\.venv\\Scripts\\python.exe tools\\render_screens.py --out C:\\temp\\shots
     .\\.venv\\Scripts\\python.exe tools\\render_screens.py --out C:\\temp\\shots --only home,rules --scale 1.5
     .\\.venv\\Scripts\\python.exe tools\\render_screens.py --out C:\\temp\\shots --min
+    .\\.venv\\Scripts\\python.exe tools\\render_screens.py --out C:\\temp\\shots --compact
 
 Groups: home, rules, cleanup, settings, wizard, dialogs, banners, roles (default: all).
 "roles" is one sheet with every shared style role (badges, tones, switches, ...).
@@ -30,7 +31,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 MAIN_SIZE = (1040, 760)
-MAIN_MIN = (900, 640)
+MAIN_MIN = (900, 560)      # what the window itself allows (RulesManagerDialog.setMinimumSize)
+MAIN_COMPACT = (900, 640)  # as narrow, a little taller: a second size to compare against
 WIZARD_SIZE = (760, 680)
 WIZARD_MIN = (720, 640)
 GROUPS = ("home", "rules", "cleanup", "settings", "wizard", "dialogs", "banners", "roles")
@@ -42,6 +44,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--only", default="", help="Comma-separated groups to render (default: all)")
     parser.add_argument("--scale", type=float, default=1.0, help="Display scale, for example 1.5 for 150%%")
     parser.add_argument("--min", action="store_true", help="Render at the smallest allowed window sizes")
+    parser.add_argument("--compact", action="store_true",
+                        help="Render the main window at 900x640: as narrow as --min, a little taller")
     return parser.parse_args()
 
 
@@ -518,8 +522,8 @@ def main() -> int:
     cfg = seed(SANDBOX)
     messy = seed_messy_folder(SANDBOX)
     wanted = {g.strip() for g in ARGS.only.split(",") if g.strip()} or set(GROUPS)
-    main_size = MAIN_MIN if ARGS.min else MAIN_SIZE
-    wizard_size = WIZARD_MIN if ARGS.min else WIZARD_SIZE
+    main_size = MAIN_MIN if ARGS.min else MAIN_COMPACT if ARGS.compact else MAIN_SIZE
+    wizard_size = WIZARD_MIN if (ARGS.min or ARGS.compact) else WIZARD_SIZE
 
     out = Path(ARGS.out)
     shooter = Shooter(app, out)

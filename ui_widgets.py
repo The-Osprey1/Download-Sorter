@@ -10,11 +10,13 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Callable, Iterable, Sequence
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QMenu,
     QSizePolicy,
     QStyledItemDelegate,
@@ -30,6 +32,111 @@ import ui_motion
 from suite_theme import ACCENTS, COLORS, RADII
 
 ACCENT = ACCENTS["downloadSorter"]
+
+
+# ---------------------------------------------------------------------------
+# a row that wraps
+# ---------------------------------------------------------------------------
+
+class FlowLayout(QLayout):
+    """A row of widgets that starts a second row when the first one is full.
+
+    A plain row never gets narrower than all of its buttons side by side, and a
+    window that is allowed to be narrower than that cuts the last button off.
+    This one asks only for its widest widget and grows downwards instead, so
+    every label stays whole. The order (and so the Tab order) never changes.
+
+    With ``push_last`` the last widget sits at the right edge for as long as
+    everything fits on one row, the way a stretch before it would place it.
+    """
+
+    def __init__(self, parent: QWidget | None = None, spacing: int = 8, push_last: bool = False) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._push_last = push_last
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(spacing)
+
+    # -- the QLayout contract --
+    def addItem(self, item: QLayoutItem) -> None:  # noqa: N802 (Qt's name)
+        self._items.append(item)
+        self.invalidate()
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:  # noqa: N802
+        if 0 <= index < len(self._items):
+            item = self._items.pop(index)
+            self.invalidate()
+            return item
+        return None
+
+    def expandingDirections(self) -> Qt.Orientation:  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._arrange(QRect(0, 0, width, 0), move=False)
+
+    def setGeometry(self, rect: QRect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._arrange(rect, move=True)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        """Everything on one row."""
+        shown = self._shown()
+        margins = self.contentsMargins()
+        width = sum(item.sizeHint().width() for item in shown) + self.spacing() * max(0, len(shown) - 1)
+        height = max((item.sizeHint().height() for item in shown), default=0)
+        return QSize(width + margins.left() + margins.right(), height + margins.top() + margins.bottom())
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        """One widget per row is the narrowest this can get."""
+        shown = self._shown()
+        margins = self.contentsMargins()
+        width = max((item.minimumSize().width() for item in shown), default=0)
+        height = max((item.minimumSize().height() for item in shown), default=0)
+        return QSize(width + margins.left() + margins.right(), height + margins.top() + margins.bottom())
+
+    # -- placing --
+    def _shown(self) -> list[QLayoutItem]:
+        return [item for item in self._items if not item.isEmpty()]  # a hidden widget takes no room
+
+    def _arrange(self, rect: QRect, move: bool) -> int:
+        """Place the widgets (when ``move``) and return the height the rows need."""
+        margins = self.contentsMargins()
+        area = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        gap = self.spacing()
+        rows: list[list[QLayoutItem]] = [[]]
+        used = 0
+        for item in self._shown():
+            width = item.sizeHint().width()
+            if rows[-1] and used + gap + width > area.width():
+                rows.append([])
+                used = 0
+            used += (gap if rows[-1] else 0) + width
+            rows[-1].append(item)
+
+        y = area.y()
+        for row in rows:
+            height = max((item.sizeHint().height() for item in row), default=0)
+            if move:
+                x = area.x()
+                for index, item in enumerate(row):
+                    size = item.sizeHint()
+                    width = min(size.width(), area.width())  # never wider than the row itself
+                    if self._push_last and len(rows) == 1 and len(row) > 1 and index == len(row) - 1:
+                        x = max(x, area.right() + 1 - width)
+                    item.setGeometry(QRect(QPoint(x, y + (height - size.height()) // 2), QSize(width, size.height())))
+                    x += width + gap
+            y += height + gap
+        return y - gap - rect.y() + margins.bottom() if rows[0] else margins.top() + margins.bottom()
 
 
 # ---------------------------------------------------------------------------

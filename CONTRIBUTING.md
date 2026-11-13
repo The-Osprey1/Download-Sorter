@@ -55,6 +55,8 @@ Tests marked `desktop` open real Windows dialogs and need an unlocked desktop se
 .\.venv\Scripts\python.exe tools\render_screens.py --out C:\temp\shots --only home,rules --scale 1.5 --min
 ```
 
+`--min` is the smallest size the main window allows (900x560); `--compact` is 900x640, as narrow but a little taller.
+
 Run it before and after a change to the windows, and attach the images to the pull request.
 
 ---
