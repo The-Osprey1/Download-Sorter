@@ -240,6 +240,43 @@ def test_verify_release_checks():
     assert cli_errors == []
 
 
+def test_every_runtime_module_is_registered_for_release():
+    import ast
+    import re
+
+    spec_text = (DOWNLOAD_SORTER_DIR / "DownloadSorter.spec").read_text(encoding="utf-8")
+    pyproject_text = (DOWNLOAD_SORTER_DIR / "pyproject.toml").read_text(encoding="utf-8")
+    verify_text = (DOWNLOAD_SORTER_DIR / "verify_release.py").read_text(encoding="utf-8")
+
+    spec_mods = set(re.findall(r"'([a-zA-Z0-9_]+)'", spec_text.split("hidden_imports = [")[1].split("]")[0]))
+    pyproject_mods = set(re.findall(r'"([a-zA-Z0-9_]+)"', pyproject_text.split("py-modules = [")[1].split("]")[0]))
+    verify_py = set(re.findall(r'"([^"]+\.py)"', verify_text.split("REQUIRED_RELEASE_FILES = [")[1].split("]")[0]))
+
+    all_root_py = {p.stem for p in DOWNLOAD_SORTER_DIR.glob("*.py")}
+    build_and_test_only = {"build_release", "conftest", "release_notes", "verify_release", "version_resource"}
+    runtime_mods = all_root_py - build_and_test_only - {"main"}
+
+    # Every module main.py lazily or eagerly imports must be frozen in DownloadSorter.spec.
+    main_tree = ast.parse((DOWNLOAD_SORTER_DIR / "main.py").read_text(encoding="utf-8"))
+    main_local_imports = set()
+    for node in ast.walk(main_tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                name = alias.name.split(".")[0]
+                if name in all_root_py:
+                    main_local_imports.add(name)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            name = node.module.split(".")[0]
+            if name in all_root_py:
+                main_local_imports.add(name)
+
+    assert main_local_imports - spec_mods == set()
+    assert runtime_mods - spec_mods == set()
+    assert (runtime_mods | {"main"}) - pyproject_mods == set()
+    assert ((runtime_mods | {"main", "build_release", "release_notes", "version_resource"})
+            - {f[:-3] for f in verify_py}) == set()
+
+
 # =====================================================================
 # 5. Preset Dialog UI Tests
 # =====================================================================

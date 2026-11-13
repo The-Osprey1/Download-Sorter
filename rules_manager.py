@@ -291,6 +291,81 @@ def _known_folders(limit: int = 400) -> list[str]:
     return found[:limit]
 
 
+def _known_sites(limit: int = 30) -> list[str]:
+    """Websites recently downloaded from, learned, or already used in keyword rules."""
+    seen: set[str] = set()
+    found: list[str] = []
+
+    def add_site(raw: str | None) -> None:
+        for site in _parse_sites(raw or ""):
+            if site not in seen:
+                seen.add(site)
+                found.append(site)
+
+    try:
+        import learning
+    except ImportError:
+        learning = None
+
+    if learning is not None:
+        try:
+            for site in learning.report().get("sites", []):
+                add_site(str(site))
+        except Exception:
+            pass
+
+    cfg: dict[str, Any] = {}
+    try:
+        cfg = suite_data.load_sorter_config()
+    except Exception:
+        cfg = {}
+
+    for rule in cfg.get("keyword_rules") or []:
+        for site in rule.get("sites") or []:
+            add_site(str(site))
+
+    if learning is not None and sorter is not None and len(found) < limit:
+        try:
+            root = Path(sorter.watch_root(cfg))
+            if root.is_dir():
+                recent_files: list[tuple[float, Path]] = []
+                with os.scandir(root) as entries:
+                    for idx, entry in enumerate(entries):
+                        if idx >= 200:
+                            break
+                        if entry.name.startswith((".", "_")):
+                            continue
+                        try:
+                            if entry.is_file(follow_symlinks=False):
+                                recent_files.append((entry.stat(follow_symlinks=False).st_mtime, Path(entry.path)))
+                        except OSError:
+                            continue
+                for _, path in sorted(recent_files, key=lambda item: item[0], reverse=True)[:30]:
+                    add_site(learning.source_site(path))
+                    if len(found) >= limit:
+                        break
+        except Exception:
+            pass
+
+    return found[:limit]
+
+
+class _CommaSiteCompleter(QCompleter):
+    """QCompleter that completes the domain token currently being typed after commas."""
+
+    def splitPath(self, path: str) -> list[str]:
+        return [path.rsplit(",", 1)[-1].lstrip()]
+
+    def pathFromIndex(self, index) -> str:
+        picked = super().pathFromIndex(index)
+        widget = self.widget()
+        current = widget.text() if isinstance(widget, QLineEdit) else ""
+        if "," not in current:
+            return picked
+        prefix = current.rsplit(",", 1)[0].rstrip()
+        return f"{prefix}, {picked}" if prefix else picked
+
+
 class RuleEditDialog(QDialog):
     """Modal dialog for creating and editing a keyword or extension rule.
 
@@ -305,6 +380,7 @@ class RuleEditDialog(QDialog):
         parent: QWidget | None = None,
         title: str | None = None,
         known_folders: list[str] | None = None,
+        known_sites: list[str] | None = None,
     ):
         super().__init__(parent)
         self.rule_type = rule_type
@@ -376,6 +452,7 @@ class RuleEditDialog(QDialog):
             self._sites_input.setPlaceholderText("For example: yourbank.com, makerworld.com")
             self._sites_input.setText(", ".join(self.original_rule.get("sites") or []))
             layout.addWidget(self._sites_input)
+            self._suggest_sites(known_sites)
 
         # Allowed Extensions
         layout.addWidget(ui_style.label(
@@ -474,24 +551,41 @@ class RuleEditDialog(QDialog):
         self._save_btn.setToolTip(needed)
         self._needs_note.setText(needed)
 
-    def _suggest_folders(self, known_folders: list[str] | None) -> None:
-        """Offer the folders that already exist inside Downloads as you type in the folder box."""
-        self._folder_model = QStringListModel(list(known_folders or []), self)
-        completer = QCompleter(self._folder_model, self)
+    def _attach_suggestions(
+        self,
+        line_edit: QLineEdit,
+        initial: list[str] | None,
+        loader,
+        completer_cls: type[QCompleter] = QCompleter,
+    ) -> QStringListModel:
+        """Attach a themed substring completer to ``line_edit`` and load items lazily if needed."""
+        model = QStringListModel(list(initial or []), self)
+        completer = completer_cls(model, self)
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         completer.setFilterMode(Qt.MatchFlag.MatchContains)
         popup = completer.popup()
         popup.setObjectName("completerPopup")
         popup.setStyleSheet(ui_style.stylesheet())  # the popup is its own window, so it needs the look itself
-        self._folder_input.setCompleter(completer)
-        if known_folders is None:
-            QTimer.singleShot(0, self._load_folder_suggestions)
+        line_edit.setCompleter(completer)
+        if initial is None:
+            def _populate() -> None:
+                try:
+                    model.setStringList(loader())
+                except RuntimeError:
+                    pass  # the dialog was closed before this ran
 
-    def _load_folder_suggestions(self) -> None:
-        try:
-            self._folder_model.setStringList(_known_folders())
-        except RuntimeError:
-            pass  # the dialog was closed before this ran
+            QTimer.singleShot(0, _populate)
+        return model
+
+    def _suggest_folders(self, known_folders: list[str] | None) -> None:
+        """Offer the folders that already exist inside Downloads as you type in the folder box."""
+        self._folder_model = self._attach_suggestions(self._folder_input, known_folders, _known_folders)
+
+    def _suggest_sites(self, known_sites: list[str] | None) -> None:
+        """Offer domains you recently downloaded from as you type in the websites box."""
+        self._site_model = self._attach_suggestions(
+            self._sites_input, known_sites, _known_sites, completer_cls=_CommaSiteCompleter
+        )
 
     def _browse_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose a folder")
@@ -2123,6 +2217,7 @@ class RulesManagerDialog(QDialog):
         self._view_btn_group = QButtonGroup(self)
         self._view_btn_group.setExclusive(True)
         self._nav_buttons: dict[str, QPushButton] = {}
+        self._nav_bars: dict[str, QFrame] = {}
         self._nav_dots: dict[str, QLabel] = {}
         self._nav_tips: dict[str, str] = {}
         dot_colors = {"home": COLORS["info"], "rules": COLORS["warning"]}
@@ -2141,15 +2236,25 @@ class RulesManagerDialog(QDialog):
             self._view_btn_group.addButton(btn, self.PAGES.index(page_id))
             self._nav_buttons[page_id] = btn
             side.addWidget(btn)
+
+            overlay = QHBoxLayout(btn)
+            overlay.setContentsMargins(5, 0, 12, 0)
+            bar = QFrame(btn)
+            ui_style.set_role(bar, "navBar")
+            bar.setFixedSize(3, 18)
+            bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            bar.setVisible(btn.isChecked())
+            btn.toggled.connect(bar.setVisible)
+            overlay.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
+            overlay.addStretch()
+            self._nav_bars[page_id] = bar
+
             if page_id in dot_colors:
                 # A small dot at the right edge: "something on this page needs a look".
                 dot = ui_style.status_dot(dot_colors[page_id], 8)
                 dot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
                 dot.setVisible(False)
-                dot_layout = QHBoxLayout(btn)
-                dot_layout.setContentsMargins(0, 0, 12, 0)
-                dot_layout.addStretch()
-                dot_layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
+                overlay.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
                 self._nav_dots[page_id] = dot
         self._view_btn_group.idClicked.connect(self._on_view_switcher_clicked)
 

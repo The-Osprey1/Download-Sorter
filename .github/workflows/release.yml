@@ -42,10 +42,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -140,7 +140,7 @@ jobs:
       - name: Keep the unsigned setup file for signing
         id: unsigned
         if: env.SIGNPATH_ORGANIZATION_ID != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: DownloadSorter-setup-unsigned
           path: dist/DownloadSorter-Setup-v*-windows-x64.exe
@@ -172,7 +172,7 @@ jobs:
           python release_notes.py --output dist/release_notes.md
 
       - name: Keep the built files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: DownloadSorter-windows-x64
           path: |
@@ -183,7 +183,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |

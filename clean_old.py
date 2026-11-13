@@ -60,20 +60,72 @@ def arrival_time(stat: os.stat_result) -> float:
     return min(stat.st_ctime, stat.st_mtime)
 
 
-def find_old_files(target_dir: Path, min_age_days: float) -> list[tuple[Path, float, int]]:
+def resolve_cleanup_folders(config: dict | None) -> list[str]:
+    """Return the folders to scan for cleanup, respecting renamed extension categories."""
+    cfg = config if isinstance(config, dict) else {}
+    block = cfg.get("cleanup") if isinstance(cfg.get("cleanup"), dict) else {}
+    target_names = block.get("folders") or ["Installers", "Archives"]
+    # The names are categories ("Installers"); setup may have pointed them at
+    # one of your own folders (e.g. "Programs"), so use the rule's folder.
+    rule_folders = {
+        str(r.get("name") or "").lower(): str(r.get("folder") or "")
+        for r in cfg.get("extension_rules", [])
+        if isinstance(r, dict)
+    }
+    return [rule_folders.get(str(name).lower()) or str(name) for name in target_names]
+
+
+def get_folder_cleanup_extensions(folder: str, config: dict | None) -> set[str] | None:
+    """Return allowed suffixes for cleanup in a folder from extension_rules.
+
+    Matches case-insensitively by rule folder or rule name. Returns None if no
+    matching rule with extensions exists.
+    """
+    if not isinstance(config, dict):
+        return None
+    folder_lower = str(folder).strip().lower()
+    exts: set[str] = set()
+    found = False
+    for r in config.get("extension_rules", []):
+        if not isinstance(r, dict):
+            continue
+        r_name = str(r.get("name") or "").strip().lower()
+        r_folder = str(r.get("folder") or "").strip().lower()
+        if folder_lower in (r_name, r_folder):
+            found = True
+            for ext in r.get("extensions", []):
+                if ext:
+                    ext_str = str(ext).strip().lower()
+                    if not ext_str.startswith("."):
+                        ext_str = f".{ext_str}"
+                    exts.add(ext_str)
+    return exts if found and exts else None
+
+
+def find_old_files(
+    target_dir: Path,
+    min_age_days: float,
+    allowed_extensions: set[str] | list[str] | None = None,
+) -> list[tuple[Path, float, int]]:
     """Return list of (file_path, age_days, size_bytes) for files that arrived more than
-    min_age_days ago. Looks inside the two-level folders too (Installers\\PDF and so on)."""
+    min_age_days ago. Looks inside the two-level folders too (Installers\\PDF and so on).
+
+    If allowed_extensions is provided, only files with matching suffixes are returned.
+    """
     if not target_dir.exists():
         return []
     cutoff_seconds = min_age_days * 86400
     now = time.time()
     candidates: list[tuple[Path, float, int]] = []
+    normalized_exts = {str(e).lower() for e in allowed_extensions} if allowed_extensions is not None else None
 
     for root, dirs, files in os.walk(target_dir):
         # Never reach into quarantine or staging folders; they are managed elsewhere.
         dirs[:] = [d for d in dirs if not d.startswith((".", "_"))]
         for name in files:
             item = Path(root) / name
+            if normalized_exts is not None and item.suffix.lower() not in normalized_exts:
+                continue
             try:
                 stat = item.stat()
                 age = now - arrival_time(stat)
@@ -113,13 +165,11 @@ def auto_cleanup(config: dict, now: float | None = None) -> dict | None:
     days = max(1.0, float(block.get("days", 30) or 30))
     downloads = watch_root(config)
     count = total = 0
-    # The names are categories ("Installers"); setup may have pointed them at
-    # one of your own folders (e.g. "Programs"), so use the rule's folder.
-    rule_folders = {str(r.get("name") or "").lower(): str(r.get("folder") or "")
-                    for r in config.get("extension_rules", []) if isinstance(r, dict)}
-    for name in block.get("folders") or ["Installers", "Archives"]:
-        folder = rule_folders.get(str(name).lower()) or str(name)
-        for path, _age, size in find_old_files(folder_path(downloads, folder), days):
+    for folder in resolve_cleanup_folders(config):
+        allowed_extensions = get_folder_cleanup_extensions(folder, config)
+        for path, _age, size in find_old_files(
+            folder_path(downloads, folder), days, allowed_extensions=allowed_extensions
+        ):
             if send_to_recycle_bin(path):
                 count += 1
                 total += size
@@ -154,14 +204,15 @@ def main() -> int:
     config = load_config()
     downloads = watch_root(config)
 
-    scan_folders = args.folder or ["Installers", "Archives"]
+    scan_folders = args.folder or resolve_cleanup_folders(config)
     if args.all and "Other" not in scan_folders:
         scan_folders.append("Other")
 
     all_candidates: list[tuple[Path, float, int]] = []
     for folder_name in scan_folders:
         target_dir = folder_path(downloads, folder_name)
-        candidates = find_old_files(target_dir, args.days)
+        allowed_extensions = get_folder_cleanup_extensions(folder_name, config)
+        candidates = find_old_files(target_dir, args.days, allowed_extensions=allowed_extensions)
         all_candidates.extend(candidates)
 
     if not all_candidates:
