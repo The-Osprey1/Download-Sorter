@@ -24,7 +24,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QPoint, QRect  # noqa: E402
-from PySide6.QtWidgets import QAbstractButton, QPushButton, QWidget  # noqa: E402
+from PySide6.QtWidgets import QAbstractButton, QLabel, QPushButton, QWidget  # noqa: E402
 
 import config_manager  # noqa: E402
 import onboarding  # noqa: E402
@@ -185,6 +185,10 @@ def _button_problems(window: QWidget, page: QWidget, whole: tuple[QAbstractButto
         needs = button.minimumSizeHint().width() if isinstance(button, QPushButton) and button.text() else 0
         if button.width() < needs:
             problems.append(f"'{name}' is {button.width()} px wide and needs {needs}")
+        # Squeezed from above and below, a button keeps its width and loses the bottom of its words.
+        tall = button.minimumSizeHint().height() if isinstance(button, QPushButton) and button.text() else 0
+        if button.height() < tall:
+            problems.append(f"'{name}' is {button.height()} px tall and needs {tall}")
         if box.left() < page_box.left() or box.right() > page_box.right():
             problems.append(f"'{name}' sticks out of the page sideways ({box.left()}..{box.right()} "
                             f"in {page_box.left()}..{page_box.right()})")
@@ -284,6 +288,61 @@ def test_no_page_cuts_a_button_off_sideways(window, qapp, size, page):
     assert (window.width(), window.height()) == size, "the window was pushed larger than asked"
     problems = _button_problems(window, window._view_stack.currentWidget())
     assert not problems, f"{page} at {size[0]}x{size[1]}: " + "; ".join(problems)
+
+
+def _scanned_plan(tmp_path, folders: int):
+    import remodel
+
+    cards = [
+        remodel.FolderCard(tmp_path / f"Folder {index}", "keep_intact", 5, 1.2,
+                           remodel.ProtectionCheck(True, "Git repository detected"), {})
+        for index in range(folders)
+    ]
+    return remodel.RemodelPlan(
+        remodel_id="fit", target_root=tmp_path, created_at="2026-01-01T00:00:00Z", cards=cards,
+        loose_files_to_organize=[], duplicates_to_quarantine=[], protected_items=[],
+        total_files_scanned=60, reclaimable_duplicate_bytes=0,
+    )
+
+
+@pytest.mark.parametrize("size", MAIN_SIZES, ids=lambda size: f"{size[0]}x{size[1]}")
+@pytest.mark.parametrize("scope", ["downloads", "another-folder"])
+def test_clean_up_after_a_scan_squeezes_nothing(window, qapp, tmp_path, size, scope):
+    """After a scan the page holds the most: the tiles and the summary join the folder row.
+
+    In a 900x560 window that used to be more than fits, and the folder row gave way:
+    the folder box, Browse and Preview changes lost the bottom of their words.
+    """
+    window.switch_view("cleanup")
+    cleanup = window._remodel_widget
+    if scope == "another-folder":
+        cleanup._scope_combo.setCurrentIndex(cleanup._scope_combo.count() - 1)
+        cleanup._custom_path_edit.setText(str(tmp_path))
+    cleanup._on_scan_finished(_scanned_plan(tmp_path, folders=6))
+    window.resize(*size)
+    for _ in range(4):
+        qapp.processEvents()
+
+    assert (window.width(), window.height()) == size, "the window was pushed larger than asked"
+    assert cleanup._stats_strip.isVisibleTo(window), "the scan's tiles are showing"
+    page = window._view_stack.currentWidget()
+    always_in_view = (cleanup._apply_btn, cleanup._undo_btn, cleanup._receipt_btn)
+    problems = _button_problems(window, page, whole=always_in_view)
+    # Boxes and labels are not buttons, so the check above does not look at them.
+    for field in (cleanup._scope_combo, cleanup._custom_path_edit):
+        if field.isVisibleTo(window) and field.height() < field.minimumSizeHint().height():
+            problems.append(f"{type(field).__name__} is {field.height()} px tall and needs "
+                            f"{field.minimumSizeHint().height()}")
+    for label in page.findChildren(QLabel):
+        if not label.isVisibleTo(window) or not label.text():
+            continue
+        needs = label.heightForWidth(label.width()) if label.wordWrap() else label.minimumSizeHint().height()
+        if label.height() < needs:
+            problems.append(f"the words '{label.text()[:40]}...' get {label.height()} px of height and need {needs}")
+    assert not problems, f"Clean up after a scan, {scope}, at {size[0]}x{size[1]}: " + "; ".join(problems)
+    assert cleanup._sub_tabs.height() >= 150, "the list of folders keeps room to be read"
+    if size[1] >= 760:
+        assert not cleanup._page_scroll.verticalScrollBar().isVisible(), "nothing scrolls in the opening size"
 
 
 def test_clean_up_with_another_folder_chosen_still_fits(window, qapp):

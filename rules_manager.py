@@ -1606,7 +1606,22 @@ class MachineRemodelWidget(QFrame):
         self.notice.emit(text, kind, action_text, action)
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(14)
+
+        # Everything above the Apply row scrolls as one page. After a scan there is more here
+        # than a 560 px tall window holds (the tiles and the summary are added), and without
+        # this the folder row was squeezed until its words were cut off. In a taller window
+        # nothing scrolls and the list takes the spare room, as before.
+        self._page_scroll = QScrollArea()
+        self._page_scroll.setWidgetResizable(True)
+        self._page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        self._page_scroll.setWidget(content)
+        outer.addWidget(self._page_scroll, 1)
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
 
@@ -1727,6 +1742,7 @@ class MachineRemodelWidget(QFrame):
         self._dupe_table.setShowGrid(False)
         self._sub_tabs.addTab(self._dupe_table, "Duplicates (0)")
 
+        self._sub_tabs.setMinimumHeight(190)  # room for the tabs and a folder and a half; less, and the page scrolls
         layout.addWidget(self._sub_tabs, 1)
 
         action_layout = QHBoxLayout()
@@ -1748,7 +1764,7 @@ class MachineRemodelWidget(QFrame):
         self._receipt_btn.clicked.connect(self._open_receipt)
         action_layout.addWidget(self._receipt_btn)
 
-        layout.addLayout(action_layout)
+        outer.addLayout(action_layout)  # always in view, below the part that scrolls
 
     def _on_scope_changed(self, idx: int):
         is_custom = (idx == 3)
