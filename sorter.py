@@ -74,7 +74,9 @@ V2_DEFAULTS: dict = {
     },
     "mirror": {"enabled": False},
     # Learning from how the user organizes files: it keeps score of its guesses and,
-    # after 3 similar moves, asks before adding a rule. It never moves files itself.
+    # after 3 similar moves, asks before adding a rule. It never moves files itself,
+    # unless the user adds "auto_file": true ("Always" on a suggestion, or Settings):
+    # then a download no rule could place is filed where they put files like it.
     "learning": {"enabled": True, "suggest": True},
     # Optional: move installers and zips nobody needed for a while to the
     # Recycle Bin, once a day (clean_old.py). Off unless the user turns it on.
@@ -2052,6 +2054,34 @@ def evaluate_routing(
         else:
             rule_trace.append({"tier": "extension", "rule": rule_name, "status": "mismatch"})
 
+    # --- Tier 4.5: where the user puts files like this ---
+    # Only for a file nothing above could place, and only when the user switched it on.
+    try:
+        import learning
+        guess = learning.confident_folder(p.name, config, file_path=file_path)
+    except Exception:
+        logging.debug("Learned placement skipped", exc_info=True)
+        guess = None
+    if guess:
+        reason = learning.describe_guess(guess)
+        rule_trace.append({
+            "tier": "learned",
+            "status": "matched",
+            "destination": guess["folder"],
+            "confidence": guess["confidence"],
+            "because": reason,
+        })
+        return {
+            "destination": guess["folder"],
+            "match_type": "learned",
+            "winning_rule": f"Learned ({guess['folder']})",
+            "matched_trigger": f"your own moves ({reason})",
+            "is_active_project": False,
+            "sniffer_details": sniffer_details,
+            "rule_trace": rule_trace,
+        }
+    rule_trace.append({"tier": "learned", "status": "no_confident_guess"})
+
     # --- Tier 5: Fallback Default ---
     default = config.get("default_folder", "Other")
     rule_trace.append({"tier": "fallback", "status": "matched", "destination": default})
@@ -2762,6 +2792,8 @@ def reclassify_misplaced_file(
     )
     if routing["match_type"] == "ignored":
         return None
+    if routing["match_type"] == "learned":
+        return None  # a guess files new downloads only; it never empties the catch-all folder
     target_folder, reason = routing["destination"], routing["matched_trigger"]
     target_folder = target_folder.replace("/", "\\")
 
