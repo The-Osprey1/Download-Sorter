@@ -338,3 +338,63 @@ def test_a_long_elided_text_does_not_make_its_row_wider(qapp, real_font):
     plain = QWidget()
     QHBoxLayout(plain).addWidget(QLabel("a long folder name " * 20))
     assert plain.minimumSizeHint().width() > 400, "an ordinary label would have forced the row to that width"
+
+
+def test_wrapping_checkbox_wraps_toggles_and_keeps_accessibility(qapp, real_font):
+    from PySide6.QtWidgets import QVBoxLayout
+
+    long_text = (
+        "Put files named after one of my folders into that folder "
+        "(flanged_mace_v3.f3d goes to 3D Models)"
+    )
+    host = QWidget()
+    host.setStyleSheet(ui_style.stylesheet())
+    col = QVBoxLayout(host)
+    chk = ui_widgets.WrappingCheckBox(long_text, host)
+    chk.setToolTip("Helpful hint")
+    col.addWidget(chk)
+    host.resize(260, 140)
+    host.show()
+    qapp.processEvents()
+    try:
+        assert chk.text() == long_text
+        assert chk.accessibleName() == long_text
+        assert chk._box.accessibleName() == long_text
+        assert chk.toolTip() == "Helpful hint"
+        assert chk._label.toolTip() == "Helpful hint"
+        assert chk.minimumSizeHint().width() < 160
+        assert chk._label.height() >= chk._label.heightForWidth(chk._label.width())
+        assert chk._label.height() > chk._label.fontMetrics().lineSpacing()
+
+        toggled: list[bool] = []
+        clicked: list[bool] = []
+        chk.toggled.connect(toggled.append)
+        chk.clicked.connect(clicked.append)
+
+        # Clicking the wrapped label text toggles the checkbox.
+        QTest.mouseClick(chk._label, Qt.MouseButton.LeftButton)
+        assert chk.isChecked() is True
+        assert toggled == [True] and clicked == [True]
+
+        # Space toggles via either the focus proxy or wrapper.
+        QTest.keyClick(chk._box, Qt.Key.Key_Space)
+        assert chk.isChecked() is False
+        assert toggled == [True, False]
+
+        QTest.keyClick(chk, Qt.Key.Key_Space)
+        assert chk.isChecked() is True
+        assert toggled == [True, False, True]
+
+        # blockSignals suppresses user-signal forwarding during programmatic sync.
+        chk.blockSignals(True)
+        chk.setChecked(False)
+        chk.blockSignals(False)
+        assert chk.isChecked() is False
+        assert toggled == [True, False, True]
+
+        chk.setText("Updated label")
+        assert chk.text() == "Updated label"
+        assert chk.accessibleName() == "Updated label"
+        assert chk._box.accessibleName() == "Updated label"
+    finally:
+        host.close()

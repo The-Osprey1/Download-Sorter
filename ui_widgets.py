@@ -13,7 +13,9 @@ from typing import Callable, Iterable, Sequence
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QLayout,
     QLayoutItem,
@@ -536,3 +538,150 @@ class NoticeBar(QWidget):
 
     def dismiss(self) -> None:
         self.banner.dismiss()
+
+
+class WrappingCheckBox(QWidget):
+    """CheckBox whose text wraps onto multiple lines inside narrow panels.
+
+    Exposes the QCheckBox API callers use (``isChecked``, ``setChecked``,
+    ``toggle``, ``click``, ``text``, ``setText``, ``setToolTip``, ``toggled``,
+    ``clicked``) while letting the label wrap without widening its container.
+    """
+
+    toggled = Signal(bool)
+    clicked = Signal(bool)
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._label_pressed = False
+        self._self_pressed = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        # QSS gives QCheckBox spacing: 10px even with empty text, so its indicator sits at
+        # x=0..18 and reserves x=18..28 before the label — matching native QCheckBox alignment.
+        layout.setSpacing(0)
+
+        self._box = QCheckBox("", self)
+        self._box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._box.toggled.connect(self._on_box_toggled)
+        self._box.clicked.connect(self._on_box_clicked)
+
+        self._label = QLabel(text, self)
+        self._label.setWordWrap(True)
+        self._label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self._label.installEventFilter(self)
+
+        layout.addWidget(self._box, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self._label, 1)
+
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFocusProxy(self._box)
+        if text:
+            self.setAccessibleName(text)
+
+    def _on_box_toggled(self, checked: bool) -> None:
+        self.toggled.emit(checked)
+
+    def _on_box_clicked(self, checked: bool) -> None:
+        self.clicked.emit(checked)
+
+    def isChecked(self) -> bool:
+        return self._box.isChecked()
+
+    def setChecked(self, checked: bool) -> None:
+        self._box.setChecked(checked)
+
+    def checkState(self) -> Qt.CheckState:
+        return self._box.checkState()
+
+    def setCheckState(self, state: Qt.CheckState) -> None:
+        self._box.setCheckState(state)
+
+    def toggle(self) -> None:
+        self._box.toggle()
+
+    def click(self) -> None:
+        self._box.click()
+
+    def text(self) -> str:
+        return self._label.text()
+
+    def setText(self, text: str) -> None:
+        self._label.setText(text)
+        self.setAccessibleName(text)
+        self.updateGeometry()
+
+    def setToolTip(self, tip: str) -> None:
+        super().setToolTip(tip)
+        self._box.setToolTip(tip)
+        self._label.setToolTip(tip)
+
+    def setAccessibleName(self, name: str) -> None:
+        super().setAccessibleName(name)
+        self._box.setAccessibleName(name)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        box_sz = self._box.sizeHint()
+        label_w = max(1, width - box_sz.width())
+        label_h = self._label.heightForWidth(label_w)
+        if label_h < 0:
+            label_h = self._label.sizeHint().height()
+        return max(box_sz.height(), label_h)
+
+    def minimumSizeHint(self) -> QSize:
+        box_sz = self._box.sizeHint()
+        # Keep min width narrow enough to wrap, without letting QLabel inflate min height.
+        return QSize(box_sz.width() + self._label.minimumSizeHint().width(), box_sz.height())
+
+    def sizeHint(self) -> QSize:
+        box_sz = self._box.sizeHint()
+        lbl_sz = self._label.sizeHint()
+        return QSize(box_sz.width() + lbl_sz.width(), max(box_sz.height(), lbl_sz.height()))
+
+    def eventFilter(self, obj: object, event: QEvent) -> bool:
+        if obj is self._label:
+            etype = event.type()
+            if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                if self.isEnabled():
+                    self._label_pressed = True
+                    return True
+            elif etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                if self._label_pressed:
+                    self._label_pressed = False
+                    if self.isEnabled() and self._label.rect().contains(event.position().toPoint()):
+                        self._box.setFocus(Qt.FocusReason.MouseFocusReason)
+                        self._box.click()
+                    return True
+        return super().eventFilter(obj, event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.isEnabled():
+            self._self_pressed = True
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._self_pressed:
+            self._self_pressed = False
+            if self.isEnabled() and self.rect().contains(event.position().toPoint()):
+                self._box.setFocus(Qt.FocusReason.MouseFocusReason)
+                self._box.click()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat() and self.isEnabled():
+            self._box.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
