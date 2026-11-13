@@ -149,6 +149,7 @@ class Icon:
         class Bridge(QObject):
             command = Signal(str)
             notify = Signal(str, str)
+            call = Signal(object)
 
         bridge = Bridge()
         tray = QSystemTrayIcon()
@@ -197,7 +198,14 @@ class Icon:
                 if default is not None:
                     default(icon_ref)
 
+        def on_call(work) -> None:
+            try:
+                work()
+            except Exception:
+                logging.exception("A task handed to the tray's window thread failed")
+
         bridge.command.connect(on_command, Qt.ConnectionType.QueuedConnection)
+        bridge.call.connect(on_call, Qt.ConnectionType.QueuedConnection)
         bridge.notify.connect(
             lambda title, message: tray.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 6000),
             Qt.ConnectionType.QueuedConnection)
@@ -213,6 +221,14 @@ class Icon:
         finally:
             tray.hide()
             self._tray = self._bridge = None
+
+    def run_on_ui(self, work) -> bool:
+        """Run ``work()`` on the thread that owns the tray's windows (from any thread).
+        Returns False when the tray is not running, so the caller can do it another way."""
+        if self._bridge is None:
+            return False
+        self._bridge.call.emit(work)
+        return True
 
     def _post(self, command: str) -> None:
         if self._bridge is not None:
