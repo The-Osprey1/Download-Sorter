@@ -2226,15 +2226,15 @@ class SettingsWidget(QWidget):
         row.addWidget(self._btn_rerun_tour)
         profile.addLayout(row)
 
-        self._chk_projects_page = QCheckBox("Show the Projects page (for code, CAD and other project folders)")
+        self._chk_projects_page = ui_widgets.WrappingCheckBox("Show the Projects page (for code, CAD and other project folders)")
         self._chk_projects_page.toggled.connect(self._on_projects_page_toggled)
         profile.addWidget(self._chk_projects_page)
 
         windows = self._section(layout, "Windows")
-        self._chk_startup = QCheckBox("Start Download Sorter when I sign in")
+        self._chk_startup = ui_widgets.WrappingCheckBox("Start Download Sorter when I sign in")
         self._chk_startup.toggled.connect(self._on_startup_toggled)
         windows.addWidget(self._chk_startup)
-        self._chk_context = QCheckBox("Add “Sort with Download Sorter” to the folder right-click menu")
+        self._chk_context = ui_widgets.WrappingCheckBox("Add “Sort with Download Sorter” to the folder right-click menu")
         self._chk_context.toggled.connect(self._on_context_menu_toggled)
         windows.addWidget(self._chk_context)
         # Windows Storage Sense can delete old files in Downloads, sorted ones included.
@@ -2248,12 +2248,12 @@ class SettingsWidget(QWidget):
         windows.addWidget(self._btn_storage_sense)
 
         downloads = self._section(layout, "Zip files")
-        self._chk_unpack = QCheckBox("Unzip downloaded .zip files into the Extracted folder")
+        self._chk_unpack = ui_widgets.WrappingCheckBox("Unzip downloaded .zip files into the Extracted folder")
         self._chk_unpack.toggled.connect(self._on_unpack_toggled)
         downloads.addWidget(self._chk_unpack)
         downloads.addWidget(ui_style.label("The original zip file is kept in the Archives folder.", "muted", wrap=True))
 
-        self._option_checks: dict[tuple[str, str], QCheckBox] = {}
+        self._option_checks: dict[tuple[str, str], ui_widgets.WrappingCheckBox] = {}
         folders = self._section(
             layout, "Folders",
             "Both on unless you turn them off. Nothing is ever taken out of a folder you made.",
@@ -2269,7 +2269,7 @@ class SettingsWidget(QWidget):
              "after your project. New files with that name in theirs land there. Folders with "
              "general names like “New folder” or “Old” are never used for this."),
         ):
-            chk = QCheckBox(text)
+            chk = ui_widgets.WrappingCheckBox(text)
             chk.setToolTip(tip)
             chk.toggled.connect(lambda checked, k=key: self._on_option_toggled(k, checked))
             folders.addWidget(chk)
@@ -2300,7 +2300,7 @@ class SettingsWidget(QWidget):
         folders.addWidget(self._skip_folders_edit)
 
         printing = self._section(layout, "3D printing", "Both off unless you turn them on.")
-        self._chk_by_designer = QCheckBox(
+        self._chk_by_designer = ui_widgets.WrappingCheckBox(
             "Put MakerWorld models in a folder for each designer "
             "(3D Models\\MakerWorld\\Designer\\Model)")
         self._chk_by_designer.toggled.connect(
@@ -2335,7 +2335,7 @@ class SettingsWidget(QWidget):
             (("cleanup", "enabled"), "Move installers and zip files older than 30 days to the Recycle Bin, "
                                      "once a day"),
         ):
-            chk = QCheckBox(text)
+            chk = ui_widgets.WrappingCheckBox(text)
             chk.toggled.connect(lambda checked, k=key: self._on_option_toggled(k, checked))
             extras.addWidget(chk)
             self._option_checks[key] = chk
@@ -2351,7 +2351,7 @@ class SettingsWidget(QWidget):
                                       "“document (3).pdf” that says Invoice still goes to Invoices"),
             (("bambu_recent", "enabled"), "Keep Bambu Studio's Recently Opened list pointing at moved .3mf files"),
         ):
-            chk = QCheckBox(text)
+            chk = ui_widgets.WrappingCheckBox(text)
             chk.toggled.connect(lambda checked, k=key: self._on_option_toggled(k, checked))
             experimental.addWidget(chk)
             self._option_checks[key] = chk
@@ -2405,7 +2405,7 @@ class SettingsWidget(QWidget):
             "never moves files on its own guess unless you switch that on below, and everything "
             "stays on this PC.",
         )
-        self._chk_learning = QCheckBox("Learn from how I organize files and suggest rules")
+        self._chk_learning = ui_widgets.WrappingCheckBox("Learn from how I organize files and suggest rules")
         self._chk_learning.toggled.connect(self._on_learning_toggled)
         learn.addWidget(self._chk_learning)
         self._chk_auto_file = QCheckBox("File what no rule can place where I put files like it")
@@ -2429,7 +2429,7 @@ class SettingsWidget(QWidget):
 
         info = self._section(layout, "About")
         info.addWidget(ui_style.label(f"{about.APP_NAME} {about.__version__}"))
-        self._chk_updates = QCheckBox("Check for new versions once a day")
+        self._chk_updates = ui_widgets.WrappingCheckBox("Check for new versions once a day")
         self._chk_updates.setToolTip(
             "Asks GitHub which version is newest. Nothing about you or your files is sent.")
         self._chk_updates.toggled.connect(self._on_updates_toggled)

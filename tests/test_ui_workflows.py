@@ -266,3 +266,55 @@ def test_unsaved_rules_are_not_replaced_when_the_rules_page_opens(window):
 
     assert "Report files" not in [r["name"] for r in window._keyword_table.get_rules()]
     assert window._dirty
+
+
+def test_sidebar_selection_bar_and_projects_toggle(window, qapp):
+    import ui_style
+
+    window._show_projects_nav(True)
+    qapp.processEvents()
+    for target in ("home", "rules", "cleanup", "projects", "settings"):
+        window.switch_view(target)
+        qapp.processEvents()
+        for page_id, bar in window._nav_bars.items():
+            assert bar.isVisible() is (page_id == target)
+
+    # Hiding Projects while it is open switches back to Home and keeps its indicator in sync.
+    window.switch_view("projects")
+    window._show_projects_nav(False)
+    qapp.processEvents()
+    assert window.current_page() == "home"
+    assert window._nav_buttons["projects"].isHidden()
+    assert window._nav_bars["home"].isVisible()
+    assert not window._nav_bars["projects"].isVisible()
+
+    # Check non-color-only, hover, focus, and 24 px title rules in the stylesheet.
+    qss = ui_style.stylesheet()
+    assert 'QLabel[role="title"] { font-size: 24px; font-weight: 600; }' in qss
+    assert 'QPushButton[role="nav"]:checked {' in qss
+    assert 'font-weight: 600;' in qss
+    assert 'QPushButton[role="nav"]:focus {' in qss
+    assert 'QPushButton[role="nav"]:checked:focus {' in qss
+    assert 'QFrame[role="navBar"] {' in qss
+
+
+def test_rules_header_with_24px_title_and_unsaved_chip_fits_at_900px(window, qapp):
+    window.resize(900, 560)
+    window.switch_view("rules")
+    window._set_dirty(True)
+    for _ in range(3):
+        qapp.processEvents()
+
+    page = window._view_stack.currentWidget()
+    widgets = [window._preset_lib_btn, window._more_btn, window._unsaved_chip, window._save_btn]
+    for widget in widgets:
+        assert widget.isVisibleTo(page)
+        top_left = widget.mapTo(page, widget.rect().topLeft())
+        assert top_left.x() >= 0 and top_left.x() + widget.width() <= page.width()
+    tops = [w.mapTo(page, w.rect().topLeft()).y() for w in widgets]
+    assert max(tops) - min(tops) <= 10, f"header actions wrapped onto multiple rows: tops={tops}"
+    # No overlap between consecutive action controls on the header row.
+    rights = [w.mapTo(page, w.rect().topLeft()).x() + w.width() for w in widgets[:-1]]
+    lefts = [w.mapTo(page, w.rect().topLeft()).x() for w in widgets[1:]]
+    for r, l in zip(rights, lefts):
+        assert r < l, f"adjacent header controls touched/overlapped: {r} >= {l}"
