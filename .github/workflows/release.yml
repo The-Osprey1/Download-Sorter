@@ -140,7 +140,7 @@ jobs:
       - name: Keep the unsigned setup file for signing
         id: unsigned
         if: env.SIGNPATH_ORGANIZATION_ID != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: DownloadSorter-setup-unsigned
           path: dist/DownloadSorter-Setup-v*-windows-x64.exe
@@ -172,7 +172,7 @@ jobs:
           python release_notes.py --output dist/release_notes.md
 
       - name: Keep the built files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: DownloadSorter-windows-x64
           path: |
