@@ -115,22 +115,26 @@ def check_context_menu() -> bool:
         return False
 
 
-def get_reclaimable_space(root: Path, days: float | None = None) -> tuple[int, int]:
+def get_reclaimable_space(root: Path, days: float | None = None, config: dict | None = None) -> tuple[int, int]:
     """Old files that the daily clean-up would send to the Recycle Bin: the folders and
     age come from Settings (cleanup), so this matches what will actually be moved."""
-    from clean_old import find_old_files, folder_path
+    from clean_old import (
+        find_old_files,
+        folder_path,
+        get_folder_cleanup_extensions,
+        resolve_cleanup_folders,
+    )
     from sorter import load_config
-    cfg = load_config()
+    cfg = config if isinstance(config, dict) else load_config()
     block = cfg.get("cleanup") if isinstance(cfg.get("cleanup"), dict) else {}
     if days is None:
         days = float(block.get("days", 30) or 30)
-    names = block.get("folders") or ["Installers", "Archives"]
-    rule_folders = {str(r.get("name") or "").lower(): str(r.get("folder") or "")
-                    for r in cfg.get("extension_rules", []) if isinstance(r, dict)}
+    folders = resolve_cleanup_folders(cfg)
     candidates = []
-    for name in names:
-        d = folder_path(root, rule_folders.get(str(name).lower()) or str(name))
-        candidates.extend(find_old_files(d, days))
+    for folder in folders:
+        d = folder_path(root, folder)
+        allowed_exts = get_folder_cleanup_extensions(folder, cfg)
+        candidates.extend(find_old_files(d, days, allowed_extensions=allowed_exts))
     total_bytes = sum(size for _, _, size in candidates)
     return len(candidates), total_bytes
 
@@ -161,7 +165,7 @@ def main() -> int:
     paused = is_paused()
     total_moves, last_batch, last_time = get_history_summary()
     menu_installed = check_context_menu()
-    reclaim_count, reclaim_bytes = get_reclaimable_space(downloads, 30.0)
+    reclaim_count, reclaim_bytes = get_reclaimable_space(downloads, 30.0, config=config)
     cat_counts = count_category_files(downloads)
     runtime_status, heartbeat_age, runtime_detail = get_runtime_health()
     failure_count, latest_failure, latest_failure_time = get_failure_summary()

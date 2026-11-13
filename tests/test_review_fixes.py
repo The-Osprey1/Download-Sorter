@@ -204,6 +204,15 @@ def test_cleanup_follows_a_renamed_installers_folder(tmp_path, monkeypatch):
     old.write_text("x", encoding="utf-8")
     past = time.time() - 60 * 86400
     os.utime(old, (past, past))
+
+    # Personal mixed files in the same folder must NOT be recycled
+    old_readme = downloads / "Programs" / "README.txt"
+    old_readme.write_text("personal readme", encoding="utf-8")
+    os.utime(old_readme, (past, past))
+    old_pdf = downloads / "Programs" / "manual.pdf"
+    old_pdf.write_text("personal manual", encoding="utf-8")
+    os.utime(old_pdf, (past, past))
+
     cfg = sorter.get_default_config()
     cfg["downloads_dir"] = str(downloads)
     cfg["watch"] = {"folder": str(downloads)}
@@ -213,3 +222,5 @@ def test_cleanup_follows_a_renamed_installers_folder(tmp_path, monkeypatch):
     clean_old.auto_cleanup(cfg)
 
     assert binned == ["old_setup.exe"]
+    assert old_readme.exists()
+    assert old_pdf.exists()

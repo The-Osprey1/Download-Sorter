@@ -105,11 +105,11 @@ def test_consolidate_collision_resolution(tmp_path: Path):
     downloads = tmp_path / "Downloads"
     downloads.mkdir()
 
-    # Create two files with the same name but different content in subfolders
-    (downloads / "Documents" / "FolderA").mkdir(parents=True)
-    (downloads / "Documents" / "FolderB").mkdir(parents=True)
-    (downloads / "Documents" / "FolderA" / "report.pdf").write_text("CONTENT_A", encoding="utf-8")
-    (downloads / "Documents" / "FolderB" / "report.pdf").write_text("CONTENT_B", encoding="utf-8")
+    # Create two files with the same name but different content in legacy category subfolders
+    (downloads / "Documents" / "PDFs").mkdir(parents=True)
+    (downloads / "Documents" / "Word").mkdir(parents=True)
+    (downloads / "Documents" / "PDFs" / "report.pdf").write_text("CONTENT_A", encoding="utf-8")
+    (downloads / "Documents" / "Word" / "report.pdf").write_text("CONTENT_B", encoding="utf-8")
 
     config = sorter.DEFAULT_CONFIG.copy()
     config["watch"] = {"folder": str(downloads)}
@@ -133,11 +133,11 @@ def test_consolidate_exact_duplicate_quarantined(tmp_path: Path):
     downloads = tmp_path / "Downloads"
     downloads.mkdir()
 
-    (downloads / "Documents" / "FolderA").mkdir(parents=True)
-    (downloads / "Documents" / "FolderB").mkdir(parents=True)
+    (downloads / "Documents" / "PDFs").mkdir(parents=True)
+    (downloads / "Documents" / "Word").mkdir(parents=True)
     # Identical content
-    (downloads / "Documents" / "FolderA" / "dup.pdf").write_text("IDENTICAL", encoding="utf-8")
-    (downloads / "Documents" / "FolderB" / "dup.pdf").write_text("IDENTICAL", encoding="utf-8")
+    (downloads / "Documents" / "PDFs" / "dup.pdf").write_text("IDENTICAL", encoding="utf-8")
+    (downloads / "Documents" / "Word" / "dup.pdf").write_text("IDENTICAL", encoding="utf-8")
 
     config = sorter.DEFAULT_CONFIG.copy()
     config["watch"] = {"folder": str(downloads)}
@@ -200,11 +200,12 @@ def test_consolidate_reconciles_interrupted_planned_moves(tmp_path: Path, monkey
     monkeypatch.setattr(sort_undo, "HISTORY_FILE", history_file)
 
     # Simulate an interrupted move where destination was written and matches source
-    sub_dir = downloads / "Documents" / "Nested"
+    sub_dir = downloads / "Documents" / "PDFs"
     sub_dir.mkdir(parents=True)
     src_file = sub_dir / "doc.pdf"
     src_file.write_text("IDENTICAL", encoding="utf-8")
-    dest_file = downloads / "Documents" / "doc.pdf"
+    dest_file = downloads / "Documents" / "PDF" / "doc.pdf"
+    dest_file.parent.mkdir(parents=True, exist_ok=True)
     dest_file.write_text("IDENTICAL", encoding="utf-8")
 
     import safe_ops
@@ -259,3 +260,78 @@ def test_old_folders_are_found_whatever_their_capitals(tmp_path: Path):
     assert (downloads / "Documents" / "Spreadsheets" / "budget.xlsx").exists()
     assert not (downloads / "SPREADSHEETS").exists()
     assert not (downloads / "code" / "HAAS").exists()
+
+
+def test_consolidate_leaves_personal_subfolders_inside_categories_alone(mock_downloads: Path, tmp_path: Path):
+    """Personal subfolders inside categories (e.g. Documents\\Tax Records) must never be flattened or removed."""
+    personal_doc_dir = mock_downloads / "Documents" / "Tax Records"
+    personal_doc_dir.mkdir(parents=True)
+    personal_doc = personal_doc_dir / "taxes_2025.pdf"
+    personal_doc.write_text("CONFIDENTIAL", encoding="utf-8")
+
+    empty_personal_dir = mock_downloads / "Documents" / "Empty Personal"
+    empty_personal_dir.mkdir(parents=True)
+
+    nested_type_dir = mock_downloads / "Documents" / "PDF" / "Old Taxes"
+    nested_type_dir.mkdir(parents=True)
+    nested_type_doc = nested_type_dir / "w2.pdf"
+    nested_type_doc.write_text("W2", encoding="utf-8")
+
+    personal_model_dir = mock_downloads / "3D Models" / "Flanged Mace"
+    personal_model_dir.mkdir(parents=True)
+    personal_model = personal_model_dir / "bracket.step"
+    personal_model.write_text("STEP", encoding="utf-8")
+
+    maker_dir = mock_downloads / "3D Models" / "MakerWorld" / "Some Designer" / "Cable Clip"
+    maker_dir.mkdir(parents=True)
+    maker_stl = maker_dir / "clip.stl"
+    maker_stl.write_text("STL", encoding="utf-8")
+
+    config = sorter.DEFAULT_CONFIG.copy()
+    config["watch"] = {"folder": str(mock_downloads)}
+
+    consolidate.consolidate_downloads(target_root=mock_downloads, config=config, dry_run=False)
+
+    assert personal_doc.exists()
+    assert personal_doc_dir.exists()
+    assert empty_personal_dir.exists()
+    assert nested_type_doc.exists()
+    assert nested_type_dir.exists()
+    assert not (mock_downloads / "Documents" / "PDF" / "taxes_2025.pdf").exists()
+
+    assert personal_model.exists()
+    assert personal_model_dir.exists()
+    assert maker_stl.exists()
+    assert not (mock_downloads / "CAD" / "STEP" / "bracket.step").exists()
+
+    # A watch root placed inside a parent folder named "Documents" must still consolidate legacy subfolders inside itself
+    nested_root = tmp_path / "Documents" / "TestDownloads"
+    legacy_pdf = nested_root / "Documents" / "PDFs" / "nested_root_doc.pdf"
+    legacy_pdf.parent.mkdir(parents=True)
+    legacy_pdf.write_text("LEGACY", encoding="utf-8")
+    nested_cfg = sorter.DEFAULT_CONFIG.copy()
+    nested_cfg["watch"] = {"folder": str(nested_root)}
+    consolidate.consolidate_downloads(target_root=nested_root, config=nested_cfg, dry_run=False)
+    assert (nested_root / "Documents" / "PDF" / "nested_root_doc.pdf").exists()
+    assert not legacy_pdf.exists()
+
+
+def test_consolidate_dry_run_never_creates_destination_directories(tmp_path: Path):
+    """A dry run must never create destination directories on disk."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+
+    # Create a legacy subfolder with an installer that routes to Installers
+    (downloads / "Documents" / "PDFs").mkdir(parents=True)
+    (downloads / "Documents" / "PDFs" / "tool.exe").write_text("BIN", encoding="utf-8")
+
+    config = sorter.DEFAULT_CONFIG.copy()
+    config["watch"] = {"folder": str(downloads)}
+
+    installers_dir = downloads / "Installers"
+    assert not installers_dir.exists()
+
+    res = consolidate.consolidate_downloads(target_root=downloads, config=config, dry_run=True)
+
+    assert res["moved"] > 0
+    assert not installers_dir.exists()
