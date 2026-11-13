@@ -125,6 +125,8 @@ py-modules = [
     "setup_export",
     "shelf",
     "space_report",
+    "consolidate",
+    "installer_builder",
 ]
 
 [tool.setuptools.dynamic]
