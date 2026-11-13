@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-13
+
 ### Added
 - **Skip the 7-day hold: file every held .3mf now (`hold_manager.py`, `tray.py`, `onboarding.py`, `main.py`).** A held .3mf stays where it was saved until its days are up, so a slicer that has it open keeps working. You could already click **File now** on a file's ribbon; now you can do them all at once. The tray menu has **File held 3MF files now** (shown while something is held), **Settings -> 3D printing** has a **File held .3mf files now** button with a count, and `DownloadSorter.exe --file-held` does the same from a command line (`--include-kept` also files the ones you marked Keep here). It is one batch, so **Undo last sort** puts them all back, a file that is open in another program keeps its hold and is reported, and files marked Keep here are left alone. To stop holding altogether, untick **Leave new .3mf files where they were saved** in the same section.
 
