@@ -143,7 +143,7 @@ def stylesheet() -> str:
 
     /* ---- text ---- */
     QLabel {{ background: transparent; }}
-    QLabel[role="title"] {{ font-size: 20px; font-weight: 600; }}
+    QLabel[role="title"] {{ font-size: 24px; font-weight: 600; }}
     QLabel[role="section"] {{ font-size: 14px; font-weight: 600; }}
     QLabel[role="muted"] {{ color: {c['textMuted']}; }}
     /* captions are small, so they use the muted color (6:1 on surface); textFaint is only for disabled text */
@@ -235,16 +235,36 @@ def stylesheet() -> str:
     QToolButton[role="ghost"] {{ padding: 0; }}  /* icon-only: the usual padding would squash the icon */
     QPushButton[role="nav"] {{
         background: transparent;
-        border: none;
+        border: 1px solid transparent;
         border-radius: {RADII['control']}px;
         color: {c['textMuted']};
         text-align: left;
-        padding: 9px 12px;
+        padding: 8px 11px 8px 14px;
     }}
     QPushButton[role="nav"]:hover {{ background: {c['surfaceHover']}; color: {c['text']}; }}
+    QPushButton[role="nav"]:focus {{
+        border: 2px solid {c['focus']};
+        padding: 7px 10px 7px 13px;
+    }}
     QPushButton[role="nav"]:checked {{
-        background: {c['surfaceRaised']};
+        background: {c['successSubtle']};
+        border: 1px solid {c['successBorder']};
         color: {c['text']};
+        font-weight: 600;
+        padding: 8px 11px 8px 14px;
+    }}
+    QPushButton[role="nav"]:checked:hover {{
+        background: {c['surfaceHover']};
+        border-color: {c['successBorder']};
+    }}
+    QPushButton[role="nav"]:checked:focus {{
+        border: 2px solid {c['focus']};
+        padding: 7px 10px 7px 13px;
+    }}
+    QFrame[role="navBar"] {{
+        background: {ACCENT};
+        border: none;
+        border-radius: 1px;
     }}
 
     /* ---- inputs ---- */

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -39,7 +39,7 @@ classifiers = [
 dependencies = [
     "watchdog>=6.0.0",
     "pillow>=12.0.0",
-    "PySide6>=6.8.0",
+    "PySide6>=6.12.0",
     "defusedxml>=0.7.1",
     "pypdf>=5.0.0"
 ]
@@ -54,9 +54,9 @@ Source = "https://github.com/The-Osprey1/Download-Sorter"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=9.0.0",
-    "pytest-timeout>=2.3.1",
-    "pyinstaller>=6.0.0"
+    "pytest>=9.2.0",
+    "pytest-timeout>=2.4.0",
+    "pyinstaller>=6.22.3"
 ]
 
 [project.scripts]
@@ -85,6 +85,7 @@ py-modules = [
     "onboarding",
     "main",
     "problem_report",
+    "project_scan",
     "projects_hub",
     "projects_page",
     "tray_qt",
@@ -124,6 +125,8 @@ py-modules = [
     "setup_export",
     "shelf",
     "space_report",
+    "consolidate",
+    "installer_builder",
 ]
 
 [tool.setuptools.dynamic]
