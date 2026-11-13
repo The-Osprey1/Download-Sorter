@@ -6,10 +6,12 @@ counts of simple features (words in the file name, the file type, and the websit
 the file was downloaded from) and keeps a practice log of what it *would* have
 guessed, so its reliability can be judged ("right 8 of 10 times").
 
-It never moves a file by itself. After the user has moved 3 files that share a
-word or a website into the same folder, it can *suggest* a rule ("Put files like
-this in Banking from now on?"); only a Yes adds a rule, which then shows on the
-Rules page like any other. The folder scan at setup (folder_scan.py) also feeds
+Unless the user asks for it, it never moves a file by itself. After the user has
+moved 3 files that share a word or a website into the same folder, it can *suggest*
+a rule ("Put files like this in Banking from now on?"); only a Yes adds a rule, which
+then shows on the Rules page like any other. With "Always" (or the switch in Settings)
+it may also file a download that no rule could place, on the same evidence, and only
+that: a file a rule or a file type already placed is never moved on a guess. The folder scan at setup (folder_scan.py) also feeds
 it the files already in the user's folders, so it knows them from day one.
 
 Design notes (ideas from other projects, our own code):
@@ -55,6 +57,11 @@ SUGGEST_AFTER = 3
 SUGGEST_SHARE = 0.8
 PENDING_HOURS = 24        # don't ask about the same thing again for a day
 MAX_PENDING = 20
+# Filing a file no rule could place (only when the user switched that on): the folder must
+# be the clear first guess, and the last guesses this sure of themselves must have been right.
+AUTO_CONFIDENCE = 0.85
+AUTO_LOOK_BACK = 20       # of the user's judged moves
+AUTO_RIGHT_SHARE = 0.8
 # Taking back this many files a learned rule filed is enough to ask whether to switch it off.
 MISS_LIMIT = 2
 MAX_CORRECTED = 300       # ids of the moves already counted as taken back
@@ -84,6 +91,12 @@ def is_enabled(config: dict | None) -> bool:
 def suggestions_enabled(config: dict | None) -> bool:
     block = (config or {}).get("learning")
     return is_enabled(config) and isinstance(block, dict) and bool(block.get("suggest", True))
+
+
+def auto_file_enabled(config: dict | None) -> bool:
+    """Off unless the user chose "Always" on a suggestion or switched it on in Settings."""
+    block = (config or {}).get("learning")
+    return is_enabled(config) and isinstance(block, dict) and bool(block.get("auto_file", False))
 
 
 def _learning_file() -> Path:
@@ -576,11 +589,17 @@ def _already_routed_there(dest: Path, label: str, config: dict) -> bool:
     return folder_key(str(routing.get("destination") or "")) == folder_key(label)
 
 
-def _suggestion_for(model: Model, feats: list[str], label: str, dest: Path, config: dict) -> dict | None:
+def _strong_features(model: Model, feats: Iterable[str], label: str, skip_asked: bool = True) -> dict[str, tuple[int, str]]:
+    """The word and the website of ``feats`` that point to this folder: the user moved at
+    least SUGGEST_AFTER files with it there, and it leads there SUGGEST_SHARE of the time.
+
+    Returns {"w:": (times, word), "s:": (times, site)} with the kinds that qualify. A word or
+    website the user said No to for this folder never qualifies.
+    """
     key = folder_key(label)
     moved = (model.extra.get("moves") or {}).get(key) or {}
     if int(moved.get("count", 0)) < SUGGEST_AFTER:
-        return None
+        return {}
     declined = set(model.extra.get("declined") or [])
     here = (model.folders.get(key) or {}).get("features", {})
     best: dict[str, tuple[int, str]] = {}
@@ -589,13 +608,22 @@ def _suggestion_for(model: Model, feats: list[str], label: str, dest: Path, conf
         if kind not in ("w:", "s:"):
             continue
         n = int((moved.get("features") or {}).get(feat, 0))
-        if n < SUGGEST_AFTER or f"{feat}|{key}" in declined or _asked_recently(model, f"{feat}|{key}"):
+        if n < SUGGEST_AFTER or f"{feat}|{key}" in declined:
+            continue
+        if skip_asked and _asked_recently(model, f"{feat}|{key}"):
             continue
         total = sum(int(f.get("features", {}).get(feat, 0)) for f in model.folders.values())
         if not total or int(here.get(feat, 0)) / total < SUGGEST_SHARE:
             continue
         if kind not in best or n > best[kind][0]:
             best[kind] = (n, feat[2:])
+    return best
+
+
+def _suggestion_for(model: Model, feats: list[str], label: str, dest: Path, config: dict) -> dict | None:
+    key = folder_key(label)
+    moved = (model.extra.get("moves") or {}).get(key) or {}
+    best = _strong_features(model, feats, label)
     if not best:
         return None
     if _already_routed_there(dest, label, config):
@@ -726,6 +754,147 @@ def observe_correction(record: dict, config: dict | None = None, root: Path | st
     return note
 
 
+# ---------------------------------------------------------------------------
+# filing what no rule could place (only when the user asked for it)
+# ---------------------------------------------------------------------------
+
+def sure_guesses_were_right(log: list[dict] | None = None) -> bool:
+    """A brake: of the user's last judged moves, were the guesses this sure of themselves right?
+
+    Looks at the guesses that met AUTO_CONFIDENCE among the last AUTO_LOOK_BACK judged
+    moves. None yet counts as fine: the evidence test in guess_for() still has to pass.
+    """
+    judged = [r for r in (read_log() if log is None else log)
+              if r.get("kind") == "your_move" and r.get("counted")][-AUTO_LOOK_BACK:]
+    sure = [r for r in judged
+            if r.get("guesses") and float(r["guesses"][0].get("confidence", 0)) >= AUTO_CONFIDENCE]
+    if not sure:
+        return True
+    return sum(1 for r in sure if r.get("first_guess_right")) / len(sure) >= AUTO_RIGHT_SHARE
+
+
+def guess_for(model: Model, feats: list[str], default_folder: str = "Other") -> dict | None:
+    """The folder files like this are put in, when the evidence is strong enough to act on.
+
+    All of these must hold: it is the model's clear first guess; a word in the name or the
+    website points there by the same test a rule suggestion has to pass (3 of the user's own
+    moves, 4 times in 5); the user has never taken a file with that word or website back out
+    of that folder; and it is not the catch-all folder itself.
+    """
+    guesses = model.predict(feats, top=1)
+    if not guesses or float(guesses[0].get("confidence", 0)) < AUTO_CONFIDENCE:
+        return None
+    label = str(guesses[0].get("folder") or "")
+    if not label or folder_key(label) == folder_key(default_folder):
+        return None
+    if blocked_features(model, feats, label):
+        return None
+    strong = _strong_features(model, feats, label, skip_asked=False)
+    if not strong:
+        return None
+    return {
+        "folder": label,
+        "confidence": float(guesses[0]["confidence"]),
+        "word": strong["w:"][1] if "w:" in strong else None,
+        "site": strong["s:"][1] if "s:" in strong else None,
+    }
+
+
+def describe_guess(guess: dict) -> str:
+    """'“statement”, yourbank.com': the short reason shown beside a file filed this way."""
+    parts = ([f"“{guess['word']}”"] if guess.get("word") else []) + ([guess["site"]] if guess.get("site") else [])
+    return ", ".join(parts)
+
+
+_ACCURACY_CACHE: tuple[tuple, bool] | None = None
+
+
+def _accuracy_ok() -> bool:
+    """sure_guesses_were_right(), re-read only when the practice log changes."""
+    global _ACCURACY_CACHE
+    target = _log_file()
+    try:
+        st = target.stat()
+    except OSError:
+        return True
+    signature = (str(target), st.st_mtime_ns, st.st_size)
+    if _ACCURACY_CACHE is not None and _ACCURACY_CACHE[0] == signature:
+        return _ACCURACY_CACHE[1]
+    ok = sure_guesses_were_right()
+    _ACCURACY_CACHE = (signature, ok)
+    return ok
+
+
+def confident_folder(file_name: str, config: dict, file_path: Path | str | None = None,
+                     root: Path | str | None = None) -> dict | None:
+    """Where to file a download that no rule could place, or None to leave it to the catch-all.
+
+    Only answers when the user switched this on. Reads the learned model; changes nothing.
+    The folder has to exist already: the learner never invents one.
+    """
+    if not auto_file_enabled(config):
+        return None
+    model = _cached_model()
+    if not model.folders:
+        return None
+    path = Path(file_path) if file_path else None
+    feats = features(path) if path is not None and path.name == file_name else _name_features(file_name)
+    guess = guess_for(model, feats, str(config.get("default_folder") or "Other"))
+    if guess is None or not _accuracy_ok():
+        return None
+    try:
+        base = Path(root) if root is not None else sorter.watch_root(config)
+        if not sorter.folder_path(base, guess["folder"]).is_dir():
+            return None
+    except Exception:
+        return None
+    return guess
+
+
+def turn_on_auto_file(config_path: Path | str | None = None) -> None:
+    """"Always": from now on, file what no rule can place where the user puts files like it."""
+    import config_manager
+
+    config = config_manager.load_sorter_config(config_path)
+    block = config.get("learning")
+    if not isinstance(block, dict):
+        block = {"enabled": True, "suggest": True}
+        config["learning"] = block
+    block["auto_file"] = True
+    config_manager.save_sorter_config(config, config_path)
+    _append_log({"time": _now(), "kind": "auto_file_on"})
+
+
+def replay(log: list[dict] | None = None) -> dict:
+    """Run the filing test over the user's past moves, in order, as if it had been on.
+
+    For each move in the practice log: would it have filed that file, and into the folder
+    the user actually chose? Uses file names only (the log keeps no websites), so it is a
+    little stricter than the real thing. Nothing is read from or written to the model.
+    """
+    model = Model()
+    seen: list[dict] = []
+    would, right, wrong_examples = 0, 0, []
+    moves = [r for r in (read_log() if log is None else log) if r.get("kind") == "your_move"]
+    for rec in moves:
+        feats = _name_features(str(rec.get("file", "")))
+        label = str(rec.get("moved_to", ""))
+        guess = guess_for(model, feats) if sure_guesses_were_right(seen) else None
+        if guess:
+            would += 1
+            if folder_key(guess["folder"]) == folder_key(label):
+                right += 1
+            elif len(wrong_examples) < 10:
+                wrong_examples.append({"file": rec.get("file"), "guessed": guess["folder"], "you_chose": label})
+        guesses = model.predict(feats)
+        names = [folder_key(g["folder"]) for g in guesses]
+        seen.append({"kind": "your_move", "counted": bool(model.folders), "guesses": guesses,
+                     "first_guess_right": bool(names) and names[0] == folder_key(label)})
+        model.learn(feats, label)
+        _count_move(model, feats, label)
+    return {"moves": len(moves), "would_file": would, "right": right, "wrong": wrong_examples}
+
+
 def describe_suggestion(suggestion: dict) -> tuple[str, str]:
     """("Put files like this in Banking?", "“statement” files from yourbank.com").
 
@@ -832,8 +1001,11 @@ def decline_suggestion(suggestion_id: str) -> bool:
     return True
 
 
-def observe_sorted(dest: Path, root: Path, config: dict) -> dict | None:
-    """Note what it would have suggested for a file the rules just sorted (no learning)."""
+def observe_sorted(dest: Path, root: Path, config: dict, by_guess: bool = False) -> dict | None:
+    """Note what it would have suggested for a file that was just sorted (no learning).
+
+    ``by_guess`` marks a file the learner itself filed, so the report can count them.
+    """
     if not is_enabled(config):
         return None
     with _LOCK:
@@ -848,6 +1020,8 @@ def observe_sorted(dest: Path, root: Path, config: dict) -> dict | None:
             "rules_put_it_in": _folder_label(Path(dest).parent, root) or "",
             "would_suggest": guesses,
         }
+        if by_guess:
+            record["by_guess"] = True
         _append_log(record)
     return record
 
@@ -871,6 +1045,8 @@ def report() -> dict:
                 sites[feat[2:]] += int(count)
     return {
         "rules_added": sum(1 for r in log if r.get("kind") == "rule_added"),
+        "filed_for_you": sum(1 for r in log if r.get("kind") == "sorted" and r.get("by_guess")),
+        "taken_back": sum(1 for r in log if r.get("kind") == "taken_back" and r.get("why") == "learned"),
         "your_moves": sum(1 for r in log if r.get("kind") == "your_move"),
         "judged": len(judged),
         "first_guess_right": first,
@@ -918,6 +1094,30 @@ def fallback_suggestion(dest: Path, root: Path, config: dict) -> dict | None:
                 continue
             suggestion = _suggestion_for(model, feats, label, Path(dest), config)
             if suggestion:
+                suggestion["unplaced"] = True  # the ribbon also offers "Always" for these
                 save_model(model)
                 return suggestion
     return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="What Download Sorter has learned from your moves.")
+    parser.add_argument("--replay", action="store_true",
+                        help="Show how filing unplaced files would have done on your past moves.")
+    args = parser.parse_args(argv)
+    if args.replay:
+        result = replay()
+        print(f"Moves in the practice log: {result['moves']}")
+        print(f"It would have filed {result['would_file']} of them, "
+              f"{result['right']} into the folder you chose.")
+        for miss in result["wrong"]:
+            print(f"  wrong: {miss['file']} -> {miss['guessed']} (you chose {miss['you_chose']})")
+        return 0
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
