@@ -85,6 +85,7 @@ py-modules = [
     "onboarding",
     "main",
     "problem_report",
+    "project_scan",
     "projects_hub",
     "projects_page",
     "tray_qt",
