@@ -90,6 +90,7 @@ py-modules = [
     "tray_qt",
     "quick_switcher",
     "refile",
+    "file_index",
     "remodel",
     "ribbon_popup",
     "rules_manager",

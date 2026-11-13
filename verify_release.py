@@ -71,6 +71,7 @@ REQUIRED_RELEASE_FILES = [
     "ui_categories.py",
     "ui_widgets.py",
     "refile.py",
+    "file_index.py",
     "quit_signal.py",
     "problem_report.py",
     "update_check.py",
