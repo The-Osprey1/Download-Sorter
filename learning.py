@@ -55,6 +55,9 @@ SUGGEST_AFTER = 3
 SUGGEST_SHARE = 0.8
 PENDING_HOURS = 24        # don't ask about the same thing again for a day
 MAX_PENDING = 20
+# Taking back this many files a learned rule filed is enough to ask whether to switch it off.
+MISS_LIMIT = 2
+MAX_CORRECTED = 300       # ids of the moves already counted as taken back
 
 # Words that say nothing about where a file belongs.
 FILLER_WORDS = frozenset({
@@ -235,6 +238,28 @@ class Model:
         counts = entry.setdefault("features", {})
         for feat in set(feats):
             counts[feat] = int(counts.get(feat, 0)) + 1
+
+    def unlearn(self, feats: Iterable[str], folder_label: str) -> None:
+        """Take one example back: the user said a file like this does not belong there."""
+        entry = self.folders.get(folder_key(folder_label))
+        if not entry:
+            return
+        entry["examples"] = max(int(entry.get("examples", 0)) - 1, 0)
+        counts = entry.setdefault("features", {})
+        for feat in set(feats):
+            left = int(counts.get(feat, 0)) - 1
+            if left > 0:
+                counts[feat] = left
+            else:
+                counts.pop(feat, None)
+
+    def misses(self, key: str) -> int:
+        return int((self.extra.get("misses") or {}).get(key, 0))
+
+    def add_miss(self, key: str) -> int:
+        misses = self.extra.setdefault("misses", {})
+        misses[key] = int(misses.get(key, 0)) + 1
+        return misses[key]
 
     def predict(self, feats: Iterable[str], top: int = TOP_N) -> list[dict]:
         """Best folders for these features, most likely first (empty until it has examples)."""
@@ -601,11 +626,114 @@ def _suggestion_for(model: Model, feats: list[str], label: str, dest: Path, conf
     return suggestion
 
 
+# ---------------------------------------------------------------------------
+# corrections: the user took back a file that was filed for them
+# ---------------------------------------------------------------------------
+
+def miss_key(feat: str, folder_label: str) -> str:
+    return f"{feat}|{folder_key(folder_label)}"
+
+
+def rule_miss_key(rule_name: str) -> str:
+    return f"rule:{rule_name}"
+
+
+def blocked_features(model: Model, feats: Iterable[str], folder_label: str) -> list[str]:
+    """The words and websites of ``feats`` the user has already said "not there" to for this folder."""
+    return [f for f in dict.fromkeys(feats)
+            if f[:2] in ("w:", "s:") and model.misses(miss_key(f, folder_label))]
+
+
+def _learned_rule(config: dict, name: str) -> dict | None:
+    for rule in config.get("keyword_rules", []) or []:
+        if isinstance(rule, dict) and rule.get("name") == name and rule.get("origin") == "learned":
+            return rule
+    return None
+
+
+def observe_correction(record: dict, config: dict | None = None, root: Path | str | None = None) -> dict | None:
+    """The user put back, or moved elsewhere, a file the program had filed.
+
+    ``record`` is that move's history record. Only two kinds of move teach anything here:
+    one the learner made on its own guess (``why == "learned"``), and one a learned rule
+    made. A file filed by a rule the user wrote, or by its file type, says nothing about
+    the learner. Returns what was noted, with a "suggestion" when a learned rule has now
+    been wrong often enough to ask whether to switch it off; None when nothing was noted.
+    """
+    if config is None:
+        try:
+            import config_manager
+            config = config_manager.load_sorter_config()
+        except Exception:
+            config = {}
+    if not is_enabled(config):
+        return None
+    why = str(record.get("why") or "")
+    rule_name = str(record.get("rule") or "")
+    dest = Path(str(record.get("dest") or ""))
+    record_id = str(record.get("id") or "")
+    if why not in ("learned", "keyword") or not dest.name:
+        return None
+    if why == "keyword" and not _learned_rule(config, rule_name):
+        return None
+    try:
+        base = Path(root) if root is not None else sorter.watch_root(config)
+    except Exception:
+        return None
+    label = _folder_label(dest.parent, base)
+    if not label:
+        return None
+
+    with _LOCK:
+        model = load_model()
+        corrected = list(model.extra.get("corrected") or [])
+        if record_id and record_id in corrected:
+            return None  # this move was already counted
+        if record_id:
+            corrected.append(record_id)
+            model.extra["corrected"] = corrected[-MAX_CORRECTED:]
+        note: dict[str, Any] = {"time": _now(), "kind": "taken_back", "file": dest.name,
+                                "was_in": label, "why": why}
+        if why == "learned":
+            feats = _name_features(dest.name)
+            if record.get("site"):
+                feats.append(f"s:{record['site']}")
+            model.unlearn(feats, label)
+            for feat in feats:
+                if feat[:2] in ("w:", "s:"):
+                    model.add_miss(miss_key(feat, label))
+        else:
+            note["rule"] = rule_name
+            key = rule_miss_key(rule_name)
+            count = model.add_miss(key)
+            declined = set(model.extra.get("declined") or [])
+            if (count >= MISS_LIMIT and suggestions_enabled(config) and key not in declined
+                    and not _asked_recently(model, key)):
+                suggestion = {
+                    "id": uuid.uuid4().hex[:10],
+                    "time": _now(),
+                    "kind": "disable_rule",
+                    "rule": rule_name,
+                    "folder": label,
+                    "example": dest.name,
+                    "count": count,
+                    "keys": [key],
+                }
+                model.extra.setdefault("pending", {})[suggestion["id"]] = suggestion
+                note["suggestion"] = suggestion
+        save_model(model)
+        _append_log({k: v for k, v in note.items() if k != "suggestion"})
+    return note
+
+
 def describe_suggestion(suggestion: dict) -> tuple[str, str]:
     """("Put files like this in Banking?", "“statement” files from yourbank.com").
 
     Short on purpose: a ribbon line holds about 48 characters.
     """
+    if suggestion.get("kind") == "disable_rule":
+        return (f"Stop filing into {suggestion.get('folder')}?",
+                f"You took back {suggestion.get('count')} files this learned rule filed")
     title = f"Put files like this in {suggestion.get('folder')}?"
     word, site, ext = suggestion.get("word"), suggestion.get("site"), suggestion.get("extension")
     if word and site:
@@ -649,6 +777,8 @@ def accept_suggestion(suggestion_id: str, config_path: Path | str | None = None)
         if not suggestion:
             return None
         save_model(model)
+    if suggestion.get("kind") == "disable_rule":
+        return _switch_rule_off(suggestion, config_path)
     rule = suggestion_rule(suggestion)
     config = config_manager.load_sorter_config(config_path)
     rules = list(config.get("keyword_rules", []))
@@ -669,6 +799,21 @@ def accept_suggestion(suggestion_id: str, config_path: Path | str | None = None)
     _append_log({"time": _now(), "kind": "rule_added", "folder": rule["folder"],
                  "match": rule.get("match", []), "sites": rule.get("sites", [])})
     return rule
+
+
+def _switch_rule_off(suggestion: dict, config_path: Path | str | None = None) -> dict | None:
+    """Yes to "Stop filing into Banking?": the learned rule stays on the Rules page, switched off."""
+    import config_manager
+
+    config = config_manager.load_sorter_config(config_path)
+    rule = _learned_rule(config, str(suggestion.get("rule") or ""))
+    if rule is None:
+        return None
+    rule["enabled"] = False
+    config_manager.save_sorter_config(config, config_path)
+    _append_log({"time": _now(), "kind": "rule_switched_off", "folder": rule.get("folder"),
+                 "rule": rule.get("name")})
+    return {**rule, "switched_off": True}
 
 
 def decline_suggestion(suggestion_id: str) -> bool:

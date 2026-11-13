@@ -215,8 +215,17 @@ class DownloadsHandler(FileSystemEventHandler):
             if not learning.is_user_move(src, dest, self.root, cfg):
                 return False
             sorter.remember_user_placed(Path(dest))
+            taken_back = None
+            try:
+                # Dragged out of the folder it was filed into: a "no" for a learned placement.
+                import sort_undo
+                filed = sort_undo.find_active_move(src)
+                if filed and filed.get("why") in ("learned", "keyword"):
+                    taken_back = learning.observe_correction(filed, cfg, self.root)
+            except Exception as err:
+                logging.debug("Could not note a correction: %s", err)
             record = learning.observe_user_move(Path(dest), self.root, cfg)
-            suggestion = (record or {}).get("suggestion")
+            suggestion = (record or {}).get("suggestion") or (taken_back or {}).get("suggestion")
             if suggestion and cfg.get("ribbon_enabled", True) and cfg.get("notifications", True):
                 # A ribbon that can't show must never undo the user's move.
                 try:
