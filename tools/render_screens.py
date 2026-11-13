@@ -9,7 +9,7 @@ history and folders are never read or changed.
     .\\.venv\\Scripts\\python.exe tools\\render_screens.py --out C:\\temp\\shots --min
     .\\.venv\\Scripts\\python.exe tools\\render_screens.py --out C:\\temp\\shots --compact
 
-Groups: home, rules, cleanup, settings, wizard, dialogs, banners, roles (default: all).
+Groups: home, rules, cleanup, settings, wizard, dialogs, banners, shelf, roles (default: all).
 "roles" is one sheet with every shared style role (badges, tones, switches, ...).
 Besides the PNGs, ``manifest.json`` lists each window's size and the smallest
 size its layout asks for, which is what the layout-fit test checks.
@@ -35,7 +35,7 @@ MAIN_MIN = (900, 560)      # what the window itself allows (RulesManagerDialog.s
 MAIN_COMPACT = (900, 640)  # as narrow, a little taller: a second size to compare against
 WIZARD_SIZE = (760, 680)
 WIZARD_MIN = (720, 640)
-GROUPS = ("home", "rules", "cleanup", "settings", "wizard", "dialogs", "banners", "roles")
+GROUPS = ("home", "rules", "cleanup", "settings", "wizard", "dialogs", "banners", "shelf", "roles")
 
 
 def parse_args() -> argparse.Namespace:
@@ -413,6 +413,31 @@ def render_banners(shooter: Shooter) -> None:
     host.close()
 
 
+def render_shelf(shooter: Shooter, sandbox: Path) -> None:
+    """The Ctrl+Shift+Space window: the newest files, a search, a search that finds nothing."""
+    print("shelf")
+    import file_index
+    import prints
+    import shelf
+
+    downloads = sandbox / "Downloads"
+    plate = _touch(downloads / "3D Models" / "MakerWorld" / "Cable Clip" / "cable_clip_plate_1.3mf", minutes_ago=10)
+    prints.record_print(plate, {"printer": "X1C", "filament_type": "PLA", "plate_count": 2, "print_time": "1h 12m",
+                                "makerworld_meta": {"title": "Cable Clip", "designer": "Ada"}})
+    _touch(downloads / "Banking" / "Chase_Statement_Oct2026.pdf", minutes_ago=180)
+    _touch(downloads / "Banking" / "Chase_Statement_Sep2026.pdf", minutes_ago=60 * 24 * 32)
+    file_index.rebuild(downloads)
+    file_index.note_file(downloads / "Banking" / "Chase_Statement_Oct2026.pdf", downloads, {"site": "yourbank.com"})
+    shelf.three_d_app_open = lambda: False
+    for name, text in (("shelf_recent", ""), ("shelf_search", "statement"), ("shelf_print", "pla"),
+                       ("shelf_nothing", "zebra")):
+        window = shelf._build_shelf_window()
+        window.search_box.setText(text)
+        window.search_now()
+        shooter.shoot(window, name, (600, 480))
+        window.close()
+
+
 def render_roles(shooter: Shooter) -> None:
     """One sheet with every shared style role, to check them side by side."""
     print("roles")
@@ -536,6 +561,7 @@ def main() -> int:
         ("wizard", lambda: render_wizard(shooter, wizard_size, cfg, SANDBOX)),
         ("dialogs", lambda: render_dialogs(shooter)),
         ("banners", lambda: render_banners(shooter)),
+        ("shelf", lambda: render_shelf(shooter, SANDBOX)),
         ("roles", lambda: render_roles(shooter)),
     )
     failures = 0
