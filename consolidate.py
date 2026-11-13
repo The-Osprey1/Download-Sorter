@@ -69,6 +69,29 @@ FLAT_CATEGORIES_TO_CONSOLIDATE = {
     "Archives",
 }
 
+# Specific legacy subfolders created by previous versions of Download Sorter,
+# category alias folders, and current two-level type folders that consolidate
+# may re-file. Any user-created folder not in this mapping (e.g.
+# "Documents\Tax Records" or "3D Models\Flanged Mace") remains protected.
+HISTORICAL_CATEGORY_SUBFOLDERS: dict[str, set[str]] = {
+    "documents": {
+        "pdf", "pdfs", "word", "spreadsheets", "presentations", "text", "ebooks",
+        "docs", "paperwork", "papers",
+    },
+    "3d models": {
+        "stl", "3mf", "obj", "blender", "g-code", "gcode", "cnc",
+        "other", "cad", "3d prints", "3d printing", "prints", "models",
+    },
+    "images": {
+        "jpg", "png", "gif", "webp", "heic", "tiff", "vector",
+        "photos", "photo", "pictures", "picture", "pics", "screenshots", "wallpapers",
+    },
+    "audio": {"mp3", "m4a", "wav", "flac", "music", "songs", "sounds", "podcasts"},
+    "videos": {"mp4", "mov", "mkv", "video", "movies", "movie", "clips", "recordings"},
+    "archives": {"zips", "zip", "compressed"},
+    "installers": {"install", "installs", "setup", "setups", "programs", "apps", "software"},
+}
+
 # Old top-level folders in Downloads that older versions of Download Sorter
 # made. Consolidate files everything in them by your current rules, then removes
 # the emptied folder. Names are matched whatever their capitals are.
@@ -109,7 +132,7 @@ def resolve_nested_dir(root: Path, *parts: str) -> Path:
     return path
 
 
-def is_protected_directory(path: Path) -> bool:
+def is_protected_directory(path: Path, root: Path | None = None) -> bool:
     """Check if a directory is a repository, virtualenv, or explicitly protected."""
     name = path.name
     if name in PROTECTED_NAMES or name.startswith("_Remodel Quarantine"):
@@ -120,6 +143,23 @@ def is_protected_directory(path: Path) -> bool:
         return True
     if (path / ".venv").exists() or (path / "venv").exists() or (path / "pyvenv.cfg").exists():
         return True
+
+    # Any directory inside a category that is not a known sorter subfolder is protected
+    flat_categories = {c.lower() for c in FLAT_CATEGORIES_TO_CONSOLIDATE}
+    root_resolved = root.resolve() if root is not None else None
+    curr = path.resolve()
+    while curr.parent != curr:
+        if root_resolved is not None and curr == root_resolved:
+            break
+        parent_name = curr.parent.name.lower()
+        if parent_name in flat_categories:
+            allowed = HISTORICAL_CATEGORY_SUBFOLDERS.get(parent_name, set())
+            if curr.name.lower() not in allowed:
+                return True
+            if path.resolve() != curr:
+                return True
+        curr = curr.parent
+
     return False
 
 
@@ -161,12 +201,14 @@ def consolidate_downloads(
             continue
         for sub_root, dirs, files in os.walk(cat_dir):
             sub_path = Path(sub_root)
+            dirs[:] = [d for d in dirs if not is_protected_directory(sub_path / d, root=root)]
             if sub_path.resolve() == cat_dir.resolve():
                 if by_month and cat_name == "Images":
                     # Pictures by month (Images\2026-11) is a layout the user chose.
                     dirs[:] = [d for d in dirs if not sorter.MONTH_FOLDER.match(d)]
                 continue  # Files directly in the root of the category are already flat!
-            dirs[:] = [d for d in dirs if not is_protected_directory(sub_path / d)]
+            if is_protected_directory(sub_path, root=root):
+                continue
             for f in files:
                 candidates.append(sub_path / f)
 
@@ -177,7 +219,7 @@ def consolidate_downloads(
         if entry.name.lower() in LEGACY_FOLDERS_TO_CONSOLIDATE:
             for sub_root, dirs, files in os.walk(entry):
                 sub_path = Path(sub_root)
-                dirs[:] = [d for d in dirs if not is_protected_directory(sub_path / d)]
+                dirs[:] = [d for d in dirs if not is_protected_directory(sub_path / d, root=root)]
                 for f in files:
                     candidates.append(sub_path / f)
 
@@ -187,7 +229,7 @@ def consolidate_downloads(
         if leg_dir.exists() and leg_dir.is_dir():
             for sub_root, dirs, files in os.walk(leg_dir):
                 sub_path = Path(sub_root)
-                dirs[:] = [d for d in dirs if not is_protected_directory(sub_path / d)]
+                dirs[:] = [d for d in dirs if not is_protected_directory(sub_path / d, root=root)]
                 for f in files:
                     candidates.append(sub_path / f)
 
@@ -241,7 +283,6 @@ def consolidate_downloads(
         if file_path.parent.resolve() == dest_dir.resolve():
             continue
 
-        dest_dir.mkdir(parents=True, exist_ok=True)
         primary_target = dest_dir / file_path.name
         is_dup = primary_target.exists() and are_files_identical(file_path, primary_target)
 
@@ -259,6 +300,7 @@ def consolidate_downloads(
             })
             continue
 
+        dest_dir.mkdir(parents=True, exist_ok=True)
         # Execute safe move
         try:
             if is_dup:
@@ -305,7 +347,7 @@ def consolidate_downloads(
                 continue
             for sub_root, dirs, _ in os.walk(cat_dir, topdown=False):
                 p = Path(sub_root)
-                if p.resolve() == cat_dir.resolve() or is_protected_directory(p):
+                if p.resolve() == cat_dir.resolve() or is_protected_directory(p, root=root):
                     continue
                 try:
                     if not any(p.iterdir()):
@@ -325,7 +367,7 @@ def consolidate_downloads(
                 continue
             for sub_root, dirs, _ in os.walk(leg_path, topdown=False):
                 p = Path(sub_root)
-                if is_protected_directory(p):
+                if is_protected_directory(p, root=root):
                     continue
                 try:
                     if not any(p.iterdir()):

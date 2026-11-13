@@ -259,27 +259,18 @@ def test_home_action_buttons_are_whole_in_every_state(window, qapp, monkeypatch,
 
 
 PAGES = ("home", "rules", "cleanup", "settings", "projects")
-# Settings lists its options as check boxes with long labels, and a check box cannot wrap its
-# words. In a 900 px window the longest ones push the whole page about 60 px past the right
-# edge (it scrolls sideways). That was there before these checks and needs a check box that
-# wraps, which is its own change: see SETTINGS_ISSUE. strict=True makes this fail the day it
-# is fixed, so the mark gets removed.
-SETTINGS_ISSUE = "https://github.com/The-Osprey1/Download-Sorter/issues/54"
-
-
-def _page_cases():
-    for size in MAIN_SIZES:
-        for page in PAGES:
-            known = page == "settings" and size[0] < 1040
-            marks = [pytest.mark.xfail(strict=True, reason=f"Settings is wider than a 900 px window: {SETTINGS_ISSUE}")]
-            yield pytest.param(size, page, id=f"{page}-{size[0]}x{size[1]}", marks=marks if known else [])
+_PAGE_CASES = [
+    pytest.param(size, page, id=f"{page}-{size[0]}x{size[1]}")
+    for size in MAIN_SIZES
+    for page in PAGES
+]
 
 
 def test_the_pages_checked_here_are_all_the_pages(window):
     assert window.PAGES == PAGES
 
 
-@pytest.mark.parametrize("size, page", _page_cases())
+@pytest.mark.parametrize("size, page", _PAGE_CASES)
 def test_no_page_cuts_a_button_off_sideways(window, qapp, size, page):
     window.resize(*size)
     window.switch_view(page)
@@ -288,6 +279,40 @@ def test_no_page_cuts_a_button_off_sideways(window, qapp, size, page):
     assert (window.width(), window.height()) == size, "the window was pushed larger than asked"
     problems = _button_problems(window, window._view_stack.currentWidget())
     assert not problems, f"{page} at {size[0]}x{size[1]}: " + "; ".join(problems)
+
+
+@pytest.mark.parametrize("size", MAIN_SIZES, ids=[f"{w}x{h}" for w, h in MAIN_SIZES])
+def test_settings_wraps_instead_of_scrolling_sideways(window, qapp, size):
+    from PySide6.QtWidgets import QFrame, QScrollArea
+    import ui_widgets
+
+    window.resize(*size)
+    window.switch_view("settings")
+    for _ in range(3):
+        qapp.processEvents()
+    page = window._view_stack.currentWidget()
+    scroll = page.findChild(QScrollArea)
+    assert scroll is not None
+    content = scroll.widget()
+    viewport = scroll.viewport()
+    assert not scroll.horizontalScrollBar().isVisible()
+    assert content.width() <= viewport.width(), (
+        f"settings content {content.width()} px exceeds viewport {viewport.width()} px"
+    )
+    wide_cards = [
+        (card.objectName() or card.__class__.__name__, card.width())
+        for card in content.findChildren(QFrame)
+        if card.isVisibleTo(content) and card.width() > content.width()
+    ]
+    assert not wide_cards, f"cards wider than scroll content: {wide_cards}"
+    checks = content.findChildren(ui_widgets.WrappingCheckBox)
+    assert checks, "expected Settings to use WrappingCheckBox"
+    for chk in checks:
+        assert chk.width() <= content.width()
+        needed_h = chk._label.heightForWidth(chk._label.width())
+        assert chk._label.height() >= needed_h, (
+            f"wrapped label {chk.text()!r} clipped vertically: {chk._label.height()} < {needed_h}"
+        )
 
 
 def _scanned_plan(tmp_path, folders: int):

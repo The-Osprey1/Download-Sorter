@@ -28,22 +28,31 @@ def _size_and_count(folder: Path) -> tuple[int, int]:
     return total, count
 
 
+def _old_download_candidates(config: dict, downloads: Path) -> list[tuple[Path, float, int]]:
+    """Return old files matching daily clean-up's resolved folders, age, and extension rules."""
+    import clean_old
+    import sorter
+
+    cleanup = config.get("cleanup") if isinstance(config.get("cleanup"), dict) else {}
+    days = float(cleanup.get("days", 30) or 30)
+    old_files: list[tuple[Path, float, int]] = []
+    for folder in clean_old.resolve_cleanup_folders(config):
+        allowed_exts = clean_old.get_folder_cleanup_extensions(folder, config)
+        old_files.extend(
+            clean_old.find_old_files(sorter.folder_path(downloads, folder), days, allowed_extensions=allowed_exts)
+        )
+    return old_files
+
+
 def report(config: dict, now: float | None = None) -> dict:
     """{"duplicates": {...}, "quarantine": {...}, "old_downloads": {...}} with bytes and files."""
-    import clean_old
     import sorter
 
     downloads = sorter.watch_root(config)
     now = time.time() if now is None else now
     dup_bytes, dup_count = _size_and_count(downloads / sorter.DUPLICATES_DIR_NAME)
     q_bytes, q_count = _size_and_count(downloads / "_Remodel Quarantine")
-    cleanup = config.get("cleanup") if isinstance(config.get("cleanup"), dict) else {}
-    days = float(cleanup.get("days", 30) or 30)
-    old_files = []
-    for name in cleanup.get("folders") or ["Installers", "Archives"]:
-        rule_folder = next((str(r.get("folder")) for r in config.get("extension_rules", [])
-                            if str(r.get("name", "")).lower() == str(name).lower()), str(name))
-        old_files.extend(clean_old.find_old_files(sorter.folder_path(downloads, rule_folder), days))
+    old_files = _old_download_candidates(config, downloads)
     return {
         "duplicates": {"files": dup_count, "bytes": dup_bytes},
         "quarantine": {"files": q_count, "bytes": q_bytes},
@@ -78,13 +87,7 @@ def send_category_to_recycle_bin(config: dict, category: str) -> int:
     elif category == "quarantine":
         targets = batches_in_quarantine(config)
     else:
-        cleanup = config.get("cleanup") if isinstance(config.get("cleanup"), dict) else {}
-        days = float(cleanup.get("days", 30) or 30)
-        targets = []
-        for name in cleanup.get("folders") or ["Installers", "Archives"]:
-            rule_folder = next((str(r.get("folder")) for r in config.get("extension_rules", [])
-                                if str(r.get("name", "")).lower() == str(name).lower()), str(name))
-            targets.extend(p for p, _a, _s in clean_old.find_old_files(sorter.folder_path(downloads, rule_folder), days))
+        targets = [p for p, _a, _s in _old_download_candidates(config, downloads)]
     sent = 0
     for target in targets:
         if clean_old.send_to_recycle_bin(target):
