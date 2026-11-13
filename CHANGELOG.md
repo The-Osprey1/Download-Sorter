@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`--status` no longer crashes (`status.py`).** The status command failed on its first line with `UnboundLocalError: cannot access local variable 'load_config'`, because a second import of the same name further down made it local to the whole function. It now uses the one loaded at the top.
+
 ## [2.7.1] - 2026-11-13
 
 ### Fixed

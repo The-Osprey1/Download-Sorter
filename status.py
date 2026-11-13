@@ -242,8 +242,9 @@ def main() -> int:
         print("  Janitor Notice:      All installers/archives are clean (<30 days)")
     try:
         import space_report
-        from sorter import load_config
-        room = space_report.report(load_config())
+        # No "from sorter import load_config" here: an import of that name anywhere inside main()
+        # makes it local to the whole function, and the call at the top then fails.
+        room = space_report.report(config)
         print("  Leftovers kept:      "
               f"{room['duplicates']['files']} duplicate(s) ({format_size(room['duplicates']['bytes'])}), "
               f"{room['quarantine']['files']} quarantined ({format_size(room['quarantine']['bytes'])})")
