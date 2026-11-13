@@ -201,6 +201,19 @@ class DownloadsHandler(FileSystemEventHandler):
             return
         self._queue(event.dest_path)
 
+    def on_deleted(self, event) -> None:  # type: ignore[no-untyped-def]
+        """A deleted file leaves the searchable file list too."""
+        if event.is_directory:
+            return
+        with self._lock:
+            cfg = self.config
+        try:
+            import file_index
+            if file_index.is_enabled(cfg) and file_index.db_file().exists():
+                file_index.forget(event.src_path)
+        except Exception as err:
+            logging.debug("File list note skipped: %s", err)
+
     def _handle_user_move(self, src: str, dest: str) -> bool:
         """A file the user moved between folders stays where they put it.
 
@@ -215,6 +228,12 @@ class DownloadsHandler(FileSystemEventHandler):
             if not learning.is_user_move(src, dest, self.root, cfg):
                 return False
             sorter.remember_user_placed(Path(dest))
+            try:
+                import file_index
+                if file_index.is_enabled(cfg):
+                    file_index.note_move(src, dest, self.root)
+            except Exception as err:
+                logging.debug("File list note skipped: %s", err)
             taken_back = None
             try:
                 # Dragged out of the folder it was filed into: a "no" for a learned placement.
@@ -352,12 +371,18 @@ def _handle_post_move(
         import learning
         by_guess = False
         if learning.auto_file_enabled(config):
-            import sort_undo
-            filed = sort_undo.find_active_move(dest)
+            import file_index
+            filed = file_index.recent_record(dest)
             by_guess = bool(filed and filed.get("why") == "learned")
         learning.observe_sorted(dest, target_root, config, by_guess=by_guess)
     except Exception as err:
         logging.debug("Learning log skipped: %s", err)
+    try:
+        import file_index
+        if file_index.is_enabled(config):
+            file_index.note_filed(dest, target_root, source)
+    except Exception as err:
+        logging.debug("File list note skipped: %s", err)
     try:
         import learning
         suggestion = learning.fallback_suggestion(dest, target_root, config)
@@ -894,9 +919,41 @@ def _publish_folder_state(folders: FolderWatches, on_sorted: Callable[[int], Non
             logging.exception("Activity callback failed")
 
 
+_FILE_LIST_REFRESHED = 0.0
+FILE_LIST_REFRESH_SECONDS = 24 * 3600.0
+
+
+def refresh_file_list(config: dict, force: bool = False) -> threading.Thread | None:
+    """Walk the sorted folder and bring the searchable file list up to date, in the
+    background, at most once a day (and once when the watcher starts)."""
+    global _FILE_LIST_REFRESHED
+    try:
+        import file_index
+        if not file_index.is_enabled(config):
+            return None
+        if not force and time.monotonic() - _FILE_LIST_REFRESHED < FILE_LIST_REFRESH_SECONDS and _FILE_LIST_REFRESHED:
+            return None
+        _FILE_LIST_REFRESHED = time.monotonic()
+        root = watch_root(config)
+
+        def work() -> None:
+            try:
+                file_index.rebuild(root)
+            except Exception:
+                logging.exception("The file list could not be refreshed")
+
+        thread = threading.Thread(target=work, name="file-list", daemon=True)
+        thread.start()
+        return thread
+    except Exception:
+        logging.exception("The file list refresh could not start")
+        return None
+
+
 def _run_daily_cleanup(config: dict) -> None:
     """Old installers and zips to the Recycle Bin, if turned on (clean_old.auto_cleanup),
     and quarantine batches past their window (clean_old.expire_quarantine)."""
+    refresh_file_list(config)
     try:
         import clean_old
         result = clean_old.auto_cleanup(config)
@@ -1040,6 +1097,7 @@ def run(
             logging.info("The startup sort waits until the folder to watch is there")
         else:
             _startup_sweep(config, routing_context, root)
+            refresh_file_list(config, force=True)
 
         while not (stop is not None and stop.is_set()):
             fallback_due = coordinator.wait(ignore_pending=is_paused() or setup_pending)
