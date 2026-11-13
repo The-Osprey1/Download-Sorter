@@ -1533,7 +1533,7 @@ def build_leftover_card(owner: QWidget) -> QFrame:
         _report, text = _leftover_summary()
     except Exception as exc:
         text = f"Leftovers: couldn't read the folders ({exc})"
-    summary = ui_style.label(text, "muted")
+    summary = ui_style.label(text, "muted", wrap=True)  # wraps, so the page can be as narrow as the window
     row.addWidget(summary, 1)
     review = ui_style.button("Review leftovers...")
     review.clicked.connect(lambda: open_leftover_review(owner))

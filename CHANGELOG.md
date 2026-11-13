@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- **Home's buttons are no longer cut off in a narrow window.** At the smallest window size (900 px wide) the four buttons under the status line did not fit side by side, and "Open Downloads" lost its last letters. The row now wraps: "Open Downloads" moves to a second row when there is no room, and sits at the right edge as before when there is.
+- **Clean up a folder fits the smallest window.** The "Leftovers" line wraps instead of pushing the page wider than the window.
+
+### Changed
+- **The layout checks use the window's real smallest size.** They allowed pages up to 1000 px wide while the window can be 900 px, so a page that needed 957 px passed. The limit is now 900x560, the same as the window, and new checks look at where each button actually ends up (inside its box, wide enough for its words) at 900x560, 900x640 and 1040x760, in the on, paused, off and files-waiting states.
+- `tools/render_screens.py --min` renders at 900x560 (it used 900x640); `--compact` renders the old 900x640.
+
+---
+
 ## [2.6.1] - 2026-11-12
 
 ### Added

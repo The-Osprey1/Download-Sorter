@@ -1133,8 +1133,10 @@ class HomeDashboardWidget(QWidget):
         hero.addWidget(self._waiting_lbl)
         hero.addSpacing(10)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
+        # The row wraps: at the narrowest window the four buttons don't fit side by side,
+        # so "Open Downloads" moves to a second row instead of being cut off.
+        actions = ui_widgets.FlowLayout(spacing=8, push_last=True)
+        self._actions_row = actions
         self._btn_sort_now = ui_style.button("Sort Downloads now", "primary", "sort",
                                              "Sort the files that are in your Downloads folder right now")
         self._btn_sort_now.clicked.connect(self.start_sort_now)
@@ -1149,7 +1151,6 @@ class HomeDashboardWidget(QWidget):
         self._btn_pause_resume.clicked.connect(self.toggle_pause)
         actions.addWidget(self._btn_pause_resume)
 
-        actions.addStretch()
         self._btn_open_downloads = ui_style.button("Open Downloads", "ghost", "folder")
         self._btn_open_downloads.clicked.connect(self.open_downloads)
         actions.addWidget(self._btn_open_downloads)
@@ -1181,7 +1182,9 @@ class HomeDashboardWidget(QWidget):
         self._activity_layout = QVBoxLayout()
         self._activity_layout.setSpacing(0)
 
-        self._empty_card, empty = ui_style.card(margins=(24, 32, 24, 32), spacing=8)
+        # The card fills the room that is left and centers its content, so these margins only
+        # matter in the shortest window, where a taller card would squeeze the buttons above it.
+        self._empty_card, empty = ui_style.card(margins=(24, 16, 24, 16), spacing=8)
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._mascot = SorterMascotWidget(self._empty_card)
         self._mascot.set_state("happy")
