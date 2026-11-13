@@ -158,3 +158,55 @@ class RibbonGraphicsAndAnimationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RibbonWorkAreaTests(unittest.TestCase):
+    """The ribbon is placed with Qt, so its work area must be in Qt's pixels, not Windows' physical ones."""
+
+    def test_work_area_is_one_of_the_qt_screens(self) -> None:
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtWidgets import QApplication
+
+        import ribbon_popup
+
+        app = QApplication.instance() or QApplication([])
+        popup = ribbon_popup._BaseRibbonPopup.__new__(ribbon_popup._BaseRibbonPopup)
+        area = popup._work_area()
+        wanted = set()
+        for screen in QGuiApplication.screens():
+            geo = screen.availableGeometry()
+            wanted.add((geo.left(), geo.top(), geo.left() + geo.width(), geo.top() + geo.height()))
+        self.assertIn(area, wanted)
+        self.assertIsNotNone(app)
+
+    def test_a_scaled_monitor_is_not_given_physical_pixels(self) -> None:
+        """A 2560 px wide monitor at 125% is 2048 px wide to Qt: the ribbon must fit inside that."""
+        from types import SimpleNamespace
+
+        import ribbon_popup
+
+        qt_screen = SimpleNamespace(
+            geometry=lambda: SimpleNamespace(topLeft=lambda: SimpleNamespace(x=lambda: 0, y=lambda: 0)),
+            availableGeometry=lambda: SimpleNamespace(
+                left=lambda: 0, top=lambda: 0, width=lambda: 2048, height=lambda: 1104),
+        )
+        popup = ribbon_popup._BaseRibbonPopup.__new__(ribbon_popup._BaseRibbonPopup)
+        physical = SimpleNamespace(left=0, top=0, right=2560, bottom=1440)
+
+        def fake_monitor_info(_monitor, info_ref):
+            info = info_ref._obj
+            info.rcMonitor.left, info.rcMonitor.top = physical.left, physical.top
+            info.rcMonitor.right, info.rcMonitor.bottom = physical.right, physical.bottom
+            info.rcWork.right, info.rcWork.bottom = 2560, 1380
+            return 1
+
+        with patch.object(ribbon_popup.sys, "platform", "win32"), \
+                patch.object(ribbon_popup.QGuiApplication, "screens", staticmethod(lambda: [qt_screen])), \
+                patch("ctypes.windll.user32.GetForegroundWindow", create=True, return_value=1), \
+                patch("ctypes.windll.user32.MonitorFromWindow", create=True, return_value=1), \
+                patch("ctypes.windll.user32.GetMonitorInfoW", create=True, side_effect=fake_monitor_info):
+            area = popup._work_area()
+
+        self.assertEqual(area, (0, 0, 2048, 1104))
+        width, _height, x, _y = scaled_ribbon_geometry(1.25, 0, area)
+        self.assertLessEqual(x + width, 2048)
