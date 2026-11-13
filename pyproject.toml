@@ -54,7 +54,7 @@ Source = "https://github.com/The-Osprey1/Download-Sorter"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=9.0.0",
+    "pytest>=9.2.0",
     "pytest-timeout>=2.3.1",
     "pyinstaller>=6.0.0"
 ]
