@@ -76,6 +76,11 @@ hidden_imports = [
     'setup_export',
     'shelf',
     'space_report',
+    'consolidate',
+    'toggle_pause',
+    'project_scan',
+    'projects_hub',
+    'projects_page',
 ]
 
 a = Analysis(

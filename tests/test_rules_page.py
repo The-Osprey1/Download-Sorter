@@ -521,3 +521,78 @@ def test_example_chips_that_do_not_fit_are_left_out_instead_of_cut_off(qapp, rea
         sandbox.close()
         sandbox.deleteLater()
         qapp.processEvents()
+
+
+def test_site_box_suggests_recent_downloaded_domains_after_commas(
+    qapp, real_font, tmp_path, monkeypatch
+):
+    """Issue #25: RuleEditDialog._sites_input suggests learned, rule, and recent download domains."""
+    import learning
+    import rules_manager
+
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    recent_model = downloads / "benchy.3mf"
+    recent_model.write_text("x", encoding="utf-8")
+
+    cfg = sorter.get_default_config()
+    cfg["downloads_dir"] = str(downloads)
+    cfg["watch"] = {"folder": str(downloads)}
+    cfg["keyword_rules"] = [
+        {"name": "Parts", "folder": "Hardware", "match": ["bolt"], "sites": ["mcmaster.com"], "enabled": True}
+    ]
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setattr(config_manager, "SORTER_CONFIG_FILE", cfg_file)
+    monkeypatch.setattr(learning, "report", lambda: {"sites": ["makerworld.com", "printables.com"]})
+    monkeypatch.setattr(learning, "source_site", lambda path: "github.com" if Path(path).name == "benchy.3mf" else None)
+
+    assert rules_manager._known_sites() == [
+        "makerworld.com",
+        "printables.com",
+        "mcmaster.com",
+        "github.com",
+    ]
+
+    dialog = rules_manager.RuleEditDialog(rule_type="keyword", known_folders=[])
+    try:
+        qapp.processEvents()
+        completer = dialog._sites_input.completer()
+        assert completer.model().stringList() == [
+            "makerworld.com",
+            "printables.com",
+            "mcmaster.com",
+            "github.com",
+        ]
+
+        # Completing a second domain preserves the existing comma-separated entry.
+        dialog._sites_input.setText("makerworld.com, print")
+        assert completer.splitPath(dialog._sites_input.text()) == ["print"]
+        completer.setCompletionPrefix(dialog._sites_input.text())
+        assert completer.completionCount() == 1
+        assert completer.currentCompletion() == "makerworld.com, printables.com"
+        source_index = completer.completionModel().mapToSource(completer.completionModel().index(0, 0))
+        assert source_index.data() == "printables.com"
+        assert completer.pathFromIndex(source_index) == "makerworld.com, printables.com"
+
+        # Completing a single entry works directly without extra commas.
+        dialog._sites_input.setText("github")
+        completer.setCompletionPrefix(dialog._sites_input.text())
+        assert completer.completionCount() == 1
+        assert completer.currentCompletion() == "github.com"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qapp.processEvents()
+
+    monkeypatch.setattr(rules_manager, "_known_sites", lambda *a, **k: pytest.fail("should not scan"))
+    preset_dialog = rules_manager.RuleEditDialog(
+        rule_type="keyword", known_folders=["Documents"], known_sites=["instructure.com"]
+    )
+    try:
+        qapp.processEvents()
+        assert preset_dialog._sites_input.completer().model().stringList() == ["instructure.com"]
+    finally:
+        preset_dialog.close()
+        preset_dialog.deleteLater()
+        qapp.processEvents()
