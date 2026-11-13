@@ -1467,7 +1467,7 @@ class HomeDashboardWidget(QWidget):
 
         f_item = QTableWidgetItem(filename)
         f_item.setToolTip(f"{dest or filename}\nThis file has been moved or deleted since it was filed." if gone
-                          else (dest or filename))
+                          else "\n".join(part for part in (dest or filename, suite_data.describe_why(rec)) if part))
         f_item.setIcon(ui_widgets.category_tile_icon(ui_categories.kind_of(dest or filename, folder)))
         f_item.setData(Qt.ItemDataRole.UserRole, rec)
         f_item.setForeground(main_color)

@@ -313,7 +313,13 @@ def _move_without_overwriting(src: Path, dst: Path) -> None:
     os.unlink(src)
 
 
-def _done_record(op_id: str, batch_id: str, src: str, dest: str, op: str, undoable: bool) -> dict[str, Any]:
+META_VALUE_LIMIT = 200  # a note about a move is a few words, never a document
+
+
+def _done_record(
+    op_id: str, batch_id: str, src: str, dest: str, op: str, undoable: bool,
+    meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     record: dict[str, Any] = {
         "id": uuid.uuid4().hex,
         "batch_id": batch_id or uuid.uuid4().hex[:8],
@@ -326,6 +332,10 @@ def _done_record(op_id: str, batch_id: str, src: str, dest: str, op: str, undoab
         record["op"] = op
     if not undoable:
         record["action"] = "aux_move"
+    # Notes about the move ("why", "rule", "site"). They never replace a field above.
+    for key, value in (meta or {}).items():
+        if key not in record and key not in ("op", "action") and value not in (None, ""):
+            record[str(key)] = str(value)[:META_VALUE_LIMIT]
     return record
 
 
@@ -340,8 +350,12 @@ def move(
     skip_preflight: bool = False,
     op: str = "move",
     extra_patterns: Iterable[str] = (),
+    meta: dict[str, Any] | None = None,
 ) -> Path:
     """Journaled, never-overwriting move of one file.  Returns the final path.
+
+    ``meta`` is a few short notes kept with the move in the history (why it was
+    filed there, the rule, the website it came from), shown on Home and searchable.
 
     Raises :class:`Refused` when a pre-flight check declines, or when the
     destination name is taken just before the move (nothing touched either way),
@@ -391,7 +405,7 @@ def move(
         if src.exists() and not final.exists():
             _abort(op_id, f"{type(last_exc).__name__}: {last_exc}")
         raise last_exc
-    append_journal(_done_record(op_id, batch_id, src_abs, dest_abs, op, undoable))
+    append_journal(_done_record(op_id, batch_id, src_abs, dest_abs, op, undoable, meta))
     return final
 
 

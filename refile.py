@@ -119,10 +119,16 @@ def move_to_folder(
         logging.debug("Could not mark %s as placed by you", moved, exc_info=True)
 
     suggestion_id: str | None = None
+    try:
+        # Moving it away says the place it was filed was wrong (only a learned placement listens).
+        noted = learning.observe_correction(record, config, root)
+        suggestion_id = ((noted or {}).get("suggestion") or {}).get("id")
+    except Exception:
+        logging.debug("Learning from a correction failed", exc_info=True)
     if root is not None and sorter.is_under(moved, Path(root).resolve()):
         try:
             learned = learning.observe_user_move(moved, Path(root), config or {})
-            suggestion_id = ((learned or {}).get("suggestion") or {}).get("id")
+            suggestion_id = ((learned or {}).get("suggestion") or {}).get("id") or suggestion_id
         except Exception:
             logging.debug("Learning from a move failed", exc_info=True)
     return Outcome(True, f"Moved {moved.name} to {where(moved.parent, root)}.", moved, suggestion_id)

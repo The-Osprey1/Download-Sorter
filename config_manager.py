@@ -1093,6 +1093,37 @@ def recommend_persona_profile(
 # RECENT MOVE ACTIVITY EXTRACTION
 # =====================================================================
 
+_WHY_TEXT = {
+    "extension": "Filed by its file type",
+    "my_folder": "Filed into a folder you made",
+    "gcode_sniffer": "Filed by what is inside the file",
+    "makerworld": "Filed as a MakerWorld model",
+    "makerworld_kit": "Filed with the rest of its MakerWorld model",
+    "pdf_content": "Filed by the words on its first page",
+    "photo_kind": "Filed by the kind of picture it is",
+    "fallback": "No rule matched, so it went to the catch-all folder",
+    "learned": "Filed where you put files like it",
+}
+
+
+def describe_why(record: dict[str, Any]) -> str:
+    """One or two plain lines on why a file was filed where it was ("" for a move from
+    before this was recorded): 'Filed by your rule "Banking"' / 'Downloaded from yourbank.com'."""
+    why = str(record.get("why") or "")
+    rule = str(record.get("rule") or "")
+    lines: list[str] = []
+    if why == "keyword" and rule:
+        lines.append(f'Filed by your rule "{rule}"')
+    elif why == "active_project" and rule:
+        lines.append(f'Filed into the active project "{rule}"')
+    elif why in _WHY_TEXT:
+        lines.append(_WHY_TEXT[why])
+    site = str(record.get("site") or "")
+    if site:
+        lines.append(f"Downloaded from {site}")
+    return "\n".join(lines)
+
+
 def get_recent_activity(
     limit: int = 25,
     history_path: Path | str | None = None,
@@ -1176,6 +1207,9 @@ def get_recent_activity(
             "timestamp": str(rec.get("timestamp", "")),
             "exists": exists,
             "undone": is_undone,
+            "why": str(rec.get("why", "")),
+            "rule": str(rec.get("rule", "")),
+            "site": str(rec.get("site", "")),
         })
         if len(activity) >= limit:
             break
