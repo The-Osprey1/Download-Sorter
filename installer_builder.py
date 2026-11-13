@@ -789,7 +789,7 @@ def build_csharp_installer(
     if not dist.exists():
         raise FileNotFoundError(f"Distribution directory does not exist: {dist}")
 
-    ver = version or getattr(about, "__version__", "2.7.0")
+    ver = version or getattr(about, "__version__", "2.7.1")
     author_str = getattr(about, "AUTHOR", "")
     credit_str = getattr(about, "CREDIT", "")
     repo_url_str = getattr(about, "REPO_URL", "")
@@ -858,7 +858,7 @@ def build_setup_exe(
     setup file (and its documented /S and /D= options) does not depend on
     whether Inno Setup happens to be installed on the build machine.
     """
-    ver = version or getattr(about, "__version__", "2.7.0")
+    ver = version or getattr(about, "__version__", "2.7.1")
     dist = Path(dist_dir) if dist_dir else (REPO_ROOT / "dist" / "DownloadSorter")
     target_out_dir = dist.parent if dist.name == "DownloadSorter" else (REPO_ROOT / "dist")
     out = Path(output_exe) if output_exe else (target_out_dir / f"DownloadSorter-Setup-v{ver}-windows-x64.exe")
