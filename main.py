@@ -32,6 +32,7 @@ Commands:
   --unzip-3d <zip>      Unpack 3D models from archive into Downloads
   --unzip <zip>         Safely unpack archive into Extracted/ with wrapper stripping
   --status              Print daemon health, memory usage, and recent moves
+  --file-held           File every held .3mf now, skipping the hold (--include-kept: "Keep here" files too)
   --clean               Clean old installers/archives to Windows Recycle Bin
   --consolidate, --flatten Consolidate nested subfolders into official flat categories
   --remodel             Scan or safely remodel messy PC folder architectures
@@ -251,6 +252,10 @@ def main(argv: list[str] | None = None) -> int:
         if cmd in ("--status",):
             import status
             return status.main()
+
+        if cmd in ("--file-held",):
+            import hold_manager
+            return hold_manager.main(args)
 
         if cmd in ("--clean",):
             import clean_old
