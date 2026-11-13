@@ -2402,11 +2402,20 @@ class SettingsWidget(QWidget):
             "When you move a sorted file into another folder inside Downloads, Download Sorter "
             "notes the words in its name, its type and the website it came from. After you've "
             "moved 3 similar files into a folder, it asks whether to add a rule for them. It "
-            "never moves files on its own guess, and everything stays on this PC.",
+            "never moves files on its own guess unless you switch that on below, and everything "
+            "stays on this PC.",
         )
         self._chk_learning = QCheckBox("Learn from how I organize files and suggest rules")
         self._chk_learning.toggled.connect(self._on_learning_toggled)
         learn.addWidget(self._chk_learning)
+        self._chk_auto_file = QCheckBox("File what no rule can place where I put files like it")
+        self._chk_auto_file.setToolTip(
+            "Only for a download that would otherwise go to the catch-all folder, and only into a "
+            "folder you've moved 3 similar files into. A file that a rule or a file type places is "
+            "never moved on a guess. Undo puts a file back and stops it guessing that again."
+        )
+        self._chk_auto_file.toggled.connect(self._on_auto_file_toggled)
+        learn.addWidget(self._chk_auto_file)
         learn_row = QHBoxLayout()
         learn_row.setSpacing(8)
         self._btn_learning_report = ui_style.button("See what it has learned")
@@ -2490,6 +2499,10 @@ class SettingsWidget(QWidget):
         self._chk_learning.blockSignals(True)
         self._chk_learning.setChecked(learning.is_enabled(self._config))
         self._chk_learning.blockSignals(False)
+        self._chk_auto_file.blockSignals(True)
+        self._chk_auto_file.setChecked(learning.auto_file_enabled(self._config))
+        self._chk_auto_file.setEnabled(learning.is_enabled(self._config))
+        self._chk_auto_file.blockSignals(False)
         for (block_name, key), chk in self._option_checks.items():
             block = self._config.get(block_name)
             chk.blockSignals(True)
@@ -2775,6 +2788,9 @@ class SettingsWidget(QWidget):
             cfg["learning"].setdefault("suggest", True)  # the user has chosen; don't switch it on again
         self._update_config(change)
 
+    def _on_auto_file_toggled(self, checked: bool) -> None:
+        self._update_config(lambda cfg: self._set_option(cfg, "learning", "auto_file", bool(checked)))
+
     def learning_report_text(self) -> str:
         rep = learning.report()
         if not rep["your_moves"]:
@@ -2794,6 +2810,11 @@ class SettingsWidget(QWidget):
             )
         else:
             lines.append("It needs a few more of your moves before its guesses can be checked.")
+        if rep.get("filed_for_you"):
+            lines.append(
+                f"Files it filed for you that no rule could place: {rep['filed_for_you']} "
+                f"({rep.get('taken_back', 0)} taken back)."
+            )
         if rep["folders"]:
             lines.append("")
             lines.append("Folders it has learned about:")

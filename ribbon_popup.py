@@ -1051,6 +1051,16 @@ class _BaseRibbonPopup:
 
 
 class RibbonPopup(_BaseRibbonPopup):
+    def why_text(self) -> str:
+        """Why this file was filed here, from the history ("" when it isn't recorded)."""
+        try:
+            import config_manager
+            import sort_undo
+            record = sort_undo.find_active_move(self.dest_path)
+            return config_manager.describe_why(record) if record else ""
+        except Exception:
+            return ""
+
     def __init__(
         self,
         dest_path: Path,
@@ -1143,6 +1153,7 @@ class RibbonPopup(_BaseRibbonPopup):
         self._action_font = QFont(FONT_FAMILY)
         self._action_font.setPixelSize(self._px(9, scale))
         self.action_lbl = QLabel(f"Saved to {self.folder_disp}", self.bottom_row)
+        self.action_lbl.setToolTip(self.why_text())
         self.action_lbl.setFont(self._action_font)
         self.action_lbl.setStyleSheet(
             f"color: {TEXT_MUTED}; font-family: '{FONT_FAMILY}'; font-size: {self._px(9, scale)}px;"
@@ -1664,8 +1675,39 @@ class SuggestionRibbonPopup(SummaryRibbonPopup):
             timeout_ms=self.TIMEOUT_MS if self.suggestion else 2000,
             enable_animation=enable_animation,
         )
-        if self.suggestion:
+        if self.suggestion and self.offers_always():
+            self._add_top_actions((("Yes", self.yes), ("Always", self.always), ("No", self.no)))
+        elif self.suggestion:
             self._add_top_actions((("Yes", self.yes), ("No", self.no)))
+
+    def offers_always(self) -> bool:
+        """A question about a file no rule could place can also be answered "Always":
+        add the rule, and from now on file such files without asking."""
+        import learning
+
+        if not self.suggestion.get("unplaced"):
+            return False
+        try:
+            import sorter
+            return not learning.auto_file_enabled(sorter.load_config())
+        except Exception:
+            return False
+
+    def always(self) -> None:
+        import learning
+
+        try:
+            rule = learning.accept_suggestion(self.suggestion_id)
+            learning.turn_on_auto_file()
+        except Exception as exc:
+            logging.warning("Could not switch on filing by your own moves: %s", exc)
+            rule = None
+        self.close()
+        if rule:
+            notify_summary(
+                "It won't ask next time",
+                "Files no rule can place go where you put files like them. Undo or Settings turns it back.",
+            )
 
     def yes(self) -> None:
         import learning

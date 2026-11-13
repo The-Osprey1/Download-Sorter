@@ -350,7 +350,12 @@ def _handle_post_move(
             logging.debug("Ribbon notification skipped: %s", err)
     try:
         import learning
-        learning.observe_sorted(dest, target_root, config)
+        by_guess = False
+        if learning.auto_file_enabled(config):
+            import sort_undo
+            filed = sort_undo.find_active_move(dest)
+            by_guess = bool(filed and filed.get("why") == "learned")
+        learning.observe_sorted(dest, target_root, config, by_guess=by_guess)
     except Exception as err:
         logging.debug("Learning log skipped: %s", err)
     try:

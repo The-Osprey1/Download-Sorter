@@ -1136,6 +1136,7 @@ SANDBOX_BADGES: dict[str, tuple[str, str]] = {
     "ignored": ("Skipped", "critical"),
     "active_project": ("Project mode", "warning"),
     "my_folder": ("Your folder", "info"),
+    "learned": ("Learned", "info"),
     "makerworld": ("MakerWorld", "info"),
     "gcode_sniffer": ("G-code check", "info"),
 }
