@@ -123,6 +123,19 @@ def record_undo(ref_id: str, original_src: str, current_dest: str) -> None:
         f.write(json.dumps(record) + "\n")
 
 
+def _tell_the_learner(rec: dict) -> None:
+    """Undoing a file the learner (or a learned rule) filed is a "no" it should hear."""
+    try:
+        import learning
+        noted = learning.observe_correction(rec)
+        suggestion = (noted or {}).get("suggestion")
+        if suggestion:
+            from ribbon_popup import notify_suggestion
+            notify_suggestion(suggestion["id"])
+    except Exception:
+        logging.debug("Could not tell the learner about an undo", exc_info=True)
+
+
 def undo_moves(targets: list[dict], dry_run: bool = False) -> int:
     restored_count = 0
     for rec in targets:
@@ -151,6 +164,8 @@ def undo_moves(targets: list[dict], dry_run: bool = False) -> int:
             target_file = restored
             logging.info("Restored: %s -> %s", dest_path.name, target_file)
             restored_count += 1
+            if rec.get("why") in ("learned", "keyword"):
+                _tell_the_learner(rec)
             if dismiss_active_ribbons:
                 try:
                     dismiss_active_ribbons(dest_path)

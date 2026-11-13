@@ -1676,7 +1676,12 @@ class SuggestionRibbonPopup(SummaryRibbonPopup):
             logging.warning("Could not add the learned rule: %s", exc)
             rule = None
         self.close()
-        if rule:
+        if rule and rule.get("switched_off"):
+            notify_summary(
+                "Rule switched off",
+                f"Nothing is filed into {rule['folder']} by that rule now. It is still on the Rules page.",
+            )
+        elif rule:
             notify_summary(
                 "Rule added",
                 f"New files like this go to {rule['folder']}. Change it on the Rules page.",
