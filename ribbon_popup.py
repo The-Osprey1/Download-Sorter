@@ -751,8 +751,16 @@ class _BaseRibbonPopup:
                 monitor = ctypes.windll.user32.MonitorFromWindow(hwnd, 2)
                 info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
                 if monitor and ctypes.windll.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-                    work = info.rcWork
-                    return work.left, work.top, work.right, work.bottom
+                    # Windows gives physical pixels, but Qt places windows in device-independent
+                    # ones. At 125% scaling the two differ, and a ribbon placed from the raw numbers
+                    # lands past the right edge of the screen. So take the work area from the Qt
+                    # screen that is this monitor: a screen's top-left is the monitor's own corner.
+                    monitor_rect = info.rcMonitor
+                    for qt_screen in QGuiApplication.screens():
+                        corner = qt_screen.geometry().topLeft()
+                        if (corner.x(), corner.y()) == (monitor_rect.left, monitor_rect.top):
+                            geo = qt_screen.availableGeometry()
+                            return geo.left(), geo.top(), geo.left() + geo.width(), geo.top() + geo.height()
             except Exception:
                 pass
         screen = (self.root.screen() if hasattr(self, "root") else None) or QGuiApplication.primaryScreen()

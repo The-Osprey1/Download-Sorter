@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Ribbons are no longer placed off the edge of the screen on a scaled display (`ribbon_popup.py`).** On a display set to 125% or more, the "file moved" and "Put files like this in ...?" ribbons opened past the right edge of the screen, so nothing showed. The ribbon took the monitor's size in physical pixels but placed itself in the pixels Qt uses, which differ whenever scaling is not 100%. It now takes the work area from the matching Qt screen.
+
 ## [2.7.0] - 2026-11-13
 
 ### Added
