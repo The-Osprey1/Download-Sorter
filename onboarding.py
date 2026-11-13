@@ -2322,6 +2322,17 @@ class SettingsWidget(QWidget):
         hold_row.addWidget(ui_style.label("days before filing them"))
         hold_row.addStretch()
         printing.addLayout(hold_row)
+        held_row = QHBoxLayout()
+        held_row.setSpacing(8)
+        self._btn_file_held = ui_style.button("File held .3mf files now")
+        self._btn_file_held.setToolTip(
+            "Skip the wait: file every held .3mf where it belongs, now. One batch, so "
+            "Undo last sort puts them back. Files marked Keep here stay where they are.")
+        self._btn_file_held.clicked.connect(self._on_file_held_clicked)
+        self._file_held_note = ui_style.label("", role="caption")
+        held_row.addWidget(self._btn_file_held)
+        held_row.addWidget(self._file_held_note, 1)
+        printing.addLayout(held_row)
 
         extras = self._section(
             layout, "Extra options",
@@ -2503,6 +2514,7 @@ class SettingsWidget(QWidget):
         self._chk_auto_file.setChecked(learning.auto_file_enabled(self._config))
         self._chk_auto_file.setEnabled(learning.is_enabled(self._config))
         self._chk_auto_file.blockSignals(False)
+        self._refresh_held_button()
         for (block_name, key), chk in self._option_checks.items():
             block = self._config.get(block_name)
             chk.blockSignals(True)
@@ -2787,6 +2799,33 @@ class SettingsWidget(QWidget):
             self._set_option(cfg, "learning", "enabled", bool(checked))
             cfg["learning"].setdefault("suggest", True)  # the user has chosen; don't switch it on again
         self._update_config(change)
+
+    def _refresh_held_button(self, message: str = "") -> None:
+        try:
+            import hold_manager
+            held = int(hold_manager.get_held_summary().get("total_held", 0))
+        except Exception:
+            held = 0
+        self._btn_file_held.setEnabled(held > 0)
+        if message:
+            self._file_held_note.setText(message)
+        else:
+            noun = "file" if held == 1 else "files"
+            self._file_held_note.setText(f"{held} held .3mf {noun} waiting" if held else "No .3mf files are held right now.")
+
+    def _on_file_held_clicked(self) -> None:
+        try:
+            import hold_manager
+            result = hold_manager.file_all_now(self._config)
+        except Exception as exc:
+            logging.exception("Could not file the held files")
+            self._refresh_held_button(f"Could not file them: {exc}")
+            return
+        noun = "file" if result["filed"] == 1 else "files"
+        text = f"Filed {result['filed']} held {noun}."
+        if result["failed"]:
+            text += f" {result['failed']} could not be moved (open in another program?) and stay held."
+        self._refresh_held_button(text)
 
     def _on_auto_file_toggled(self, checked: bool) -> None:
         self._update_config(lambda cfg: self._set_option(cfg, "learning", "auto_file", bool(checked)))

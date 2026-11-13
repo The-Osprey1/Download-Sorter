@@ -21,6 +21,7 @@ import tempfile
 import threading
 import time
 from typing import Iterable
+import uuid
 
 if sys.platform == "win32":
     import ctypes
@@ -353,7 +354,7 @@ def remove_held(path: Path | str) -> None:
             write_state(state)
 
 
-def file_now(path: Path | str, config: dict | None = None) -> Path | None:
+def file_now(path: Path | str, config: dict | None = None, batch_id: str = "file_now") -> Path | None:
     """User chosen override: immediately file this .3mf file to its planned destination.
 
     The hold is only removed once the move has succeeded; if it fails the file keeps
@@ -379,13 +380,40 @@ def file_now(path: Path | str, config: dict | None = None) -> Path | None:
 
     try:
         dest_target.parent.mkdir(parents=True, exist_ok=True)
-        final_dest = safe_ops.move(p, dest_target, batch_id="file_now", settle_seconds=0.0)
+        final_dest = safe_ops.move(p, dest_target, batch_id=batch_id, settle_seconds=0.0)
     except Exception as exc:
         logging.error("Failed executing 'File Now' for %s: %s", p, exc)
         return None
     remove_held(p)
     logging.info("3MF 'File Now' completed: %s -> %s", p.name, final_dest)
     return final_dest
+
+
+def file_all_now(config: dict | None = None, include_kept: bool = False) -> dict:
+    """Bypass the hold: file every held .3mf now, instead of waiting out its days.
+
+    One batch, so "Undo last sort" puts them all back. Files marked "Keep here" are
+    left where they are unless ``include_kept`` is set: you asked for those to stay.
+    A file that can't be moved (open in another program) keeps its hold and is
+    counted in "failed". Returns {"filed", "failed", "kept", "paths"}.
+    """
+    prune_missing()
+    cfg = config if config is not None else sorter.load_config()
+    batch = f"file_now-{uuid.uuid4().hex[:8]}"
+    filed: list[str] = []
+    failed = kept = 0
+    for rec in get_all_held():
+        path = rec.get("path")
+        if not path:
+            continue
+        if rec.get("keep_here") and not include_kept:
+            kept += 1
+            continue
+        if file_now(path, cfg, batch_id=batch):
+            filed.append(str(path))
+        else:
+            failed += 1
+    return {"filed": len(filed), "failed": failed, "kept": kept, "paths": filed}
 
 
 def _folder_is_away(path: Path, config: dict) -> bool:
@@ -512,8 +540,10 @@ def get_held_summary() -> dict:
     with state_lock():
         state = read_state()
         held = state.get("held", {})
-        active = [r for r in held.values() if not r.get("keep_here")]
-        kept = [r for r in held.values() if r.get("keep_here")]
+        # A file that is no longer there (moved or deleted since) is not "held" any more.
+        present = [r for r in held.values() if Path(str(r.get("path", ""))).exists()]
+        active = [r for r in present if not r.get("keep_here")]
+        kept = [r for r in present if r.get("keep_here")]
         next_rel = min([r["release_at"] for r in active], default=None)
         return {
             "total_held": len(active),
@@ -538,10 +568,21 @@ def prune_missing() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """``--file-held``: file every held .3mf now (the "bypass the hold" command)."""
     import about
 
     if about.handle_version_flag(argv):
         return 0
+    args = list(argv) if argv is not None else sys.argv[1:]
+    if "--file-held" in args:
+        result = file_all_now(include_kept="--include-kept" in args)
+        line = f"Filed {result['filed']} held file(s)"
+        if result["failed"]:
+            line += f"; {result['failed']} could not be moved and keep their hold"
+        if result["kept"]:
+            line += f"; {result['kept']} marked Keep here were left"
+        print(line + ".")
+        return 0 if not result["failed"] else 1
     print(about.version_string())
     return 0
 

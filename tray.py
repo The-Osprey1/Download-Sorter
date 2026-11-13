@@ -350,6 +350,8 @@ class SorterTray:
             tray_qt.MenuItem(lambda _i: _count_text(moves_today(), "file") + " filed today", None, enabled=False),
             tray_qt.MenuItem(lambda _i: _count_text(self._held_count(), "3MF file") + " held in Downloads",
                              None, enabled=False, visible=lambda _i: self._held_count() > 0),
+            tray_qt.MenuItem("File held 3MF files now", self.on_file_held,
+                             visible=lambda _i: self._held_count() > 0),
             tray_qt.SEPARATOR,
             tray_qt.MenuItem("Rules...", self.on_open_rules_manager),
             tray_qt.MenuItem("Clean up a folder...", self.on_remodel),
@@ -402,6 +404,23 @@ class SorterTray:
             moved += sort_existing_documents(config, batch_id=batch_id)
             self.refresh()
             self.notify(f"Filed {_count_text(moved, 'file')}." if moved else "Nothing needed sorting.")
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_file_held(self, _icon=None, _item=None) -> None:
+        """Bypass the hold: file every held .3mf now (one batch; Undo last sort reverses it)."""
+        def work() -> None:
+            try:
+                import hold_manager
+                result = hold_manager.file_all_now(self.current_config())
+            except Exception:
+                logging.exception("Could not file the held files")
+                self.notify("Could not file the held files. See the log for details.")
+                return
+            self.refresh()
+            message = f"Filed {_count_text(result['filed'], 'held file')}."
+            if result["failed"]:
+                message += f" {result['failed']} could not be moved (open in another program?) and stay held."
+            self.notify(message if result["filed"] or result["failed"] else "No held files to file.")
         threading.Thread(target=work, daemon=True).start()
 
     def on_undo(self, _icon=None, _item=None) -> None:
