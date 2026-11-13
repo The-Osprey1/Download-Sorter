@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **README screenshots show 2.7.** `home.png` is the current Home page, and two new ones show the Rules page (with "Try a filename") and the new search window. `tools/render_screens.py` has a `shelf` group for the search window.
+
 ## [2.7.0] - 2026-11-13
 
 ### Added
