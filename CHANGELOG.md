@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Recent website suggestions in the Rule Editor (`rules_manager.py`).** The "Only when downloaded from these websites" box in `RuleEditDialog` now autocompletes comma-separated domains from your learned downloads, existing rules, and recent files in Downloads (completing Issue #25).
+
 ### Fixed
 - **Clean up a folder keeps non-installer files in renamed category folders (`clean_old.py`, `status.py`, `space_report.py`).** When setup points **Installers** or **Archives** at one of your own folders (such as `Programs`), daily clean-up, the reclaimable-space estimate, and Leftovers cleanup now filter by that rule's file extensions instead of recycling or counting unrelated personal files (`README.txt`, `manual.pdf`) by age alone.
 - **Consolidate protects personal subfolders inside categories (`consolidate.py`).** User-created and MakerWorld subfolders inside `Documents`, `3D Models`, `Images`, `Audio`, `Videos`, and `Archives` (such as `Documents\Tax Records` or `3D Models\Flanged Mace`) are pruned at category level and left untouched; only recognized legacy or type subfolders are flattened, and `--dry-run` no longer creates destination folders on disk.
