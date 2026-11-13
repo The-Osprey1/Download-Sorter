@@ -135,6 +135,26 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess | None:
         return None
 
 
+def _show_shelf_here() -> None:
+    try:
+        import shelf
+        shelf.show_in_process()
+    except Exception:
+        logging.exception("Could not show the shelf in the tray; opening it on its own")
+        spawn_window("--shelf")
+
+
+def open_shelf(icon=None) -> None:
+    """The shelf shortcut was pressed. The tray already runs the window toolkit, so it shows
+    the shelf itself (at once); only when it can't is a separate program started."""
+    try:
+        if icon is not None and icon.run_on_ui(_show_shelf_here):
+            return
+    except Exception:
+        logging.exception("Could not hand the shelf to the tray")
+    spawn_window("--shelf")
+
+
 def spawn_window(*args: str) -> None:
     """Spawn a GUI window asynchronously without blocking the tray process."""
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -523,17 +543,20 @@ def main() -> int:
     SERVICE_DISABLED_FILE.unlink(missing_ok=True)
     logging.info("Download Sorter tray starting (PID %s)", os.getpid())
     write_runtime_state("starting", "tray initializing")
+    tray_holder: dict = {}
     shelf_cfg = config.get("shelf") if isinstance(config.get("shelf"), dict) else {}
     if shelf_cfg.get("enabled", True):
         spec = str(shelf_cfg.get("hotkey") or "Ctrl+Shift+Space")
         try:
             import hotkey
-            if not hotkey.start(lambda: spawn_window("--shelf"), spec=spec):
+            if not hotkey.start(lambda: open_shelf(tray_holder.get("icon")), spec=spec):
                 logging.info("Recent-files shortcut (%s) not registered", spec)
         except Exception:
             logging.exception("Could not start the recent-files shortcut")
     try:
-        result = SorterTray(wait_for_setup=first_run).run()
+        sorter_tray = SorterTray(wait_for_setup=first_run)
+        tray_holder["icon"] = getattr(sorter_tray, "icon", None)
+        result = sorter_tray.run()
     except BaseException as exc:
         logging.exception("Download Sorter tray crashed")
         write_runtime_state("crashed", f"{type(exc).__name__}: {exc}")

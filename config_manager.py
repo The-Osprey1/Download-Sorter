@@ -1102,7 +1102,7 @@ _WHY_TEXT = {
     "pdf_content": "Filed by the words on its first page",
     "photo_kind": "Filed by the kind of picture it is",
     "fallback": "No rule matched, so it went to the catch-all folder",
-    "learned": "Filed where you put files like it",
+    "learned": "No rule matched, so it was filed where you put files like it",
 }
 
 

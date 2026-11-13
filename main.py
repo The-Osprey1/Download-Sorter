@@ -215,6 +215,10 @@ def main(argv: list[str] | None = None) -> int:
             import shelf
             return shelf.main(args)
 
+        if cmd in ("--find",):
+            import file_index
+            return file_index.main(args[1:])
+
         if cmd in ("--gui", "-g", "--rules"):
             import rules_manager
             return rules_manager.main()

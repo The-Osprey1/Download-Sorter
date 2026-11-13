@@ -91,6 +91,7 @@ REQUIRED_RELEASE_FILES = [
     "ui_categories.py",
     "ui_widgets.py",
     "refile.py",
+    "file_index.py",
     "project_scan.py",
     "projects_hub.py",
     "projects_page.py",
