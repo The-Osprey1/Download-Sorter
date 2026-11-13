@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-11-13
+
 ### Added
 - **Home says why a file was filed (`safe_ops.py`, `sorter.py`, `config_manager.py`, `onboarding.py`).** Each move in the history now keeps the kind of match, the rule's name and the website the file came from (its name only, never an address). Hover a file in **Recently sorted** to read it: "Filed by your rule "Banking"", "Filed by its file type", "Downloaded from yourbank.com". Files filed by an older version show the path only.
 - **The learner hears "no" (`learning.py`, `sort_undo.py`, `refile.py`, `watch.py`, `ribbon_popup.py`).** Putting back a file that a learned rule filed, moving it somewhere else from Home, or dragging it out in Explorer now counts against that rule. After two such files a ribbon asks "Stop filing into Banking?"; **Yes** switches the rule off (it stays on the Rules page), **No** means it won't ask again. Rules you wrote and file types are never judged this way.
