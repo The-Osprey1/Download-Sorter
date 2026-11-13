@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Clean up a folder fits the smallest window.** The "Leftovers" line wraps instead of pushing the page wider than the window. After a scan, a 560 px tall window could not hold everything and the folder row was squeezed until "Browse..." and "Preview changes" lost the bottom of their words; the part above Apply now scrolls in a short window instead. In a taller window nothing changes.
 
 ### Changed
+- **Bigger page titles and a clearer sidebar selection.** Page titles (`Home`, `Rules`, `Clean up a folder`, `Projects`, `Settings`) now use a 24 px heading while body and section text keep their existing sizes. The active sidebar item shows a mint bar alongside semibold text and a tinted frame, distinct from hover and keyboard focus (and visible without relying on color alone). Closes issue #53.
 - **The layout checks use the window's real smallest size.** They allowed pages up to 1000 px wide while the window can be 900 px, so a page that needed 957 px passed. The limit is now 900x560, the same as the window, and new checks look at where each button actually ends up (inside its box, wide enough for its words) at 900x560, 900x640 and 1040x760, in the on, paused, off and files-waiting states.
 - `tools/render_screens.py --min` renders at 900x560 (it used 900x640); `--compact` renders the old 900x640.
 

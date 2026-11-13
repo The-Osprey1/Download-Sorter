@@ -2122,6 +2122,7 @@ class RulesManagerDialog(QDialog):
         self._view_btn_group = QButtonGroup(self)
         self._view_btn_group.setExclusive(True)
         self._nav_buttons: dict[str, QPushButton] = {}
+        self._nav_bars: dict[str, QFrame] = {}
         self._nav_dots: dict[str, QLabel] = {}
         self._nav_tips: dict[str, str] = {}
         dot_colors = {"home": COLORS["info"], "rules": COLORS["warning"]}
@@ -2140,15 +2141,25 @@ class RulesManagerDialog(QDialog):
             self._view_btn_group.addButton(btn, self.PAGES.index(page_id))
             self._nav_buttons[page_id] = btn
             side.addWidget(btn)
+
+            overlay = QHBoxLayout(btn)
+            overlay.setContentsMargins(5, 0, 12, 0)
+            bar = QFrame(btn)
+            ui_style.set_role(bar, "navBar")
+            bar.setFixedSize(3, 18)
+            bar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            bar.setVisible(btn.isChecked())
+            btn.toggled.connect(bar.setVisible)
+            overlay.addWidget(bar, 0, Qt.AlignmentFlag.AlignVCenter)
+            overlay.addStretch()
+            self._nav_bars[page_id] = bar
+
             if page_id in dot_colors:
                 # A small dot at the right edge: "something on this page needs a look".
                 dot = ui_style.status_dot(dot_colors[page_id], 8)
                 dot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
                 dot.setVisible(False)
-                dot_layout = QHBoxLayout(btn)
-                dot_layout.setContentsMargins(0, 0, 12, 0)
-                dot_layout.addStretch()
-                dot_layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
+                overlay.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
                 self._nav_dots[page_id] = dot
         self._view_btn_group.idClicked.connect(self._on_view_switcher_clicked)
 
