@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Home says why a file was filed (`safe_ops.py`, `sorter.py`, `config_manager.py`, `onboarding.py`).** Each move in the history now keeps the kind of match, the rule's name and the website the file came from (its name only, never an address). Hover a file in **Recently sorted** to read it: "Filed by your rule "Banking"", "Filed by its file type", "Downloaded from yourbank.com". Files filed by an older version show the path only.
+
 ### Fixed
 - **Home's buttons are no longer cut off in a narrow window.** At the smallest window size (900 px wide) the four buttons under the status line did not fit side by side, and "Open Downloads" lost its last letters. The row now wraps: "Open Downloads" moves to a second row when there is no room, and sits at the right edge as before when there is.
 - **Clean up a folder fits the smallest window.** The "Leftovers" line wraps instead of pushing the page wider than the window. After a scan, a 560 px tall window could not hold everything and the folder row was squeezed until "Browse..." and "Preview changes" lost the bottom of their words; the part above Apply now scrolls in a short window instead. In a taller window nothing changes.

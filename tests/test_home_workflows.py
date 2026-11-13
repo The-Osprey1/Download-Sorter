@@ -377,3 +377,26 @@ def test_cancelling_the_rule_editor_adds_nothing(home, downloads, monkeypatch):
 
     assert home.always_file_like(home._row_record(0)) is False
     assert config_manager.load_sorter_config()["keyword_rules"] == before
+
+
+# ---------------------------------------------------------------------------
+# why a file was filed
+# ---------------------------------------------------------------------------
+
+def test_a_row_says_why_the_file_was_filed(home, downloads):
+    _file_it(home, downloads, "report.pdf")
+
+    record = home._row_record(0)
+    assert record["why"] == "extension"
+    tip = home._activity_table.item(0, 0).toolTip()
+    assert tip.splitlines()[0].endswith("report.pdf")
+    assert "Filed by its file type" in tip
+
+
+def test_why_reads_in_plain_words():
+    describe = config_manager.describe_why
+    assert describe({"why": "keyword", "rule": "Banking", "site": "yourbank.com"}) == (
+        'Filed by your rule "Banking"\nDownloaded from yourbank.com')
+    assert describe({"why": "fallback", "rule": "Default Fallback"}).startswith("No rule matched")
+    assert describe({}) == ""   # a move from before this was recorded
+    assert describe({"why": "something new"}) == ""

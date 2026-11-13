@@ -2322,6 +2322,23 @@ def duplicates_folder(downloads: Path) -> Path:
     return Path(downloads) / DUPLICATES_DIR_NAME / datetime.now().strftime("%Y-%m")
 
 
+def move_notes(path: Path, routing: dict) -> dict[str, str]:
+    """What the history keeps about why a file was filed: the kind of match, the rule's
+    name, and the website the file was downloaded from (its name only, never an address)."""
+    notes = {
+        "why": str(routing.get("match_type") or ""),
+        "rule": str(routing.get("winning_rule") or ""),
+    }
+    try:
+        import learning
+        site = learning.source_site(path)
+    except Exception:
+        site = None
+    if site:
+        notes["site"] = site
+    return notes
+
+
 def move_file(
     path: Path,
     config: dict,
@@ -2456,7 +2473,10 @@ def move_file(
     destination_dir.mkdir(parents=True, exist_ok=True)
     source = path.resolve()
     try:
-        destination = safe_ops.move(path, destination, batch_id=batch_id, settle_seconds=settle)
+        destination = safe_ops.move(
+            path, destination, batch_id=batch_id, settle_seconds=settle,
+            meta=move_notes(path, routing),
+        )
     except safe_ops.Refused as refusal:
         logging.debug("Left %s alone: %s", path.name, refusal.reason)
         return None

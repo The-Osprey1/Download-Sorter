@@ -316,3 +316,26 @@ def test_move_file_honors_configured_settle(tmp_path):
     src = _make(tmp_path / "Downloads" / "new.step", age=1.0)
     assert sorter.move_file(src, cfg) is None
     assert src.exists()
+
+
+# ---- notes kept with a move ---------------------------------------------------
+
+def test_move_keeps_short_notes_about_why(tmp_path):
+    src = _make(tmp_path / "in" / "statement.pdf")
+    safe_ops.move(src, tmp_path / "out" / "statement.pdf",
+                  meta={"why": "keyword", "rule": "Banking", "site": "yourbank.com", "empty": ""})
+    done = _history()[-1]
+    assert (done["why"], done["rule"], done["site"]) == ("keyword", "Banking", "yourbank.com")
+    assert "empty" not in done
+
+
+def test_notes_never_replace_what_undo_relies_on(tmp_path):
+    src = _make(tmp_path / "in" / "x.pdf")
+    dest = safe_ops.move(src, tmp_path / "out" / "x.pdf", batch_id="b1",
+                         meta={"src": "elsewhere", "dest": "elsewhere", "id": "1", "action": "undo",
+                               "batch_id": "zz", "rule": "r" * 500})
+    done = _history()[-1]
+    assert done["dest"] == str(dest.resolve()) and done["src"] == str(src.resolve())
+    assert done["batch_id"] == "b1" and done["id"] != "1" and "action" not in done
+    assert len(done["rule"]) == safe_ops.META_VALUE_LIMIT
+    assert len(sort_undo.get_active_moves(sort_undo.load_history())) == 1
