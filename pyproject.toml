@@ -74,6 +74,9 @@ version = {attr = "about.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests_v3"]
+# Put the repository root (for `tests_v3.*`, `main`, `about`) and `src` on the path,
+# so `pytest tests_v3` works the same as `python -m pytest tests_v3`.
+pythonpath = [".", "src"]
 python_files = ["test_*.py"]
 addopts = "-q"
 # A test that runs longer than this many seconds is stuck: the run is stopped and
