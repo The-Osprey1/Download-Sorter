@@ -6,7 +6,6 @@ block_cipher = None
 root = Path('.').resolve()
 
 added_files = [
-    ('config.json', '.'),
     ('README.md', '.'),
     ('LICENSE', '.'),
     ('FLOWCHART.md', '.'),

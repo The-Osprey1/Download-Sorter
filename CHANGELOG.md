@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Repository housekeeping (no change to the app).** The 2.x program files that version 3 does not use (the separate tray, watcher, rules-window and learning scripts and their tests) are no longer in the source tree; the 2.x releases and tags keep them. The package metadata (`pyproject.toml`) now lists only the v3 program, and the beta-testing guide, security notes, contributing guide, flowchart and issue templates describe version 3 instead of 2.x. Nothing in the installed app, the installer or the release files changes.
+
 ## [3.0.0] - 2026-11-14
 
 Download Sorter 3.0 replaces the collection of separate scripts with one program (`DownloadSorter.exe`, plus `DownloadSorter-cli.exe` for the command line). It is a rewrite, and smaller than 2.8: read **Upgrading from 2.x** before installing over a 2.x copy.

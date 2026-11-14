@@ -61,80 +61,22 @@ dev = [
 
 [project.scripts]
 download-sorter = "main:main"
-download-sorter-app = "main:main"
-download-sorter-run = "sort_once:main"
-download-sorter-watch = "watch:main"
-download-sorter-tray = "tray:main"
-download-sorter-gui = "rules_manager:main"
-download-sorter-undo = "sort_undo:main"
-gcode-peek = "gcode_peek:main"
-unzip-3d = "unzip_3d:main"
-unzip-archive = "unzip_archive:main"
-download-sorter-remodel = "remodel:main"
 
 [tool.setuptools]
-py-modules = [
-    "about",
-    "batch_handoff",
-    "clean_old",
-    "config_manager",
-    "gcode_peek",
-    "hold_manager",
-    "learning",
-    "folder_scan",
-    "onboarding",
-    "main",
-    "problem_report",
-    "project_scan",
-    "projects_hub",
-    "projects_page",
-    "tray_qt",
-    "quick_switcher",
-    "refile",
-    "file_index",
-    "remodel",
-    "ribbon_popup",
-    "rules_manager",
-    "safe_ops",
-    "sort_once",
-    "sort_undo",
-    "sorter",
-    "status",
-    "suite_theme",
-    "toggle_pause",
-    "tray",
-    "ui_icons",
-    "ui_motion",
-    "ui_style",
-    "ui_categories",
-    "ui_widgets",
-    "quit_signal",
-    "update_check",
-    "updater",
-    "unzip_3d",
-    "unzip_archive",
-    "watch",
-    "bambu_recent",
-    "kits",
-    "zip_members",
-    "desktop_sweep",
-    "hotkey",
-    "pdf_content",
-    "photo_kind",
-    "prints",
-    "rule_check",
-    "setup_export",
-    "shelf",
-    "space_report",
-    "consolidate",
-    "installer_builder",
-]
+py-modules = ["about", "main"]
+packages = ["download_sorter", "download_sorter.ui"]
+
+[tool.setuptools.package-dir]
+download_sorter = "src/download_sorter"
 
 [tool.setuptools.dynamic]
 version = {attr = "about.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests_v3"]
+# Put the repository root (for `tests_v3.*`, `main`, `about`) and `src` on the path,
+# so `pytest tests_v3` works the same as `python -m pytest tests_v3`.
+pythonpath = [".", "src"]
 python_files = ["test_*.py"]
 addopts = "-q"
 # A test that runs longer than this many seconds is stuck: the run is stopped and

@@ -12,43 +12,32 @@ The flowchart of how Download Sorter decides where a file goes, and what it does
 
 ---
 
-## 2. Configuration & Zero-Restart Hot-Reload Flowchart
+## 2. Where settings and history live
 
 ```mermaid
 flowchart LR
-    subgraph RepoStorage ["Git Repository (Pristine Code)"]
-        Template["config.json (Default Template)"]
-        UpdateScript["update.bat (One-Click Updater)"]
+    subgraph AppDataStorage ["%LOCALAPPDATA%\download-sorter-v3"]
+        UserConfig["config.json (rules, folders, settings)"]
+        BackupConfig["config.json.bak (previous copy)"]
+        State["state.db (move history, held files)"]
+        Recent["recent_files.json (Recent File Insert)"]
     end
 
-    subgraph AppDataStorage ["User AppData (%LOCALAPPDATA%/download-sorter)"]
-        UserConfig["config.json (User Custom Rules)"]
-        BackupConfig["config.json.bak (Safe Backup)"]
-        History["history.jsonl (Move History)"]
-        ActiveProj["active_project.json (Active Sprint)"]
-    end
+    Window["Main window (Settings, Custom Rules, Folder Architecture)"]
+    Service["Sorter service (watcher + router)"]
+    V2["2.x settings (%LOCALAPPDATA%\download-sorter\config.json)"]
 
-    subgraph DaemonRuntime ["Background Sorter Daemon"]
-        Watcher["watch.py (Filesystem Observer)"]
-        Reloader["ConfigReloader (Hot Reloader)"]
-        Engine["sorter.py (Routing Engine)"]
-    end
-
-    subgraph GUI ["Visual Rules Manager (rules_manager.py)"]
-        UI["Rules Editor & Sandbox GUI"]
-    end
-
-    Template -->|"First Launch Auto-Seed"| UserConfig
-    UI -->|"Atomic 5-Stage Save"| UserConfig
-    UserConfig -->|"Copy prior state"| BackupConfig
-    UserConfig -->|"File mtime change"| Watcher
-    Watcher --> Reloader
-    Reloader -->|"Zero-Restart In-Memory Hot Swap"| Engine
-    UpdateScript -->|"Safe Git Pull (Never Touches UserConfig)"| RepoStorage
+    Window -->|"Validate, write a temp file, replace config.json"| UserConfig
+    UserConfig -->|"Previous copy kept"| BackupConfig
+    Window -->|"Hand the new settings to the running service"| Service
+    Service -->|"Write each move as pending, then complete"| State
+    Service -->|"Note each filed file"| Recent
+    V2 -->|"Carry Over (read only, 2.x files untouched)"| UserConfig
 ```
 
-### Key Safety Guarantees:
-1. **Isolated User Config**: User custom rules live in `%LOCALAPPDATA%\download-sorter\config.json`. Pulling or updating repository code never conflicts with or overwrites user rules.
-2. **5-Stage Atomic Persistence**: Rule updates are validated, written to a unique temporary file, flushed with `os.fsync`, backed up to `.bak`, and atomically replaced with Windows lock retries.
-3. **Zero-Restart Live Reloading**: Modifying rules in `rules_manager.py` instantly propagates to the running daemon without restarting the tray app or losing state.
-4. **Reversible History**: Every batch is recorded with UUIDs in `history.jsonl` and can be fully undone with `sort_undo.py`.
+### Key safety guarantees
+1. **Atomic saves**: settings are validated, written to a temporary file and swapped into place with `os.replace`. If `config.json` is damaged, the `.bak` copy is used.
+2. **New settings apply without a restart**: the window passes them to the running service, which swaps them in; the tray and watcher keep running.
+3. **Crash-safe history**: each move is recorded as pending before the file is touched and marked complete afterwards. On the next start, anything left pending is checked against what is on disk.
+4. **Reversible**: every batch can be undone from Home, from the ribbon, or with `--undo`. Undo never overwrites a newer file (it saves the old one as `name (Restored).ext`).
+5. **2.x settings are never changed**: Carry Over only reads them.
