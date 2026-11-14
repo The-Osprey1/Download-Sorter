@@ -25,60 +25,32 @@ from unittest.mock import patch
 
 import pytest
 
-# Graceful import fallback for Quick Switcher functions
-try:
-    from download_sorter.quick_switcher import (
-        ADMIN_WARNING,
-        DEFAULT_RECENCY_TTL,
-        THREE_D_EXTENSIONS,
-        THREE_D_MAX_AGE_SEC,
-        TOO_MANY_WARNING,
-        QuickSwitcherMonitor,
-        blocked_by_uipi,
-        clear_recent_file,
-        consume_items,
-        copy_files_to_clipboard,
-        find_dialog_edit_control,
-        get_recent_batch,
-        get_recent_file,
-        inject_file_into_dialog,
-        inject_files_into_dialog,
-        invalidate_recent_file,
-        is_file_dialog,
-        plan_injection,
-        prune_stages,
-        read_clipboard_files,
-        record_recent_file,
-        stage_batch,
-    )
-except ImportError:
-    from quick_switcher import (  # type: ignore[no-redef]
-        QuickSwitcherMonitor,
-        find_dialog_edit_control,
-        inject_file_into_dialog,
-        is_file_dialog,
-    )
-    from batch_handoff import (  # type: ignore[no-redef]
-        ADMIN_WARNING,
-        DEFAULT_RECENCY_TTL,
-        THREE_D_EXTENSIONS,
-        TOO_MANY_WARNING,
-        blocked_by_uipi,
-        clear_recent_file,
-        consume_items,
-        copy_files_to_clipboard,
-        get_recent_file,
-        inject_files_into_dialog,
-        plan_injection,
-        prune_stages,
-        record_recent_file,
-        stage_batch,
-    )
+from download_sorter.quick_switcher import (
+    ADMIN_WARNING,
+    DEFAULT_RECENCY_TTL,
+    THREE_D_EXTENSIONS,
+    THREE_D_MAX_AGE_SEC,
+    TOO_MANY_WARNING,
+    QuickSwitcherMonitor,
+    blocked_by_uipi,
+    clear_recent_file,
+    consume_items,
+    copy_files_to_clipboard,
+    find_dialog_edit_control,
+    get_recent_batch,
+    get_recent_file,
+    inject_file_into_dialog,
+    inject_files_into_dialog,
+    invalidate_recent_file,
+    is_file_dialog,
+    plan_injection,
+    prune_stages,
+    read_clipboard_files,
+    record_recent_file,
+    stage_batch,
+)
 
-try:
-    from download_sorter.ui.quick_switcher_pill import QuickSwitcherPill
-except ImportError:
-    from quick_switcher import QuickSwitcherPill  # type: ignore[no-redef]
+from download_sorter.ui.quick_switcher_pill import QuickSwitcherPill
 
 from tests_v3.mock_win32 import FakeWin32Desktop, MockWindow
 
