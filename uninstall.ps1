@@ -5,7 +5,8 @@
     1. Stops running Download Sorter processes (tray, watch, quick switcher).
     2. Removes the Windows Scheduled Task (logon startup).
     3. Removes Explorer context menus from HKCU.
-    4. Optionally purges user data in %LOCALAPPDATA%\download-sorter.
+    4. Optionally purges user data in %LOCALAPPDATA%\download-sorter-v3
+       (and %LOCALAPPDATA%\download-sorter, left by version 2).
 #>
 
 param(
@@ -66,7 +67,9 @@ if (Test-Path $menuUninstaller) {
 Write-Host "[OK] Context menus removed from HKCU." -ForegroundColor Green
 
 # 4. Handle user AppData
-$appDataDir = Join-Path $env:LOCALAPPDATA "download-sorter"
+# Version 3 keeps its rules, settings and history in download-sorter-v3; a
+# download-sorter folder is left over from version 2.
+foreach ($appDataDir in @((Join-Path $env:LOCALAPPDATA "download-sorter-v3"), (Join-Path $env:LOCALAPPDATA "download-sorter"))) {
 if (Test-Path $appDataDir) {
     $shouldPurge = $false
     if ($PurgeUserData) {
@@ -83,6 +86,7 @@ if (Test-Path $appDataDir) {
     } else {
         Write-Host "[INFO] Preserved personal data at $appDataDir." -ForegroundColor Gray
     }
+}
 }
 
 # 5. Remove the installed program itself (only for a copy installed by the

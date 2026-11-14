@@ -84,14 +84,13 @@ def build_standalone(use_inno: bool = False) -> int:
 
     # 4. Copy scripts, configs, and documentation into release directory
     extra_files = [
-        "setup.bat",
+        # The uninstaller that "Installed apps" runs, and the two helpers it calls.
+        # (setup.bat and the install_*.ps1 scripts set up the 2.x Python version and
+        # are not shipped: 3.0 registers startup and the right-click menu itself.)
         "uninstall.bat",
         "uninstall.ps1",
-        "install_context_menu.ps1",
         "uninstall_context_menu.ps1",
-        "install_startup.ps1",
         "uninstall_startup.ps1",
-        "config.json",
         "README.md",
         "LICENSE",
         "FLOWCHART.md",

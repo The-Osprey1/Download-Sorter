@@ -34,4 +34,4 @@ jobs:
 
     - name: Run test suite
       run: |
-        pytest tests/ -v
+        pytest tests_v3 -v

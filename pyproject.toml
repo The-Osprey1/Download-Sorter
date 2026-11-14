@@ -134,7 +134,7 @@ py-modules = [
 version = {attr = "about.__version__"}
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "."]
+testpaths = ["tests_v3"]
 python_files = ["test_*.py"]
 addopts = "-q"
 # A test that runs longer than this many seconds is stuck: the run is stopped and

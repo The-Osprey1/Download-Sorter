@@ -25,6 +25,10 @@ on:
       - 'tray.py'
       - 'main.py'
       - 'CHANGELOG.md'
+      - 'src/**'
+      - 'tests_v3/**'
+      - 'verify_release.py'
+      - 'uninstall.ps1'
       - '.github/workflows/release.yml'
   workflow_dispatch:
 
@@ -79,11 +83,17 @@ jobs:
 
       - name: Run Test Suite
         run: |
-          pytest tests/ -v
+          pytest tests_v3 -v
 
       - name: Build Standalone Executable & Package
         run: |
           python build_release.py
+
+      # Same gate as a local release: versions agree, every CLI flag exists, the
+      # checksums match the files, and both built programs start. The tests ran above.
+      - name: Release preflight
+        run: |
+          python verify_release.py --skip-tests
 
       - name: Check that an update replaces a running copy and opens it again
         shell: pwsh
@@ -192,4 +202,7 @@ jobs:
             dist/checksums.txt
           body_path: dist/release_notes.md
           draft: false
-          prerelease: false
+          # Set the repository variable RELEASE_AS_PRERELEASE to "true" to publish without
+          # becoming "Latest": installed copies only update themselves from the latest
+          # full release, so a pre-release reaches nobody until it is promoted.
+          prerelease: ${{ vars.RELEASE_AS_PRERELEASE == 'true' }}

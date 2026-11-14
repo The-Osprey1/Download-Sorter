@@ -1,315 +1,296 @@
-"""Pre-flight verification script for Download Sorter mass public release.
+"""Release preflight gatekeeper for Download Sorter v3.
 
-Validates:
-1. All required release files and documentation exist.
-2. Version consistency across pyproject.toml, main.py, build_release.py, and CHANGELOG.md.
-3. Schema integrity of config.json, default configurations, and built-in preset library.
-4. CLI dispatcher functionality (main.py help, version, dry-run).
-5. Comprehensive test suite execution (750+ tests passing).
+Run from the project root with the project interpreter:
+
+    python verify_release.py                 # everything, including built artifacts
+    python verify_release.py --skip-artifacts  # before build_release.py has run
+    python verify_release.py --skip-tests      # quick re-check of a finished build
+
+Stages (the script exits 1 at the first stage that fails):
+
+1. Version parity: ``about.py`` (the single source of truth), the package's
+   ``src/download_sorter/about.py``, ``pyproject.toml``, the newest released
+   ``CHANGELOG.md`` heading, and ``installer.iss`` when present.
+2. CLI surface: every documented flag is registered in ``download_sorter.cli``.
+3. Source smoke test: ``main.py --version`` and a read-only ``--simulate``.
+4. Test suite: ``pytest tests_v3`` exits 0.
+5. Built artifacts: both executables, the ZIP, the setup file and ``checksums.txt``
+   exist, the checksums match, and the executables pass ``--version`` / ``--simulate``.
+
+Nothing here touches the real Downloads folder or the real state directory:
+``--simulate`` runs against throwaway folders.
 """
 
 from __future__ import annotations
 
-import json
+import argparse
+import hashlib
+import os
+from pathlib import Path
 import re
 import subprocess
 import sys
-from pathlib import Path
+import tempfile
 
 if sys.platform == "win32":
-    try:
-        if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            if _stream is not None and hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 ROOT = Path(__file__).resolve().parent
+SRC = ROOT / "src"
+TESTS_DIR = "tests_v3"
+DIST = ROOT / "dist"
 
-REQUIRED_RELEASE_FILES = [
-    "README.md",
-    "LICENSE",
-    "FLOWCHART.md",
-    "CONTRIBUTING.md",
-    "SECURITY.md",
-    "BETA_TESTING.md",
-    "CHANGELOG.md",
-    "pyproject.toml",
-    "requirements.txt",
-    "config.json",
-    "setup.bat",
-    "uninstall.bat",
-    "uninstall.ps1",
-    "build.bat",
-    "install_startup.ps1",
-    "uninstall_startup.ps1",
-    "install_context_menu.ps1",
-    "uninstall_context_menu.ps1",
-    "main.py",
-    "about.py",
-    "sorter.py",
-    "safe_ops.py",
-    "config_manager.py",
-    "rules_manager.py",
-    "tray.py",
-    "tray_qt.py",
-    "watch.py",
-    "sort_once.py",
-    "sort_undo.py",
-    "gcode_peek.py",
-    "unzip_3d.py",
-    "unzip_archive.py",
-    "zip_members.py",
-    "clean_old.py",
-    "consolidate.py",
-    "desktop_sweep.py",
-    "hold_manager.py",
-    "hotkey.py",
-    "kits.py",
-    "bambu_recent.py",
-    "batch_handoff.py",
-    "pdf_content.py",
-    "photo_kind.py",
-    "prints.py",
-    "remodel.py",
-    "rule_check.py",
-    "setup_export.py",
-    "shelf.py",
-    "space_report.py",
-    "status.py",
-    "toggle_pause.py",
-    "quick_switcher.py",
-    "ribbon_popup.py",
-    "suite_theme.py",
-    "onboarding.py",
-    "learning.py",
-    "folder_scan.py",
-    "ui_icons.py",
-    "ui_motion.py",
-    "ui_style.py",
-    "ui_categories.py",
-    "ui_widgets.py",
-    "refile.py",
-    "file_index.py",
-    "project_scan.py",
-    "projects_hub.py",
-    "projects_page.py",
-    "quit_signal.py",
-    "problem_report.py",
-    "update_check.py",
-    "updater.py",
-    "installer_builder.py",
-    "installer.iss",
-    "DownloadSorter.ico",
-    "DownloadSorter.spec",
-    "build_release.py",
-    "release_notes.py",
-    "version_resource.py",
-    ".github/workflows/ci.yml",
-    ".github/workflows/release.yml",
-    ".github/ISSUE_TEMPLATE/bug_report.yml",
-    ".github/ISSUE_TEMPLATE/beta_feedback.yml",
-    ".github/ISSUE_TEMPLATE/feature_request.yml",
-    ".github/ISSUE_TEMPLATE/rule_preset_request.yml",
+REQUIRED_CLI_FLAGS = [
+    "--version",
+    "--status",
+    "--explain",
+    "--simulate",
+    "--sort-now",
+    "--file-held",
+    "--undo",
+    "--home",
+    "--tray",
+    "--dialog",
+    "--quit",
 ]
 
-
-def check_files() -> list[str]:
-    missing = []
-    for rel_path in REQUIRED_RELEASE_FILES:
-        target = ROOT / rel_path
-        if not target.exists():
-            missing.append(rel_path)
-    return missing
+SUBPROCESS_TIMEOUT = 120
 
 
-def check_version_alignment() -> tuple[bool, str, dict[str, str]]:
-    versions: dict[str, str] = {}
+def _read_assigned_version(path: Path) -> str | None:
+    """Read ``__version__ = "x.y.z"`` from a file without importing it."""
+    if not path.is_file():
+        return None
+    m = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', path.read_text(encoding="utf-8"), re.MULTILINE)
+    return m.group(1) if m else None
 
-    # 1. pyproject.toml (supports dynamic version via about.py)
-    pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    m = re.search(r'version\s*=\s*"([^"]+)"', pyproject_text)
-    if m:
-        versions["pyproject.toml"] = m.group(1)
+
+def collect_versions() -> dict[str, str | None]:
+    versions: dict[str, str | None] = {}
+    canonical = _read_assigned_version(ROOT / "about.py")
+    versions["about.py"] = canonical
+    versions["src/download_sorter/about.py"] = _read_assigned_version(SRC / "download_sorter" / "about.py")
+
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    literal = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
+    if literal:
+        versions["pyproject.toml"] = literal.group(1)
+    elif re.search(r'version\s*=\s*\{\s*attr\s*=\s*"about\.__version__"\s*\}', pyproject):
+        # Dynamic version: setuptools reads it from about.py at build time.
+        versions["pyproject.toml"] = canonical
     else:
-        try:
-            import about
-            versions["pyproject.toml"] = about.__version__
-        except Exception:
-            pass
+        versions["pyproject.toml"] = None
 
-    # 2. main.py (supports about.__version__)
-    main_text = (ROOT / "main.py").read_text(encoding="utf-8")
-    m = re.search(r'__version__\s*=\s*"([^"]+)"', main_text)
-    if m:
-        versions["main.py"] = m.group(1)
-    else:
-        try:
-            import about
-            versions["main.py"] = about.__version__
-        except Exception:
-            pass
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    # The newest released version; an "Unreleased" section above it is allowed.
+    m = re.search(r"^## \[(?!Unreleased\])([^\]]+)\]", changelog, re.MULTILINE)
+    versions["CHANGELOG.md"] = m.group(1) if m else None
 
-    # 3. build_release.py (supports about.__version__)
-    build_text = (ROOT / "build_release.py").read_text(encoding="utf-8")
-    m = re.search(r'VERSION\s*=\s*"([^"]+)"', build_text)
-    if m:
-        versions["build_release.py"] = m.group(1)
-    else:
-        try:
-            import about
-            versions["build_release.py"] = about.__version__
-        except Exception:
-            pass
-
-    # 4. CHANGELOG.md
-    changelog_text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    # The first released version; an "Unreleased" section above it is allowed.
-    m = re.search(r'## \[(?!Unreleased\])([^\]]+)\]', changelog_text)
-    if m:
-        versions["CHANGELOG.md"] = m.group(1)
-
-    # 5. installer.iss
-    iss_file = ROOT / "installer.iss"
-    if iss_file.exists():
-        iss_text = iss_file.read_text(encoding="utf-8")
-        m = re.search(r'#define MyAppVersion\s*"([^"]+)"', iss_text)
-        if m:
-            versions["installer.iss"] = m.group(1)
-
-    distinct = set(versions.values())
-    if len(distinct) == 1 and len(versions) >= 4:
-        return True, list(distinct)[0], versions
-    return False, "mismatch", versions
+    iss = ROOT / "installer.iss"
+    if iss.is_file():
+        m = re.search(r'#define\s+MyAppVersion\s+"([^"]+)"', iss.read_text(encoding="utf-8"))
+        versions["installer.iss"] = m.group(1) if m else None
+    return versions
 
 
-def check_config_and_presets() -> list[str]:
-    errors = []
-    import config_manager as suite_data
+def check_versions() -> tuple[list[str], str]:
+    versions = collect_versions()
+    canonical = versions.get("about.py")
+    errors: list[str] = []
+    if not canonical:
+        return ["about.py has no __version__"], ""
+    for name, value in versions.items():
+        if value != canonical:
+            errors.append(f"{name}: {value!r} (expected {canonical!r})")
+    return errors, canonical
 
-    # Config validation
-    cfg = suite_data.load_sorter_config()
-    if not suite_data.validate_sorter_config(cfg):
-        errors.append("Default configuration failed schema validation")
 
-    # Presets validation
-    presets = suite_data.get_available_presets()
-    if not presets:
-        errors.append("No built-in presets returned by get_available_presets")
-    for p in presets:
-        if not p.get("id") or not p.get("name") or not p.get("category"):
-            errors.append(f"Preset {p} missing id, name, or category")
-        for r in p.get("rules", []):
-            if not r.get("name") or not r.get("folder") or "match" not in r:
-                errors.append(f"Preset rule {r} in {p.get('id')} malformed")
+def check_cli_flags() -> list[str]:
+    if str(SRC) not in sys.path:
+        sys.path.insert(0, str(SRC))
+    try:
+        from download_sorter.cli import build_parser
+    except Exception as exc:
+        return [f"could not import download_sorter.cli: {exc}"]
+    registered: set[str] = set()
+    for action in build_parser()._actions:
+        registered.update(action.option_strings)
+    return [f"{flag} is not registered in cli.py" for flag in REQUIRED_CLI_FLAGS if flag not in registered]
 
+
+def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess[str]:  # noqa: ANN003
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=SUBPROCESS_TIMEOUT,
+        **kwargs,
+    )
+
+
+def _smoke(launcher: list[str], label: str, version: str, *, simulate: bool) -> list[str]:
+    """``--version`` (and optionally ``--simulate``) against throwaway folders."""
+    errors: list[str] = []
+    try:
+        res = _run([*launcher, "--version"])
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"{label} --version could not run: {exc}"]
+    out = res.stdout + res.stderr
+    if res.returncode != 0 or version not in out:
+        errors.append(f"{label} --version failed (rc={res.returncode}): {out.strip()[:300]}")
+
+    if simulate:
+        with tempfile.TemporaryDirectory(prefix="ds_verify_") as tmp:
+            data_dir = Path(tmp) / "data"
+            watch_dir = Path(tmp) / "Downloads"
+            data_dir.mkdir()
+            watch_dir.mkdir()
+            (watch_dir / "preflight_report.pdf").write_bytes(b"%PDF-1.4 preflight")
+            (watch_dir / "preflight_photo.jpg").write_bytes(b"\xff\xd8\xff preflight")
+            try:
+                res = _run(
+                    [*launcher, "--simulate", "--data-dir", str(data_dir), "--watch-dir", str(watch_dir)]
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return [*errors, f"{label} --simulate could not run: {exc}"]
+            out = res.stdout + res.stderr
+            still_there = all((watch_dir / n).is_file() for n in ("preflight_report.pdf", "preflight_photo.jpg"))
+            if res.returncode != 0 or "preflight_report.pdf" not in out:
+                errors.append(f"{label} --simulate failed (rc={res.returncode}): {out.strip()[:300]}")
+            elif not still_there:
+                errors.append(f"{label} --simulate moved files; it must be read-only")
     return errors
 
 
-def check_cli_dispatcher() -> list[str]:
-    errors = []
-    # Test --help
-    cmd = [sys.executable, str(ROOT / "main.py"), "--help"]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0 or "Download Sorter" not in res.stdout:
-        errors.append(f"main.py --help failed: {res.stderr or res.stdout}")
-
-    # Test --version
-    import about
-    cmd = [sys.executable, str(ROOT / "main.py"), "--version"]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if res.returncode != 0 or about.__version__ not in res.stdout:
-        errors.append(f"main.py --version failed: {res.stderr or res.stdout}")
-
-    # Test --dialog routing (ensure --dialog option is properly forwarded)
-    cmd = [sys.executable, str(ROOT / "main.py"), "--dialog", "9999999"]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if "unrecognized arguments" in (res.stderr + res.stdout):
-        errors.append(f"main.py --dialog failed to forward arguments properly: {res.stderr}")
-
-    # Test compiled binaries in dist/DownloadSorter if built
-    for exe_name in ("DownloadSorter-cli.exe", "DownloadSorter.exe"):
-        bin_path = ROOT / "dist" / "DownloadSorter" / exe_name
-        if bin_path.exists():
-            bin_res = subprocess.run([str(bin_path), "--version"], capture_output=True, text=True)
-            if bin_res.returncode != 0 or about.__version__ not in (bin_res.stdout + bin_res.stderr):
-                errors.append(f"{exe_name} --version execution failed (rc={bin_res.returncode}): {bin_res.stdout} {bin_res.stderr}")
-
-    return errors
-
-
-def run_tests() -> tuple[bool, int, str]:
-    pytest_bin = Path(sys.executable).parent / "pytest.exe"
-    if pytest_bin.exists():
-        cmd = [str(pytest_bin), "tests"]
-    else:
-        cmd = [sys.executable, "-m", "pytest", "tests"]
-    res = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+def run_tests() -> tuple[bool, str, str]:
+    # No extra -q: pyproject already passes one, and a second hides the summary line.
+    cmd = [sys.executable, "-X", "faulthandler", "-m", "pytest", TESTS_DIR]
+    res = subprocess.run(
+        cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace"
+    )
     output = (res.stdout + "\n" + res.stderr).strip()
-    passed_match = re.search(r'(\d+)\s+passed', output)
-    passed_count = int(passed_match.group(1)) if passed_match else 0
-    success = (res.returncode == 0 or (passed_count > 0 and "failed" not in output.lower() and "error" not in output.lower())) and (passed_count > 0)
-    return success, passed_count, output
+    summary = ""
+    for line in reversed(output.splitlines()):
+        if re.search(r"\d+\s+(passed|failed|error)", line):
+            summary = line.strip().strip("=").strip()
+            break
+    # Exit code 0 is the only pass condition: it also rules out collection errors.
+    return res.returncode == 0, summary or f"exit code {res.returncode}", output
 
 
-def main() -> int:
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while chunk := fh.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_artifacts(version: str) -> list[str]:
+    gui_exe = DIST / "DownloadSorter" / "DownloadSorter.exe"
+    cli_exe = DIST / "DownloadSorter" / "DownloadSorter-cli.exe"
+    zip_file = DIST / f"DownloadSorter-v{version}-windows-x64.zip"
+    setup_file = DIST / f"DownloadSorter-Setup-v{version}-windows-x64.exe"
+    checksums = DIST / "checksums.txt"
+
+    errors = [
+        f"missing artifact: {p.relative_to(ROOT)}"
+        for p in (gui_exe, cli_exe, zip_file, setup_file, checksums)
+        if not p.is_file()
+    ]
+    if errors:
+        return errors
+
+    listed: dict[str, str] = {}
+    for line in checksums.read_text(encoding="utf-8").splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            listed[parts[-1]] = parts[0].lower()
+    for artifact in (zip_file, setup_file):
+        expected = listed.get(artifact.name)
+        if expected is None:
+            errors.append(f"checksums.txt has no entry for {artifact.name}")
+        elif expected != _sha256(artifact):
+            errors.append(f"checksums.txt does not match {artifact.name} (stale build?)")
+
+    errors += _smoke([str(cli_exe)], cli_exe.name, version, simulate=True)
+    errors += _smoke([str(gui_exe)], gui_exe.name, version, simulate=True)
+    return errors
+
+
+def _report(errors: list[str], ok_message: str) -> bool:
+    if errors:
+        print(f"  [FAIL] {len(errors)} problem(s):")
+        for err in errors:
+            print(f"         - {err}")
+        return False
+    print(f"  [PASS] {ok_message}")
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Download Sorter release preflight.")
+    parser.add_argument("--skip-tests", action="store_true", help="Do not run the pytest suite.")
+    parser.add_argument(
+        "--skip-artifacts", action="store_true", help="Do not check dist/ (use before build_release.py)."
+    )
+    args = parser.parse_args(argv)
+
+    os.chdir(ROOT)
     print("=" * 68)
-    print("      Download Sorter -- Public Release Pre-Flight Verification")
+    print("      Download Sorter -- Release Preflight Verification")
     print("=" * 68)
 
-    # 1. File inventory
-    print("\n[1/5] Checking Release Files & Community Docs...")
-    missing = check_files()
-    if missing:
-        print(f"  [FAIL] Missing {len(missing)} required file(s):")
-        for f in missing:
-            print(f"         - {f}")
+    print("\n[1/5] Version parity...")
+    version_errors, version = check_versions()
+    if not _report(version_errors, f"all version sources agree on v{version}"):
         return 1
-    print(f"  [PASS] All {len(REQUIRED_RELEASE_FILES)} release files and community docs present.")
 
-    # 2. Version consistency
-    print("\n[2/5] Checking Version Alignment Across Components...")
-    ok, ver, versions = check_version_alignment()
-    if not ok:
-        print(f"  [FAIL] Version mismatch detected: {versions}")
+    print("\n[2/5] CLI flags registered in cli.py...")
+    if not _report(check_cli_flags(), f"all {len(REQUIRED_CLI_FLAGS)} flags registered"):
         return 1
-    print(f"  [PASS] All components aligned to version: v{ver} ({versions})")
 
-    # 3. Config & Presets
-    print("\n[3/5] Validating Configurations & Preset Library Schema...")
-    cfg_errors = check_config_and_presets()
-    if cfg_errors:
-        print(f"  [FAIL] Configuration or preset error(s):")
-        for e in cfg_errors:
-            print(f"         - {e}")
+    print("\n[3/5] Source smoke test (main.py --version, --simulate)...")
+    source_launcher = [sys.executable, str(ROOT / "main.py")]
+    if not _report(
+        _smoke(source_launcher, "main.py", version, simulate=True),
+        "main.py reports the version and simulates read-only",
+    ):
         return 1
-    import config_manager as suite_data
-    preset_count = len(suite_data.get_available_presets())
-    total_preset_rules = sum(len(p.get("rules", [])) for p in suite_data.get_available_presets())
-    print(f"  [PASS] Config schemas valid; {preset_count} preset packs ({total_preset_rules} curated rules) verified.")
 
-    # 4. CLI Dispatcher
-    print("\n[4/5] Testing Main CLI Dispatcher...")
-    cli_errors = check_cli_dispatcher()
-    if cli_errors:
-        print(f"  [FAIL] CLI dispatcher errors:")
-        for e in cli_errors:
-            print(f"         - {e}")
+    print(f"\n[4/5] Test suite ({TESTS_DIR})...")
+    if args.skip_tests:
+        print("  [SKIP] --skip-tests")
+    else:
+        ok, summary, output = run_tests()
+        if not ok:
+            print(f"  [FAIL] pytest {TESTS_DIR}: {summary}")
+            print(output)
+            return 1
+        print(f"  [PASS] pytest {TESTS_DIR}: {summary}")
+
+    print("\n[5/5] Built artifacts...")
+    if args.skip_artifacts:
+        print("  [SKIP] --skip-artifacts")
+    elif not _report(
+        check_artifacts(version),
+        "executables, ZIP, setup file and checksums present, matching and runnable",
+    ):
         return 1
-    print("  [PASS] CLI dispatcher responsive (--help, --version verified).")
 
-    # 5. Full Test Suite
-    print("\n[5/5] Running Comprehensive Test Suite...")
-    test_ok, count, output = run_tests()
-    if not test_ok:
-        print("  [FAIL] Test suite failed!")
-        print(output)
-        return 1
-    print(f"  [PASS] Test suite passed: {count} tests passed with 0 failures.")
-
+    skipped = [name for name, flag in (("tests", args.skip_tests), ("artifacts", args.skip_artifacts)) if flag]
     print("\n" + "=" * 68)
-    print(f"  ALL AUDITS PASSED (100%) -- READY FOR MASS PUBLIC RELEASE v{ver}")
+    if skipped:
+        print(f"  PREFLIGHT PASSED for v{version} (skipped: {', '.join(skipped)}) -- not a full release check")
+    else:
+        print(f"  PREFLIGHT PASSED -- v{version} is ready to release")
     print("=" * 68)
     return 0
 
