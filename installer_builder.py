@@ -274,24 +274,30 @@ namespace DownloadSorterInstaller
                 catch { }
             }
 
-            // 2. Give it up to 10 seconds to finish what it is doing.
+            // 2. Give each copy time to finish what it is doing. WaitForExit returns
+            //    the moment the process is gone, so a clean quit costs no delay.
             DateTime deadline = DateTime.UtcNow.AddSeconds(10);
             while (DateTime.UtcNow < deadline)
             {
-                if (FindRunning(targetDir).Count == 0)
+                List<Process> running = FindRunning(targetDir);
+                if (running.Count == 0)
                 {
                     return;
                 }
-                System.Threading.Thread.Sleep(250);
+                foreach (Process proc in running)
+                {
+                    try { proc.WaitForExit(3000); } catch { }
+                }
             }
 
-            // 3. Close whatever is still running from this folder.
+            // 3. Close whatever is still running from this folder, and wait for
+            //    Windows to actually let go of it before any file is replaced.
             foreach (Process left in FindRunning(targetDir))
             {
                 try
                 {
                     left.Kill();
-                    left.WaitForExit(5000);
+                    left.WaitForExit(3000);
                 }
                 catch { }
             }
@@ -325,35 +331,75 @@ namespace DownloadSorterInstaller
             return found;
         }
 
+        private const int ExtractAttempts = 10;
+        private const int RenameAsideFromAttempt = 5;
+
         private static FileStream CreateWithRetry(string destPath)
         {
-            // A file can stay locked for a moment after its program exits
-            // (antivirus scanning it, Windows releasing the image).
-            for (int attempt = 0; ; attempt++)
+            // A file can stay locked for a moment after its program exits (antivirus
+            // scanning it, Explorer reading its icon, Windows releasing the image).
+            // Ten tries with a doubling wait (50 ms .. 3.2 s, about 9 s in all) cover
+            // that. From the fifth try on, the locked file is first renamed out of the
+            // way: Windows lets a file that is in use be renamed even when it cannot
+            // be overwritten or deleted, so the new file can take the name at once.
+            int delayMs = 50;
+            for (int attempt = 1; ; attempt++)
             {
                 try
                 {
                     return new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
                 }
-                catch (IOException)
+                catch (Exception ex)
                 {
-                    if (attempt >= 20)
-                    {
-                        throw new IOException(
-                            "Download Sorter is still running, so its files could not be replaced. " +
-                            "Right-click its icon near the clock, choose Quit, and run this installer again.");
-                    }
-                    System.Threading.Thread.Sleep(500);
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    if (attempt >= 20)
+                    if (!(ex is IOException) && !(ex is UnauthorizedAccessException))
                     {
                         throw;
                     }
-                    System.Threading.Thread.Sleep(500);
+                    if (attempt >= ExtractAttempts)
+                    {
+                        throw new IOException(
+                            "Download Sorter is still running, so its files could not be replaced. " +
+                            "Right-click its icon near the clock, choose Quit, and run this installer again. (" +
+                            Path.GetFileName(destPath) + ": " + ex.Message + ")");
+                    }
+                    if (attempt >= RenameAsideFromAttempt)
+                    {
+                        TryRenameAside(destPath);
+                    }
+                    System.Threading.Thread.Sleep(delayMs);
+                    delayMs = Math.Min(delayMs * 2, 3200);
                 }
             }
+        }
+
+        private static void TryRenameAside(string destPath)
+        {
+            try
+            {
+                if (File.Exists(destPath))
+                {
+                    File.Move(destPath, destPath + ".old_" + Guid.NewGuid().ToString("N"));
+                }
+            }
+            catch { }
+        }
+
+        private static void CleanupRenamedAside(string targetDir)
+        {
+            // Leftovers of an earlier update. Any that are still in use stay until
+            // the next install; they are never loaded by the app.
+            try
+            {
+                foreach (string stale in Directory.GetFiles(targetDir, "*.old_*", SearchOption.AllDirectories))
+                {
+                    string ext = Path.GetExtension(stale);
+                    if (ext.Length == 37 && ext.StartsWith(".old_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { File.Delete(stale); } catch { }
+                    }
+                }
+            }
+            catch { }
         }
 
         private static void Relaunch(string targetDir)
@@ -363,8 +409,10 @@ namespace DownloadSorterInstaller
             {
                 return;
             }
-            try { Process.Start(exe); } catch { }            // the background sorter
-            try { Process.Start(exe, "--home"); } catch { }  // and the window, so the user sees it is back
+            // One launch only: "--home" starts the background sorter and opens its
+            // window. Starting two copies at the same moment let both become the
+            // running instance, each watching the Downloads folder.
+            try { Process.Start(exe, "--home"); } catch { }
         }
 
         public static void PerformInstall(string targetDir, bool createDesktop, bool createStartMenu, bool registerUninstall = true)
@@ -373,6 +421,7 @@ namespace DownloadSorterInstaller
             {
                 Directory.CreateDirectory(targetDir);
             }
+            CleanupRenamedAside(targetDir);
 
             var asm = Assembly.GetExecutingAssembly();
             Stream s = null;
@@ -439,6 +488,8 @@ namespace DownloadSorterInstaller
                 try { if (File.Exists(tempZip)) File.Delete(tempZip); } catch { }
             }
 
+            // Files renamed aside during this run are still in use by definition;
+            // the next install removes them (CleanupRenamedAside above).
             CreateShortcuts(targetDir, createDesktop, createStartMenu);
             if (registerUninstall)
             {
@@ -715,7 +766,7 @@ namespace DownloadSorterInstaller
                         {
                             try
                             {
-                                Process.Start(exePath, "--welcome");
+                                Process.Start(exePath, "--home");
                             }
                             catch { }
                         }

@@ -2,7 +2,7 @@
 ; Local-first automated file organizer for Windows
 
 #define MyAppName "Download Sorter"
-#define MyAppVersion "2.8.0"
+#define MyAppVersion "3.0.0"
 #define MyAppPublisher "Devyn Fidel"
 #define MyAppURL "https://github.com/The-Osprey1/Download-Sorter"
 #define MyAppExeName "DownloadSorter.exe"
@@ -41,7 +41,7 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--welcome"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--home"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; Stop the tray app and remove the startup entries and Explorer right-click menus

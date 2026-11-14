@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-14
+
+Download Sorter 3.0 replaces the collection of separate scripts with one program (`DownloadSorter.exe`, plus `DownloadSorter-cli.exe` for the command line). Your 2.8 rules and folders carry over from **Folder Architecture -> Carry Over v2.8 / Setup...**.
+
+### Added
+- **One window, four tabs (`src/download_sorter/ui/`).** Home, Folder Architecture, Custom Rules and Settings, with the tray icon, the watcher and the window all in a single process.
+- **Folder Architecture canvas (`architecture.py`, `ui/architecture_canvas.py`).** Lay your folders out top to bottom in tiers, start from **Auto-Create Basic** or 40+ premade folders, add your own folders with rules, then **Apply & Shift Files**. **Undo** and **Return to Defaults** put things back.
+- **Side ribbons you control (`ui/toasts.py`).** Set how long a ribbon stays (1-30 seconds), hover to pause it, close one with ✕ or all of them with **Close Ribbons**.
+- **Recent File Insert (`quick_switcher.py`, `ui/quick_switcher_pill.py`).** When a program asks you to pick a file to open or upload, a small pill offers the file(s) Download Sorter just filed. Works for one file or a batch; `--dialog <hwnd>` does the same from a command line.
+- **A .3mf stays put while your slicer is open (`fs_ops.py`, `service.py`).** Bambu Studio, OrcaSlicer, PrusaSlicer and Cura read a .3mf into memory and let go of the file, so it looked free to move while you were still working on it. When a held .3mf's days run out, it now stays in Downloads for as long as one of those programs is running, up to 14 days. **Move Held .3MF** still files it straight away.
+- **Sorty.** Click the mascot for tips. There is something to find if you click often enough.
+
+### Fixed
+- **Changing the watched folder could freeze the window for 3 seconds (`service.py`).** Stopping the old folder watcher waited on it while holding a lock the watcher itself needed. The watcher is now stopped after the lock is released.
+- **The window no longer stalls on a large Downloads folder (`ui/workers.py`, `ui/main_window.py`, `ui/architecture_canvas.py`).** Reading the folder, each file's download source, the history database, and sorting, shifting and undoing files all happen in the background; the window only repaints when the result arrives.
+- **Sorting or undoing from the command line, the tray, or a ribbon's Undo button no longer freezes the window (`ipc.py`, `ui/tray_app.py`).** `--sort-now`, `--file-held` and `--undo` sent to the running app are done in the background and answered when the files have actually been moved; the ribbon's **Undo** uses the same background undo as the window.
+- **A file that is open in another program no longer fills the log (`service.py`, `fs_ops.py`).** A download that could not be moved was retried every couple of seconds, with a warning each time. It is now retried after a pause that doubles each time (up to a minute), tried again promptly when the file changes, and logged once. The check for "is this file open elsewhere" also never reported a lock on 64-bit Windows; it does now, so such files are skipped cleanly instead of failing mid-move.
+- **Only one copy can run at a time, even when two start together (`ui/tray_app.py`, `installer_builder.py`).** After an update the installer started the app twice at the same moment, and both copies began watching Downloads. The installer now starts it once, and a second copy that starts while the first is still coming up hands over to it and exits. The installer's "open Download Sorter when finished" step also used an option the app no longer has (`--welcome`); it now uses `--home`.
+- **A crash or power cut mid-sort can no longer lose track of a file (`db.py`, `fs_ops.py`).** Each move is written to the history as pending before the file is touched and marked complete once it has arrived. On the next start, anything left pending is checked against what is actually on disk and settled, so **Undo** keeps working.
+- **Undo never overwrites a newer file (`fs_ops.py`).** If a new download has taken the original name, the file being put back is saved beside it as `name (Restored).ext`. A file that is open in another program is skipped and reported instead of stopping the whole undo, and a file you have since deleted is dropped from the history instead of causing an error.
+- **Cloud-only files are not downloaded just to compare them (`fs_ops.py`).** A OneDrive or iCloud placeholder is no longer read in full to check whether it duplicates another file.
+- **Updating over a running copy is more reliable (`installer_builder.py`).** The installer waits for Download Sorter to exit, retries a file that is briefly locked (antivirus, Explorer) up to ten times with growing pauses, and from the fifth try renames the locked file out of the way so the new one can take its place.
+
+### Changed
+- **Comparing two large files with the same name is faster (`fs_ops.py`).** Files over 256 KB are compared by size, then by their first and last 64 KB, and only read in full when those match.
+- **The history database is tidied as it goes (`db.py`).** Its write-ahead log is folded in after each batch and emptied on exit, so it does not grow for weeks while the tray app runs.
+- **`verify_release.py` checks the 3.0 release.** It verifies that every version number agrees, that all command-line options exist, that `tests_v3` passes, and that the built programs, ZIP, setup file and checksums are present and run.
+
 ## [2.8.0] - 2026-11-13
 
 ### Added
