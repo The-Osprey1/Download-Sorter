@@ -77,6 +77,7 @@ def test_duplicate_isolation_and_batch_and_single_undo(app_paths: AppPaths) -> N
 def test_live_non_recursive_watchdog_worker(app_paths: AppPaths) -> None:
     cfg = Config.with_starter_defaults()
     cfg.settle_seconds = 0.05
+    cfg.tutorial_completed = True  # a set-up user: automatic sorting waits for the welcome steps
     save_config(cfg, app_paths)
 
     dl = app_paths.downloads_dir

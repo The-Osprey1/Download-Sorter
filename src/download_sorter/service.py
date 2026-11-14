@@ -430,6 +430,7 @@ class SorterService:
             default_cfg.watch_folder = cur.watch_folder
             default_cfg.tutorial_completed = cur.tutorial_completed
             default_cfg.notifications_enabled = cur.notifications_enabled
+            default_cfg.check_for_updates = cur.check_for_updates
             default_cfg.ribbon_timeout_seconds = cur.ribbon_timeout_seconds
             default_cfg.paused = cur.paused
             default_cfg.architecture = architecture_from_config(default_cfg).to_dict()
@@ -623,15 +624,29 @@ class SorterService:
             self._stop_observer(old_observer)
         self._start_observer()
 
+    def _first_run_pending(self) -> bool:
+        """True until the welcome steps have been finished (or skipped) once.
+
+        Nothing is sorted automatically before that: a new install must not empty
+        the Downloads folder the moment it starts. "Clean Up Now" and the command
+        line still work, because those are things the user asked for.
+        """
+        with self._lock:
+            return not self.config.tutorial_completed
+
     def _run_loop(self) -> None:
-        # Process existing top-level files once on startup.
-        self.scan_top_level_now()
+        swept_existing = False
         while not self._stop_event.is_set():
+            if not swept_existing and not self._first_run_pending():
+                # Process existing top-level files once: at startup, or as soon as
+                # the welcome steps are done on a first run.
+                swept_existing = True
+                self.scan_top_level_now()
             self._wake_event.wait(timeout=self._next_wait_seconds())
             self._wake_event.clear()
             if self._stop_event.is_set():
                 break
-            if self.paused:
+            if self.paused or self._first_run_pending():
                 continue
             queued = self._take_due_paths()
             with self._lock:

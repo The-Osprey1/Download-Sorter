@@ -29,9 +29,9 @@ INSTALL_STEPS = """\
 1. Download `DownloadSorter-Setup-v{version}-windows-x64.exe` below.
 2. Run it. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway** \
 (the app isn't code-signed yet). [How to check your download]({repo}#windows-protected-your-pc)
-3. Answer the welcome steps. Nothing is moved until you finish them.
+3. Follow the welcome steps. Nothing is moved until you finish or skip them.
 
-Already using Download Sorter? Run the new installer; your rules and settings are kept.
+Already using Download Sorter 3? Run the new installer; your rules and settings are kept. Coming from 2.x? Read "Upgrading from 2.x" below first.
 
 """
 

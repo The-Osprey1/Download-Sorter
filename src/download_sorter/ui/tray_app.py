@@ -10,7 +10,7 @@ import sys
 import time
 from typing import Any
 
-from PySide6.QtCore import QLockFile, QObject, Qt, Signal
+from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -163,6 +163,10 @@ def run_app(
 
     service = SorterService(app_paths)
     window = MainWindow(service)
+    if not service.config.tutorial_completed:
+        # First run: nothing is sorted until the welcome steps have been seen, so
+        # show them even when started in the background (--tray, start with Windows).
+        show_window = True
     toasts = ToastManager(
         # Same path as the window's Undo button: runs on the worker pool, then
         # refreshes the window and reports what was (and was not) restored.
@@ -263,6 +267,14 @@ def run_app(
     service.start()
     if show_window:
         _present_window(window)
+
+    # Look for a newer version shortly after start, then a few times a day for a
+    # copy that stays open for weeks. GitHub is asked at most once in 24 hours.
+    QTimer.singleShot(30_000, window.check_for_updates)
+    update_timer = QTimer(app)
+    update_timer.setInterval(6 * 60 * 60 * 1000)
+    update_timer.timeout.connect(window.check_for_updates)
+    update_timer.start()
 
     exit_code = app.exec()
     ipc.stop()

@@ -378,6 +378,7 @@ class Config:
     quick_switcher_hotkey_copy: str = "Ctrl+Shift+C"
     paused: bool = False
     tutorial_completed: bool = False
+    check_for_updates: bool = True
     rules: list[Rule] = field(default_factory=list)
     category_map: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CATEGORY_MAP))
     type_subfolders: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TYPE_SUBFOLDERS))
@@ -404,6 +405,7 @@ class Config:
         self.quick_switcher_hotkey_copy = str(self.quick_switcher_hotkey_copy or "Ctrl+Shift+C").strip()
         self.paused = bool(self.paused)
         self.tutorial_completed = bool(self.tutorial_completed)
+        self.check_for_updates = bool(self.check_for_updates)
         self.rules = [r if isinstance(r, Rule) else Rule.from_dict(r) for r in self.rules]
         self.category_map = {
             (k if k.startswith(".") else "." + k).lower(): str(v).strip().replace("/", "\\").strip("\\")
@@ -464,6 +466,7 @@ class Config:
             "quick_switcher_hotkey_copy": self.quick_switcher_hotkey_copy,
             "paused": self.paused,
             "tutorial_completed": self.tutorial_completed,
+            "check_for_updates": self.check_for_updates,
             "rules": [r.to_dict() for r in self.rules],
             "category_map": dict(self.category_map),
             "type_subfolders": dict(self.type_subfolders),
@@ -494,6 +497,7 @@ class Config:
             quick_switcher_hotkey_copy=data.get("quick_switcher_hotkey_copy", "Ctrl+Shift+C"),
             paused=data.get("paused", False),
             tutorial_completed=data.get("tutorial_completed", False),
+            check_for_updates=data.get("check_for_updates", True),
             rules=[Rule.from_dict(item) for item in data.get("rules", []) if isinstance(item, dict)],
             category_map=data.get("category_map") or dict(DEFAULT_CATEGORY_MAP),
             type_subfolders=data.get("type_subfolders") or dict(DEFAULT_TYPE_SUBFOLDERS),

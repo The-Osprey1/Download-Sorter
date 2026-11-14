@@ -18,6 +18,8 @@ hidden_imports = [
     'download_sorter.about',
     'download_sorter.paths',
     'download_sorter.ui.workers',
+    'download_sorter.update_check',
+    'download_sorter.updater',
     'download_sorter.config',
     'download_sorter.router',
     'download_sorter.db',

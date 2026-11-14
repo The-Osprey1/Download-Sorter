@@ -12,7 +12,8 @@ import logging
 from typing import Any
 
 from PySide6.QtCore import QAbstractAnimation, QPoint, Qt, QTimer, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -66,6 +67,7 @@ from download_sorter.config import (
 )
 from download_sorter.paths import AppPaths
 from download_sorter.service import SorterService
+from download_sorter import update_check, updater
 from download_sorter.ui.architecture_canvas import ArchitectureTab
 from download_sorter.ui.motion import (
     AnimatedBanner,
@@ -617,6 +619,8 @@ class MainWindow(QMainWindow):
         self._footer_at_refresh: str | None = None
         self._held_count = 0
         self._action_running = False
+        self._update_release: dict[str, Any] | None = None
+        self._update_downloading = False
         self._preview_toast_mgr = ToastManager(
             default_duration_ms=int(self.service.config.ribbon_timeout_seconds * 1000),
             parent=self,
@@ -1084,6 +1088,12 @@ class MainWindow(QMainWindow):
         notif_row.addStretch(1)
         form.addRow("Notifications:", notif_row)
 
+        self.chk_check_updates = QCheckBox("Check for new versions once a day")
+        self.chk_check_updates.setToolTip(
+            "Asks GitHub which version is newest. Nothing about you or your files is sent."
+        )
+        form.addRow("Updates:", self.chk_check_updates)
+
         qs_row = QHBoxLayout()
         qs_row.setSpacing(8)
         self.chk_quick_switcher = QCheckBox(
@@ -1342,6 +1352,97 @@ class MainWindow(QMainWindow):
                 f"|  Custom rules active: {snap['rules_enabled']}"
             )
 
+    # ------------------------------------------------------------------
+    # Newer version available
+    # ------------------------------------------------------------------
+    def check_for_updates(self, force: bool = False) -> None:
+        """Ask, off the GUI thread, whether a newer version has been published.
+
+        At most one request a day reaches GitHub (see update_check.check); calling
+        this more often is free. Never runs on its own inside the test suite.
+        """
+        if not force and os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        enabled = bool(self.service.config.check_for_updates)
+        if not force and not update_check.is_enabled(enabled):
+            return
+        data_dir = self.service.paths.data_dir
+
+        def _work() -> dict[str, Any] | None:
+            try:
+                updater.clean_old_downloads(data_dir)
+            except Exception:
+                logging.debug("Could not tidy old update downloads", exc_info=True)
+            return update_check.check(data_dir, enabled=enabled, force=force)
+
+        run_async(_work, self._on_update_checked, lambda _message: None, parent=self)
+
+    def _on_update_checked(self, release: dict[str, Any] | None) -> None:
+        if not release or self._update_downloading:
+            return
+        self._update_release = dict(release)
+        self._offer_update()
+
+    def _offer_update(self) -> None:
+        release = self._update_release or {}
+        version = update_check.display_version(release)
+        if updater.can_self_update() and updater.has_installer(release):
+            self.banner.show_message(
+                f"Download Sorter {version} is available. Your rules and settings are kept.",
+                kind="info",
+                action_text="Download and install",
+                action=self._start_update_download,
+                timeout_ms=0,
+            )
+        else:
+            url = str(release.get("url") or update_check.RELEASES_PAGE)
+            self.banner.show_message(
+                f"Download Sorter {version} is available. Download it, then run the installer; "
+                "your rules and settings are kept.",
+                kind="info",
+                action_text="Open download page",
+                action=lambda: QDesktopServices.openUrl(QUrl(url)),
+                timeout_ms=0,
+            )
+
+    def _start_update_download(self) -> None:
+        release = dict(self._update_release or {})
+        if self._update_downloading or not updater.has_installer(release):
+            return
+        self._update_downloading = True
+        version = update_check.display_version(release)
+        data_dir = self.service.paths.data_dir
+        self.banner.show_message(f"Downloading Download Sorter {version}...", kind="info", timeout_ms=0)
+
+        def _work() -> str:
+            # Downloads, then checks size and SHA-256 against the release's checksums.txt.
+            return str(updater.download(release, data_dir))
+
+        def _done(installer_path: str) -> None:
+            try:
+                updater.start_install(Path(installer_path))
+            except updater.UpdateError as exc:
+                _failed(str(exc))
+                return
+            self.banner.show_message(
+                f"Installing Download Sorter {version}. It will close and open again in a moment.",
+                kind="success",
+                timeout_ms=0,
+            )
+
+        def _failed(message: str) -> None:
+            self._update_downloading = False
+            # run_async reports "ExceptionName: text"; the user only needs the text.
+            text = message.split(": ", 1)[-1] or "Couldn't download the update."
+            self.banner.show_message(
+                text, kind="warning", action_text="Try again", action=self._start_update_download, timeout_ms=0
+            )
+
+        try:
+            run_async(_work, _done, _failed, parent=self)
+        except updater.UpdateError as exc:  # inline (test) mode raises directly
+            _failed(str(exc))
+
     def _run_service_action(
         self,
         work: Callable[[], Any],
@@ -1433,6 +1534,7 @@ class MainWindow(QMainWindow):
         self.combo_fallback.setCurrentIndex(max(0, idx))
         self.chk_type_subfolders.setChecked(cfg.use_type_subfolders)
         self.chk_notifications.setChecked(cfg.notifications_enabled)
+        self.chk_check_updates.setChecked(cfg.check_for_updates)
         self.spin_ribbon_timeout.setValue(max(1.0, min(30.0, float(cfg.ribbon_timeout_seconds))))
         self.spin_ribbon_timeout.setEnabled(cfg.notifications_enabled)
         self.chk_quick_switcher.setChecked(cfg.quick_switcher_enabled)
@@ -1850,6 +1952,7 @@ class MainWindow(QMainWindow):
         cfg.fallback_mode = str(self.combo_fallback.currentData() or "other")
         cfg.use_type_subfolders = self.chk_type_subfolders.isChecked()
         cfg.notifications_enabled = self.chk_notifications.isChecked()
+        cfg.check_for_updates = self.chk_check_updates.isChecked()
         cfg.ribbon_timeout_seconds = float(self.spin_ribbon_timeout.value())
         self._preview_toast_mgr.default_duration_ms = int(cfg.ribbon_timeout_seconds * 1000)
         cfg.quick_switcher_enabled = self.chk_quick_switcher.isChecked()
@@ -1958,8 +2061,10 @@ class MainWindow(QMainWindow):
     def open_walkthrough(self) -> None:
         """Launch the interactive 3-step onboarding walkthrough modal."""
         dlg = WalkthroughDialog(self.service.watch_root, self.service.config.hold_3mf_days, self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.complete_walkthrough()
+        dlg.exec()
+        # Finished, skipped or closed with Esc: the tour has been seen either way.
+        # Automatic sorting waits for this, so it must not stay pending forever.
+        self.complete_walkthrough()
 
     def _maybe_show_first_run_walkthrough(self) -> None:
         if self._first_run_prompted or os.environ.get("PYTEST_CURRENT_TEST"):

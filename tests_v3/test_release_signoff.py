@@ -646,3 +646,77 @@ def test_installer_cleanup_leaves_lookalike_user_files_alone(tiny_installer: Pat
     assert res.returncode == 0, res.stderr
     assert not stale.exists()
     assert not_ours.exists() and short.exists(), "only <name>.old_<32 hex> leftovers may be deleted"
+
+
+# ---------------------------------------------------------------------------
+# First run: nothing is sorted before the welcome steps are done
+# ---------------------------------------------------------------------------
+def _wait_for(condition, timeout: float = 5.0) -> bool:  # noqa: ANN001
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_new_install_sorts_nothing_until_the_welcome_steps_are_done(app_paths: AppPaths) -> None:
+    svc = _service(app_paths, tutorial_completed=False, settle_seconds=0.05)
+    dl = app_paths.downloads_dir
+    assert dl is not None
+    existing = dl / "already-here.pdf"
+    existing.write_bytes(b"was in Downloads before the app was installed")
+
+    svc.start()
+    try:
+        time.sleep(0.6)  # several loop turns
+        arriving = dl / "arrives-during-setup.pdf"
+        arriving.write_bytes(b"downloaded while the welcome steps are open")
+        time.sleep(0.8)
+        assert existing.is_file() and arriving.is_file(), "sorted before the user finished the welcome steps"
+        assert svc.db.stats()["total_moves"] == 0
+
+        # The user asked for it: a manual clean-up works even now.
+        assert svc.simulate_top_level(), "preview must still work"
+
+        # Welcome steps finished (or skipped): the waiting files are sorted.
+        import copy
+
+        cfg = copy.deepcopy(svc.config)
+        cfg.tutorial_completed = True
+        svc.update_config(cfg)
+        assert _wait_for(lambda: not existing.exists() and not arriving.exists())
+        assert svc.db.stats()["active_moves"] == 2
+    finally:
+        svc.stop(timeout=2.0)
+
+
+def test_manual_sort_works_before_the_welcome_steps(app_paths: AppPaths) -> None:
+    svc = _service(app_paths, tutorial_completed=False)
+    dl = app_paths.downloads_dir
+    assert dl is not None
+    (dl / "report.pdf").write_bytes(b"pdf")
+    assert svc._first_run_pending() is True
+    assert len(svc.scan_top_level_now(settle_seconds=0.0)["moved"]) == 1
+
+
+def test_closing_the_welcome_steps_any_way_counts_as_seen(
+    v3_qapp, app_paths: AppPaths, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
+) -> None:
+    from download_sorter.ui import main_window as mw
+
+    svc = _service(app_paths, tutorial_completed=False)
+    win = mw.MainWindow(svc)
+    # Esc / closing the tour returns "rejected"; sorting must not stay switched off forever.
+    monkeypatch.setattr(mw.WalkthroughDialog, "exec", lambda self: mw.QDialog.DialogCode.Rejected)
+    win.open_walkthrough()
+    assert svc.config.tutorial_completed is True and svc._first_run_pending() is False
+    win.close()
+
+
+def test_first_run_opens_the_window_even_when_started_in_the_tray() -> None:
+    from download_sorter.ui import tray_app
+
+    source = inspect.getsource(tray_app.run_app)
+    assert "if not service.config.tutorial_completed:" in source
+    assert source.index("if not service.config.tutorial_completed:") < source.index("service.start()")
