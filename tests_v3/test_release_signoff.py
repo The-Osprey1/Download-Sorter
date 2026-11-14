@@ -113,6 +113,7 @@ def test_ipc_server_keeps_socket_open_until_deferred_reply_is_resolved(v3_qapp) 
         if proc.poll() is None:
             proc.kill()
         srv.stop()
+        v3_qapp.processEvents()  # drain socket events while the server is still alive
 
 
 def test_ipc_server_survives_a_caller_that_gave_up(v3_qapp) -> None:  # noqa: ANN001
@@ -138,6 +139,7 @@ def test_ipc_server_survives_a_caller_that_gave_up(v3_qapp) -> None:  # noqa: AN
         if proc.poll() is None:
             proc.kill()
         srv.stop()
+        v3_qapp.processEvents()  # drain socket events while the server is still alive
 
 
 @pytest.fixture
@@ -720,3 +722,31 @@ def test_first_run_opens_the_window_even_when_started_in_the_tray() -> None:
     source = inspect.getsource(tray_app.run_app)
     assert "if not service.config.tutorial_completed:" in source
     assert source.index("if not service.config.tutorial_completed:") < source.index("service.start()")
+
+
+def test_ipc_server_stop_drops_open_connections(v3_qapp) -> None:  # noqa: ANN001
+    """A caller still waiting when the app shuts down must not leave a live socket behind."""
+    pipe = f"TestDownloadSorterV3_{uuid.uuid4().hex[:8]}"
+    pending: list[DeferredReply] = []
+    srv = IPCServer(lambda req: pending.append(DeferredReply()) or pending[-1], server_name=pipe)
+    assert srv.start()
+    proc = _ipc_client(pipe, "sort_now", reply_timeout_ms=5000)
+    try:
+        assert _pump(v3_qapp, lambda: bool(pending))
+        assert len(srv._sockets) == 1
+
+        srv.stop()
+        assert srv._sockets == set()
+        v3_qapp.processEvents()
+        pending[0].resolve({"ok": True})  # too late: must be a harmless no-op
+        assert _pump(v3_qapp, lambda: proc.poll() is not None, timeout=8.0)
+        assert proc.communicate(timeout=2)[0].strip() == "null"  # caller saw the hang-up, no reply
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    # Destroying the server afterwards and processing events must be safe.
+    del srv
+    import gc
+
+    gc.collect()
+    v3_qapp.processEvents()

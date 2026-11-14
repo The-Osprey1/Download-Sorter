@@ -82,23 +82,61 @@ class IPCServer(QObject):
         self.server_name = server_name
         self._server = QLocalServer(self)
         self._server.newConnection.connect(self._on_connection)
+        # Connections that are open right now, so stop() can close them before
+        # the server goes away.
+        self._sockets: set[QLocalSocket] = set()
 
     def start(self) -> bool:
         QLocalServer.removeServer(self.server_name)
         return self._server.listen(self.server_name)
 
     def stop(self) -> None:
+        """Stop listening and drop every open connection.
+
+        A connection left open here would still have events queued for it (data
+        to read, its own delayed delete) when the server is destroyed, and Qt
+        then touches freed memory the next time events are processed.
+        """
         self._server.close()
+        for sock in list(self._sockets):
+            self._forget(sock)
+            try:
+                sock.readyRead.disconnect(self._on_ready_read)
+                sock.disconnected.disconnect(self._on_disconnected)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                sock.abort()
+                sock.deleteLater()
+            except RuntimeError:
+                pass  # already deleted on the Qt side
+
+    def _forget(self, sock: QLocalSocket) -> None:
+        self._sockets.discard(sock)
 
     def _on_connection(self) -> None:
         while self._server.hasPendingConnections():
             sock = self._server.nextPendingConnection()
             if sock is None:
                 continue
-            sock.readyRead.connect(lambda s=sock: self._handle_socket(s))
-            sock.disconnected.connect(sock.deleteLater)
+            # Bound methods, not lambdas: a lambda holding the socket keeps it (and
+            # this server) alive in Python after Qt has already deleted them.
+            self._sockets.add(sock)
+            sock.readyRead.connect(self._on_ready_read)
+            sock.disconnected.connect(self._on_disconnected)
             if sock.bytesAvailable() > 0:
                 self._handle_socket(sock)
+
+    def _on_ready_read(self) -> None:
+        sock = self.sender()
+        if isinstance(sock, QLocalSocket):
+            self._handle_socket(sock)
+
+    def _on_disconnected(self) -> None:
+        sock = self.sender()
+        if isinstance(sock, QLocalSocket):
+            self._forget(sock)
+            sock.deleteLater()
 
     def _handle_socket(self, sock: QLocalSocket) -> None:
         raw = bytes(sock.readAll()).decode("utf-8", errors="ignore").strip()

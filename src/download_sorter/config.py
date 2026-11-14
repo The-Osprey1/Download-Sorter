@@ -656,7 +656,7 @@ def import_v2_config(v2_path: Path) -> Config:
 
     mw_dest = str(raw.get("makerworld_destination") or "").strip()
     if mw_dest:
-        has_mw = any("makerworld.com" in [d.lower() for d in r.domains] for r in rules)
+        has_mw = any(d.lower() == "makerworld.com" for r in rules for d in r.domains)
         if not has_mw:
             rules.append(
                 Rule(

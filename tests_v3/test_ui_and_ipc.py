@@ -84,6 +84,7 @@ def test_ipc_roundtrip(v3_qapp) -> None:
         assert out.strip() == '{"ok": true, "echo": "ping"}'
     finally:
         srv.stop()
+        v3_qapp.processEvents()  # drain socket events while the server is still alive
 
 
 def test_cli_explain_status_simulate(app_paths: AppPaths, capsys) -> None:
