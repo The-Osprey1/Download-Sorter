@@ -40,7 +40,12 @@ from download_sorter.architecture import (
     architecture_from_config,
 )
 from download_sorter.service import SorterService
-from download_sorter.ui.motion import InteractiveRibbonBtn, make_vector_icon
+from download_sorter.ui.motion import (
+    CollapsibleRibbonBtn,
+    ElidedLabel,
+    InteractiveRibbonBtn,
+    make_vector_icon,
+)
 from download_sorter.ui.workers import run_async
 
 
@@ -781,7 +786,9 @@ class ArchitectureTab(QWidget):
         self.combo_preset = QComboBox()
         for key, meta in ARCHITECTURE_PRESETS.items():
             self.combo_preset.addItem(str(meta["label"]), key)
-        self.combo_preset.setMinimumWidth(220)
+        self.combo_preset.setMinimumWidth(150)
+        self.combo_preset.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_preset.setMinimumContentsLength(14)
         bar_row1.addWidget(QLabel("Blueprint:"))
         bar_row1.addWidget(self.combo_preset)
 
@@ -789,7 +796,7 @@ class ArchitectureTab(QWidget):
         self.btn_load_preset.clicked.connect(self._on_load_preset)
         bar_row1.addWidget(self.btn_load_preset)
 
-        self.btn_auto_create = InteractiveRibbonBtn(
+        self.btn_auto_create = CollapsibleRibbonBtn(
             "Auto-Create Basic",
             make_vector_icon("bolt", "#69E6AD", 14),
         )
@@ -802,7 +809,7 @@ class ArchitectureTab(QWidget):
         bar_row1.addStretch(1)
 
         # Always visible Undo, Return to Defaults & Apply/Shift controls
-        self.btn_arch_undo = InteractiveRibbonBtn("Undo", make_vector_icon("undo", "#F5F5F7", 14))
+        self.btn_arch_undo = CollapsibleRibbonBtn("Undo", make_vector_icon("undo", "#F5F5F7", 14))
         self.btn_arch_undo.setToolTip("Undo last file shift and architecture change")
         self.btn_arch_undo.clicked.connect(self._on_undo_clicked)
         bar_row1.addWidget(self.btn_arch_undo)
@@ -844,9 +851,10 @@ class ArchitectureTab(QWidget):
         bar_row2.addWidget(self.btn_add_custom)
 
         bar_row2.addStretch(1)
-        layer_tip = QLabel("Top-to-Bottom Flow: Tier 0 Root -> Tier 1 Categories -> Tier 2+ Subfolders")
+        layer_tip = ElidedLabel("Top-to-Bottom Flow: Tier 0 Root -> Tier 1 Categories -> Tier 2+ Subfolders")
+        layer_tip.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         layer_tip.setStyleSheet("color: #6E6E73; font-size: 11px;")
-        bar_row2.addWidget(layer_tip)
+        bar_row2.addWidget(layer_tip, 1)
         bar_outer.addLayout(bar_row2)
 
         root.addWidget(bar)
@@ -866,9 +874,10 @@ class ArchitectureTab(QWidget):
         self.lbl_arch_summary.setStyleSheet("color: #98989D; font-size: 12px;")
         hdr_row.addWidget(self.lbl_arch_summary, 1)
 
-        hint = QLabel("Click a folder to inspect · Double-click to edit rules · Click '+ Add' inside any tier")
+        hint = ElidedLabel("Click a folder to inspect · Double-click to edit rules · Click '+ Add' inside any tier")
+        hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         hint.setStyleSheet("color: #6E6E73; font-size: 11px;")
-        hdr_row.addWidget(hint)
+        hdr_row.addWidget(hint, 2)
         cc_layout.addLayout(hdr_row)
 
         self.scroll = QScrollArea()
@@ -887,7 +896,21 @@ class ArchitectureTab(QWidget):
         insp = QFrame()
         insp.setObjectName("SurfaceCard")
         insp.setFixedWidth(250)
-        il = QVBoxLayout(insp)
+        # The panel scrolls in a short window instead of setting the window's height.
+        insp_outer = QVBoxLayout(insp)
+        insp_outer.setContentsMargins(0, 0, 0, 0)
+        insp_scroll = QScrollArea()
+        insp_scroll.setObjectName("InspectorScroll")
+        insp_scroll.setWidgetResizable(True)
+        insp_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        insp_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        insp_scroll.setStyleSheet(
+            "QScrollArea#InspectorScroll, QScrollArea#InspectorScroll > QWidget > QWidget { background: transparent; }"
+        )
+        insp_body = QWidget()
+        insp_scroll.setWidget(insp_body)
+        insp_outer.addWidget(insp_scroll)
+        il = QVBoxLayout(insp_body)
         il.setContentsMargins(14, 14, 14, 14)
         il.setSpacing(10)
 
@@ -937,6 +960,15 @@ class ArchitectureTab(QWidget):
         root.addLayout(body, 1)
 
         self.sync_from_service(force=True)
+
+    # Below this width Auto-Create Basic and Undo show only their icons.
+    TOOLBAR_COMPACT_WIDTH = 950
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        compact = self.width() < self.TOOLBAR_COMPACT_WIDTH
+        self.btn_auto_create.set_collapsed(compact)
+        self.btn_arch_undo.set_collapsed(compact)
 
     def sync_from_service(self, *, force: bool = False) -> None:
         if force or not self._dirty:

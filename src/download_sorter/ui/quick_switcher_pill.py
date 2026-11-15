@@ -28,11 +28,17 @@ from PySide6.QtWidgets import (
 )
 
 from download_sorter.quick_switcher import (
+    DEFAULT_HOTKEY_ALL,
+    DEFAULT_HOTKEY_COPY,
+    DEFAULT_HOTKEY_SELECT,
+    MODIFIER_VK,
+    Hotkey,
     clear_recent_file,
     consume_items,
     copy_files_to_clipboard,
     inject_file_into_dialog,
     inject_files_into_dialog,
+    parse_hotkey,
     start_file_drag,
 )
 from download_sorter.ui.motion import make_vector_icon
@@ -173,8 +179,16 @@ class QuickSwitcherPill:
         dialog_hwnd: int,
         recent_data: dict[str, Any],
         parent: QWidget | None = None,
+        *,
+        hotkey_select: str = DEFAULT_HOTKEY_SELECT,
+        hotkey_all: str = DEFAULT_HOTKEY_ALL,
+        hotkey_copy: str = DEFAULT_HOTKEY_COPY,
     ) -> None:
         self.dialog_hwnd = dialog_hwnd
+        # The keys set in Settings -> Quick Switcher; anything unusable falls back.
+        self.hotkey_select = parse_hotkey(hotkey_select) or parse_hotkey(DEFAULT_HOTKEY_SELECT)
+        self.hotkey_all = parse_hotkey(hotkey_all) or parse_hotkey(DEFAULT_HOTKEY_ALL)
+        self.hotkey_copy = parse_hotkey(hotkey_copy) or parse_hotkey(DEFAULT_HOTKEY_COPY)
         self.recent_data = recent_data
         self.file_path = recent_data["path"]
         self.filename = recent_data["name"]
@@ -256,12 +270,12 @@ class QuickSwitcherPill:
         # Keyboard shortcuts
         self._shortcut_escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.root)
         self._shortcut_escape.activated.connect(self.close)
-        self._shortcut_select = QShortcut(QKeySequence("Ctrl+G"), self.root)
+        self._shortcut_select = QShortcut(QKeySequence(self.hotkey_select.text), self.root)
         self._shortcut_select.activated.connect(self.select_file)
         if self.is_batch:
-            self._shortcut_all = QShortcut(QKeySequence("Ctrl+Shift+G"), self.root)
+            self._shortcut_all = QShortcut(QKeySequence(self.hotkey_all.text), self.root)
             self._shortcut_all.activated.connect(self.select_all)
-            self._shortcut_copy = QShortcut(QKeySequence("Ctrl+Shift+C"), self.root)
+            self._shortcut_copy = QShortcut(QKeySequence(self.hotkey_copy.text), self.root)
             self._shortcut_copy.activated.connect(self.copy_files)
 
         self._track_timer.start()
@@ -385,7 +399,7 @@ class QuickSwitcherPill:
         self.container_layout.addWidget(self.center_frame, 1)
 
         # Action buttons
-        latest_label = "↵ Latest" if self.is_batch else "↵ Select (Ctrl+G)"
+        latest_label = "↵ Latest" if self.is_batch else f"↵ Select ({self.hotkey_select.text})"
         self.action_btn = self._make_button(latest_label, self.select_file, primary=True)
         self.all_btn = None
         self.copy_btn = None
@@ -616,18 +630,22 @@ class QuickSwitcherPill:
             if fg not in (self.dialog_hwnd, pill_hwnd):
                 return
 
-            ctrl_down = bool(user32.GetAsyncKeyState(0x11) & 0x8000)
-            shift_down = bool(user32.GetAsyncKeyState(0x10) & 0x8000)
-            g_down = bool(user32.GetAsyncKeyState(0x47) & 0x8000)
-            c_down = bool(user32.GetAsyncKeyState(0x43) & 0x8000)
+            def down(vk: int) -> bool:
+                return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
-            if ctrl_down and shift_down and g_down and self.is_batch:
+            held = {name for name, vk in MODIFIER_VK.items() if down(vk)}
+
+            def pressed(hotkey: Hotkey | None) -> bool:
+                # Exactly these modifiers, so Ctrl+G does not also fire for Ctrl+Shift+G.
+                return hotkey is not None and held == set(hotkey.modifiers) and down(hotkey.vk)
+
+            if self.is_batch and pressed(self.hotkey_all):
                 self._cooldown_until = time.monotonic() + 0.8
                 self.select_all()
-            elif ctrl_down and shift_down and c_down and self.is_batch:
+            elif self.is_batch and pressed(self.hotkey_copy):
                 self._cooldown_until = time.monotonic() + 0.8
                 self.copy_files()
-            elif ctrl_down and not shift_down and g_down:
+            elif pressed(self.hotkey_select):
                 self._cooldown_until = time.monotonic() + 0.8
                 self.select_file()
         except Exception:

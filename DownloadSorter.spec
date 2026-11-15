@@ -21,6 +21,7 @@ hidden_imports = [
     'download_sorter.updater',
     'download_sorter.config',
     'download_sorter.router',
+    'download_sorter.dest',
     'download_sorter.db',
     'download_sorter.fs_ops',
     'download_sorter.service',

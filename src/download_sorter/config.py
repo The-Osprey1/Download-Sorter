@@ -6,12 +6,13 @@ import copy
 from dataclasses import asdict, dataclass, field
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import time
 import uuid
 from typing import Any
 
+from download_sorter.dest import to_relative_dest
 from download_sorter.paths import AppPaths
 
 DEFAULT_IGNORE_EXTENSIONS: list[str] = [
@@ -258,7 +259,7 @@ class Rule:
     def __post_init__(self) -> None:
         self.id = str(self.id or uuid.uuid4().hex[:8])
         self.name = str(self.name).strip()
-        self.destination = str(self.destination).strip().replace("/", "\\").strip("\\")
+        self.destination = to_relative_dest(str(self.destination))
         self.keywords = _normalize_str_list(self.keywords)
         self.domains = [d.lower() for d in _normalize_str_list(self.domains)]
         self.extensions = _normalize_ext_list(self.extensions)
@@ -400,9 +401,11 @@ class Config:
         self.quick_switcher_enabled = bool(self.quick_switcher_enabled)
         self.quick_switcher_timeout_seconds = max(5.0, float(self.quick_switcher_timeout_seconds))
         self.quick_switcher_3d_timeout_hours = max(0.1, float(self.quick_switcher_3d_timeout_hours))
-        self.quick_switcher_hotkey = str(self.quick_switcher_hotkey or "Ctrl+G").strip()
-        self.quick_switcher_hotkey_all = str(self.quick_switcher_hotkey_all or "Ctrl+Shift+G").strip()
-        self.quick_switcher_hotkey_copy = str(self.quick_switcher_hotkey_copy or "Ctrl+Shift+C").strip()
+        from download_sorter.quick_switcher import normalize_hotkey
+
+        self.quick_switcher_hotkey = normalize_hotkey(self.quick_switcher_hotkey, "Ctrl+G")
+        self.quick_switcher_hotkey_all = normalize_hotkey(self.quick_switcher_hotkey_all, "Ctrl+Shift+G")
+        self.quick_switcher_hotkey_copy = normalize_hotkey(self.quick_switcher_hotkey_copy, "Ctrl+Shift+C")
         self.paused = bool(self.paused)
         self.tutorial_completed = bool(self.tutorial_completed)
         self.check_for_updates = bool(self.check_for_updates)
@@ -417,9 +420,34 @@ class Config:
             for k, v in (self.type_subfolders or DEFAULT_TYPE_SUBFOLDERS).items()
             if str(k).strip() and str(v).strip()
         }
+        self._keep_destinations_inside_watch_folder()
         self.ignore_extensions = _normalize_ext_list(self.ignore_extensions or DEFAULT_IGNORE_EXTENSIONS)
         self.ignore_names = [n.lower() for n in _normalize_str_list(self.ignore_names or DEFAULT_IGNORE_NAMES)]
         self.architecture = dict(self.architecture) if isinstance(self.architecture, dict) else {}
+
+    def _keep_destinations_inside_watch_folder(self) -> None:
+        """Make every destination a safe path relative to the watched folder.
+
+        Settings carried over from 2.x can name full paths or ``%USERPROFILE%``;
+        joined onto the watched folder those would escape it or create a folder
+        literally called ``${USERPROFILE}`` (see ``dest.to_relative_dest``).
+        """
+        try:
+            root: Path | None = self.resolved_watch_folder()
+        except (OSError, ValueError):
+            root = None
+        self.default_folder = to_relative_dest(self.default_folder, watch_root=root)
+        for rule in self.rules:
+            rule.destination = to_relative_dest(rule.destination, watch_root=root)
+        self.category_map = {
+            ext: to_relative_dest(folder, watch_root=root) for ext, folder in self.category_map.items()
+        }
+        subs: dict[str, str] = {}
+        for ext, name in self.type_subfolders.items():
+            clean = to_relative_dest(name, watch_root=root, fallback="")
+            if clean:
+                subs[ext] = clean
+        self.type_subfolders = subs
 
     @classmethod
     def with_starter_defaults(cls, templates: tuple[str, ...] = ("school", "career", "3d_printing")) -> Config:
@@ -578,6 +606,18 @@ def _portable_path_str(text: str) -> str:
     if home and norm.lower().startswith(home.lower()):
         return "${USERPROFILE}" + norm[len(home):]
     return norm
+
+
+def portable_path(text: str) -> str:
+    """A folder path as stored in settings: the profile folder becomes ``${USERPROFILE}``."""
+    return _portable_path_str(str(PureWindowsPath(str(text).strip())))
+
+
+def readable_path(text: str) -> str:
+    """A stored folder path as people expect to see it (``${USERPROFILE}`` expanded)."""
+    home = str(Path.home())
+    expanded = str(text).replace("${USERPROFILE}", home).replace("%USERPROFILE%", home)
+    return str(PureWindowsPath(os.path.expandvars(expanded)))
 
 
 def import_v2_config(v2_path: Path) -> Config:

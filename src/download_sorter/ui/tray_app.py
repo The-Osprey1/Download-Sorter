@@ -200,7 +200,14 @@ def run_app(
         try:
             from download_sorter.ui.quick_switcher_pill import QuickSwitcherPill
 
-            active_pill = QuickSwitcherPill(hwnd, data)
+            cfg = service.config
+            active_pill = QuickSwitcherPill(
+                hwnd,
+                data,
+                hotkey_select=cfg.quick_switcher_hotkey,
+                hotkey_all=cfg.quick_switcher_hotkey_all,
+                hotkey_copy=cfg.quick_switcher_hotkey_copy,
+            )
             active_pill.root.show()
         except Exception as exc:
             logging.debug("Could not display QuickSwitcherPill: %s", exc)

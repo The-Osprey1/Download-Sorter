@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QRadioButton,
+    QScrollArea,
     QVBoxLayout,
 )
 
@@ -64,15 +65,20 @@ from download_sorter.config import (
     carry_over_setup,
     export_setup_file,
     import_v2_config,
+    portable_path,
+    readable_path,
 )
 from download_sorter.paths import AppPaths
+from download_sorter.quick_switcher import normalize_hotkey, parse_hotkey
 from download_sorter.service import SorterService
 from download_sorter import update_check, updater
 from download_sorter.ui.architecture_canvas import ArchitectureTab
 from download_sorter.ui.motion import (
     AnimatedBanner,
     AnimatedRibbon,
+    CollapsibleRibbonBtn,
     ConfettiOverlayWidget,
+    ElidedLabel,
     InteractiveRibbonBtn,
     SortyMascotWidget,
     WalkthroughDiagramCanvas,
@@ -227,7 +233,7 @@ class UpgradeCarryOverDialog(QDialog):
                 f"Detected {schema_txt} · {summary['rules_imported']} custom rule(s) · "
                 f"{summary['categories_imported']} extension rule(s) · "
                 f"{summary['subfolders_imported']} type subfolder(s)\n"
-                f"Protected .3MF Hold: {hold_txt} · Watch folder: {summary['watch_folder']}\n"
+                f"Protected .3MF Hold: {hold_txt} · Watch folder: {readable_path(str(summary['watch_folder']))}\n"
                 f"Resulting Folder Architecture: {summary['tier_count']} tier(s), "
                 f"{summary['arch_nodes']} folder node(s)."
             )
@@ -353,6 +359,22 @@ def _refresh_style(widget: QWidget) -> None:
     """Re-polish widget after dynamic property mutation for PySide6 QSS rules."""
     widget.style().unpolish(widget)
     widget.style().polish(widget)
+
+
+def _relayout_up(widget: QWidget) -> None:
+    """Recompute the layouts above ``widget`` now.
+
+    A page that is not the current tab does not lay itself out again when a child
+    is hidden, so the window kept the old, larger minimum size.
+    """
+    parent = widget.parentWidget()
+    while parent is not None:
+        if parent.layout() is not None:
+            parent.layout().invalidate()
+        parent.updateGeometry()
+        if parent.isWindow():
+            break
+        parent = parent.parentWidget()
 
 
 def _make_badge(text: str, variant: str = "neutral") -> QLabel:
@@ -591,6 +613,7 @@ def _make_surface_card(
     elif subtitle:
         lbl_sub = QLabel(subtitle)
         lbl_sub.setObjectName("MutedText")
+        lbl_sub.setWordWrap(True)
         title_col.addWidget(lbl_sub)
     hdr_row.addLayout(title_col, 1)
     if right_widget is not None:
@@ -690,28 +713,32 @@ class MainWindow(QMainWindow):
         self.lbl_status_dot = QLabel("●")
         self.lbl_status_dot.setStyleSheet("color: #30D158; font-size: 11px;")
         self.lbl_status_badge = _make_badge("WATCHER ACTIVE", "success")
+        # Hidden in a narrow window (see resizeEvent); the dot and the Auto-Sort
+        # button say the same thing.
+        self.lbl_status_badge.setMinimumWidth(1)
         brand_top.addWidget(title)
         brand_top.addWidget(self.lbl_status_dot)
         brand_top.addWidget(self.lbl_status_badge)
         brand_top.addStretch(1)
         brand_col.addLayout(brand_top)
 
-        self.lbl_watch_path = QLabel("")
-        self.lbl_watch_path.setStyleSheet("color: #8E8E93; font-size: 11.5px;")
-        self.lbl_watch_path.setToolTip(
-            "Automatically organizes loose top-level files in this folder into subfolders."
+        self.lbl_watch_path = ElidedLabel(
+            "",
+            mode=Qt.TextElideMode.ElideMiddle,
+            tooltip="Automatically organizes loose top-level files in this folder into subfolders.",
         )
+        self.lbl_watch_path.setStyleSheet("color: #8E8E93; font-size: 11.5px;")
         brand_col.addWidget(self.lbl_watch_path)
         row.addLayout(brand_col, 1)
 
-        self.btn_pause = InteractiveRibbonBtn(
+        self.btn_pause = CollapsibleRibbonBtn(
             "Auto-Sort: ON",
             make_vector_icon("pause", "#30D158", 14),
         )
         self.btn_pause.clicked.connect(self._toggle_pause)
         row.addWidget(self.btn_pause)
 
-        self.btn_file_held = InteractiveRibbonBtn(
+        self.btn_file_held = CollapsibleRibbonBtn(
             "Move Held .3MF",
             make_vector_icon("cube", "#FF9F0A", 14),
         )
@@ -722,7 +749,7 @@ class MainWindow(QMainWindow):
         div_left.setObjectName("RibbonDivider")
         row.addWidget(div_left)
 
-        self.btn_undo_last = InteractiveRibbonBtn(
+        self.btn_undo_last = CollapsibleRibbonBtn(
             "Undo",
             make_vector_icon("undo", "#F5F5F7", 14),
         )
@@ -730,7 +757,7 @@ class MainWindow(QMainWindow):
         self.btn_undo_last.clicked.connect(self._on_undo_last)
         row.addWidget(self.btn_undo_last)
 
-        self.btn_open_downloads = InteractiveRibbonBtn(
+        self.btn_open_downloads = CollapsibleRibbonBtn(
             "Open Folder",
             make_vector_icon("folder", "#F5F5F7", 14),
         )
@@ -738,7 +765,7 @@ class MainWindow(QMainWindow):
         self.btn_open_downloads.clicked.connect(self._open_downloads_folder)
         row.addWidget(self.btn_open_downloads)
 
-        self.btn_walkthrough = InteractiveRibbonBtn(
+        self.btn_walkthrough = CollapsibleRibbonBtn(
             "Guide",
             make_vector_icon("help", "#98989D", 14),
         )
@@ -873,7 +900,7 @@ class MainWindow(QMainWindow):
         self.tbl_sim.setColumnWidth(0, 240)
         self.tbl_sim.setColumnWidth(1, 148)
         sim_layout.addWidget(self.tbl_sim, 1)
-        layout.addWidget(sim_card, 1)
+        layout.addWidget(sim_card, 3)
 
         # Card B: Recent Activity
         self.lbl_activity_empty = QLabel(
@@ -896,7 +923,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.tbl_activity.setColumnWidth(1, 220)
         act_layout.addWidget(self.tbl_activity, 1)
-        layout.addWidget(act_card, 1)
+        layout.addWidget(act_card, 2)
         return tab
 
     # ------------------------------------------------------------------
@@ -970,12 +997,11 @@ class MainWindow(QMainWindow):
         rules_layout.addWidget(self.tbl_rules, 1)
         layout.addWidget(rules_card, 1)
 
-        self.lbl_test_result = QLabel("Type a filename below to see which folder it moves into.")
+        # The answer goes on its own line under the boxes, shortened to fit, so a long
+        # reason never makes the window wider.
+        self.lbl_test_result = ElidedLabel("Type a filename below to see which folder it moves into.")
         self.lbl_test_result.setStyleSheet("font-weight: 600; color: #64D2FF;")
-        tester_card, tester_layout = _make_surface_card(
-            "Test a Filename",
-            right_widget=self.lbl_test_result,
-        )
+        tester_card, tester_layout = _make_surface_card("Test a Filename")
         inputs = QHBoxLayout()
         inputs.setSpacing(8)
         self.edit_test_name = QLineEdit()
@@ -987,6 +1013,7 @@ class MainWindow(QMainWindow):
         inputs.addWidget(self.edit_test_name, 2)
         inputs.addWidget(self.edit_test_url, 2)
         tester_layout.addLayout(inputs)
+        tester_layout.addWidget(self.lbl_test_result)
 
         self.list_test_trace = QListWidget()
         self.list_test_trace.setMaximumHeight(72)
@@ -998,9 +1025,16 @@ class MainWindow(QMainWindow):
     # Tab 3: Settings (Apple Preferences Card)
     # ------------------------------------------------------------------
     def _build_settings_tab(self) -> QWidget:
+        page = QScrollArea()
+        page.setObjectName("SettingsScroll")
+        page.setWidgetResizable(True)
+        page.setFrameShape(QFrame.Shape.NoFrame)
+        page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        page.setStyleSheet("QScrollArea#SettingsScroll, QScrollArea#SettingsScroll > QWidget > QWidget { background: transparent; }")
         tab = QWidget()
+        page.setWidget(tab)
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(0, 4, 0, 0)
+        layout.setContentsMargins(0, 4, 6, 0)
         layout.setSpacing(14)
 
         btn_save = InteractiveRibbonBtn("Save Settings", make_vector_icon("check", "#FFFFFF", 14))
@@ -1044,7 +1078,7 @@ class MainWindow(QMainWindow):
 
         hold_row = QHBoxLayout()
         hold_row.setSpacing(8)
-        self.chk_hold_3mf = QCheckBox("Keep newly downloaded .3MF files in Downloads for")
+        self.chk_hold_3mf = QCheckBox("Keep new .3MF files in Downloads for")
         self.spin_hold_days = QSpinBox()
         self.spin_hold_days.setRange(1, 60)
         self.spin_hold_days.setSuffix(" days")
@@ -1060,7 +1094,7 @@ class MainWindow(QMainWindow):
         notif_row = QHBoxLayout()
         notif_row.setSpacing(8)
         self.chk_notifications = QCheckBox(
-            "Show top-right Side Ribbon notification with Undo when files are sorted"
+            "Show a ribbon with Undo in the top-right corner when files are sorted"
         )
         self.spin_ribbon_timeout = QDoubleSpinBox()
         self.spin_ribbon_timeout.setRange(1.0, 30.0)
@@ -1080,24 +1114,44 @@ class MainWindow(QMainWindow):
         self.btn_close_ribbons.setToolTip("Immediately dismiss any active Side Ribbon notifications.")
         self.btn_close_ribbons.clicked.connect(self._on_close_all_ribbons)
 
+        notif_opts = QHBoxLayout()
+        notif_opts.setSpacing(8)
+        notif_opts.addWidget(QLabel("Close after"))
+        notif_opts.addWidget(self.spin_ribbon_timeout)
+        notif_opts.addWidget(self.btn_preview_ribbon)
+        notif_opts.addWidget(self.btn_close_ribbons)
+        notif_opts.addStretch(1)
+        notif_col = QVBoxLayout()
+        notif_col.setSpacing(6)
         notif_row.addWidget(self.chk_notifications)
-        notif_row.addWidget(QLabel("Timer:"))
-        notif_row.addWidget(self.spin_ribbon_timeout)
-        notif_row.addWidget(self.btn_preview_ribbon)
-        notif_row.addWidget(self.btn_close_ribbons)
         notif_row.addStretch(1)
-        form.addRow("Notifications:", notif_row)
+        notif_col.addLayout(notif_row)
+        notif_col.addLayout(notif_opts)
+        form.addRow("Notifications:", notif_col)
 
+        updates_row = QHBoxLayout()
+        updates_row.setSpacing(8)
         self.chk_check_updates = QCheckBox("Check for new versions once a day")
         self.chk_check_updates.setToolTip(
             "Asks GitHub which version is newest. Nothing about you or your files is sent."
         )
-        form.addRow("Updates:", self.chk_check_updates)
+        self.btn_check_updates = InteractiveRibbonBtn(
+            "Check for Updates Now",
+            make_vector_icon("refresh", "#F5F5F7", 14),
+        )
+        self.btn_check_updates.setToolTip(
+            "Check GitHub Releases right now for a newer version of Download Sorter."
+        )
+        self.btn_check_updates.clicked.connect(self._on_check_updates_now)
+        updates_row.addWidget(self.chk_check_updates)
+        updates_row.addWidget(self.btn_check_updates)
+        updates_row.addStretch(1)
+        form.addRow("Updates:", updates_row)
 
         qs_row = QHBoxLayout()
         qs_row.setSpacing(8)
         self.chk_quick_switcher = QCheckBox(
-            "Quick Switcher: Show recent file insert pill docked to File Open/Upload dialogs"
+            "Offer the files it just sorted in Open and Upload dialogs"
         )
         self.spin_qs_timeout = QDoubleSpinBox()
         self.spin_qs_timeout.setRange(10.0, 3600.0)
@@ -1117,21 +1171,31 @@ class MainWindow(QMainWindow):
 
         self.edit_qs_hotkey = QLineEdit()
         self.edit_qs_hotkey.setFixedWidth(80)
-        self.edit_qs_hotkey.setToolTip("Hotkey to select latest recent file (default: Ctrl+G)")
+        self.edit_qs_hotkey.setToolTip(
+            "Picks the newest file while the pill is showing. Ctrl or Alt plus a letter, "
+            "number or F-key (default: Ctrl+G)."
+        )
 
         self.chk_quick_switcher.toggled.connect(self.spin_qs_timeout.setEnabled)
         self.chk_quick_switcher.toggled.connect(self.spin_qs_3d_hours.setEnabled)
         self.chk_quick_switcher.toggled.connect(self.edit_qs_hotkey.setEnabled)
 
+        qs_opts = QHBoxLayout()
+        qs_opts.setSpacing(8)
+        qs_opts.addWidget(QLabel("Offer files for"))
+        qs_opts.addWidget(self.spin_qs_timeout)
+        qs_opts.addWidget(QLabel("3D/CAD files for"))
+        qs_opts.addWidget(self.spin_qs_3d_hours)
+        qs_opts.addWidget(QLabel("Pick with"))
+        qs_opts.addWidget(self.edit_qs_hotkey)
+        qs_opts.addStretch(1)
+        qs_col = QVBoxLayout()
+        qs_col.setSpacing(6)
         qs_row.addWidget(self.chk_quick_switcher)
-        qs_row.addWidget(QLabel("Recent:"))
-        qs_row.addWidget(self.spin_qs_timeout)
-        qs_row.addWidget(QLabel("3D/CAD:"))
-        qs_row.addWidget(self.spin_qs_3d_hours)
-        qs_row.addWidget(QLabel("Hotkey:"))
-        qs_row.addWidget(self.edit_qs_hotkey)
         qs_row.addStretch(1)
-        form.addRow("Quick Switcher:", qs_row)
+        qs_col.addLayout(qs_row)
+        qs_col.addLayout(qs_opts)
+        form.addRow("Quick Switcher:", qs_col)
 
         self.spin_settle = QDoubleSpinBox()
         self.spin_settle.setRange(0.0, 60.0)
@@ -1181,7 +1245,7 @@ class MainWindow(QMainWindow):
         cfg_layout.addLayout(form)
         layout.addWidget(cfg_card)
         layout.addStretch(1)
-        return tab
+        return page
 
     # ------------------------------------------------------------------
     # Refresh & Actions
@@ -1264,7 +1328,7 @@ class MainWindow(QMainWindow):
         self._sync_autosort_controls(cfg.paused)  # last known hold state; corrected by the snapshot
         slide_anim = getattr(self.instructions_widget, "_motion_slide", None)
         if slide_anim is None or slide_anim.state() != QAbstractAnimation.State.Running:
-            self.instructions_widget.setVisible(not cfg.tutorial_completed)
+            self.instructions_widget.setVisible(self._show_home_intro())
 
         self._refresh_rules()
         self._refresh_settings_fields()
@@ -1355,7 +1419,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Newer version available
     # ------------------------------------------------------------------
-    def check_for_updates(self, force: bool = False) -> None:
+    def _on_check_updates_now(self) -> None:
+        self.lbl_footer.setText("Checking GitHub for updates...")
+        self.check_for_updates(force=True, announce_up_to_date=True)
+
+    def check_for_updates(self, force: bool = False, *, announce_up_to_date: bool = False) -> None:
         """Ask, off the GUI thread, whether a newer version has been published.
 
         At most one request a day reaches GitHub (see update_check.check); calling
@@ -1367,6 +1435,8 @@ class MainWindow(QMainWindow):
         if not force and not update_check.is_enabled(enabled):
             return
         data_dir = self.service.paths.data_dir
+        if announce_up_to_date and hasattr(self, "btn_check_updates"):
+            self.btn_check_updates.setEnabled(False)
 
         def _work() -> dict[str, Any] | None:
             try:
@@ -1375,13 +1445,29 @@ class MainWindow(QMainWindow):
                 logging.debug("Could not tidy old update downloads", exc_info=True)
             return update_check.check(data_dir, enabled=enabled, force=force)
 
-        run_async(_work, self._on_update_checked, lambda _message: None, parent=self)
+        def _done(release: dict[str, Any] | None) -> None:
+            if hasattr(self, "btn_check_updates"):
+                self.btn_check_updates.setEnabled(True)
+            self._on_update_checked(release, announce_up_to_date=announce_up_to_date)
 
-    def _on_update_checked(self, release: dict[str, Any] | None) -> None:
-        if not release or self._update_downloading:
+        def _failed(_message: str) -> None:
+            if hasattr(self, "btn_check_updates"):
+                self.btn_check_updates.setEnabled(True)
+            self._on_update_checked(None, announce_up_to_date=announce_up_to_date)
+
+        run_async(_work, _done, _failed, parent=self)
+
+    def _on_update_checked(
+        self, release: dict[str, Any] | None, *, announce_up_to_date: bool = False
+    ) -> None:
+        if release and not self._update_downloading:
+            self._update_release = dict(release)
+            self._offer_update()
             return
-        self._update_release = dict(release)
-        self._offer_update()
+        if not release and announce_up_to_date:
+            msg = f"You're on the latest version (v{update_check.__version__})."
+            self.banner.show_message(msg, kind="success")
+            self.lbl_footer.setText(msg)
 
     def _offer_update(self) -> None:
         release = self._update_release or {}
@@ -1528,7 +1614,7 @@ class MainWindow(QMainWindow):
     def _refresh_settings_fields(self) -> None:
         cfg = self.service.config
         self.chk_auto_sort.setChecked(not cfg.paused)
-        self.edit_watch_folder.setText(cfg.watch_folder)
+        self.edit_watch_folder.setText(readable_path(cfg.watch_folder))
         self.spin_settle.setValue(cfg.settle_seconds)
         idx = self.combo_fallback.findData(cfg.fallback_mode)
         self.combo_fallback.setCurrentIndex(max(0, idx))
@@ -1947,7 +2033,8 @@ class MainWindow(QMainWindow):
     def _save_settings_form(self) -> None:
         cfg = copy.deepcopy(self.service.config)
         cfg.paused = not self.chk_auto_sort.isChecked()
-        cfg.watch_folder = self.edit_watch_folder.text().strip() or r"${USERPROFILE}\Downloads"
+        typed = self.edit_watch_folder.text().strip()
+        cfg.watch_folder = portable_path(typed) if typed else r"${USERPROFILE}\Downloads"
         cfg.settle_seconds = float(self.spin_settle.value())
         cfg.fallback_mode = str(self.combo_fallback.currentData() or "other")
         cfg.use_type_subfolders = self.chk_type_subfolders.isChecked()
@@ -1958,7 +2045,16 @@ class MainWindow(QMainWindow):
         cfg.quick_switcher_enabled = self.chk_quick_switcher.isChecked()
         cfg.quick_switcher_timeout_seconds = float(self.spin_qs_timeout.value())
         cfg.quick_switcher_3d_timeout_hours = float(self.spin_qs_3d_hours.value())
-        cfg.quick_switcher_hotkey = self.edit_qs_hotkey.text().strip() or "Ctrl+G"
+        typed_hotkey = self.edit_qs_hotkey.text().strip()
+        hotkey_note = ""
+        if typed_hotkey and parse_hotkey(typed_hotkey) is None:
+            hotkey_note = (
+                f"Settings saved, but kept {cfg.quick_switcher_hotkey} as the hotkey: \"{typed_hotkey}\" "
+                "can't be used. A hotkey needs Ctrl or Alt plus a letter, number or F-key, like Alt+F2."
+            )
+        else:
+            cfg.quick_switcher_hotkey = normalize_hotkey(typed_hotkey, "Ctrl+G")
+        self.edit_qs_hotkey.setText(cfg.quick_switcher_hotkey)
         cfg.hold_3mf_enabled = self.chk_hold_3mf.isChecked()
         cfg.hold_3mf_days = int(self.spin_hold_days.value())
         self._commit_config(cfg)
@@ -1975,6 +2071,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Windows Integration Warning", "\n".join(warnings))
             self.banner.show_message("Saved settings, but Windows integration update failed.", kind="warning")
             self.lbl_footer.setText("Saved settings, but Windows integration update failed.")
+        elif hotkey_note:
+            self.banner.show_message(hotkey_note, kind="warning")
+            self.lbl_footer.setText(hotkey_note)
         else:
             self.banner.show_message("Settings saved.", kind="success")
             self.lbl_footer.setText("Settings saved.")
@@ -2082,8 +2181,43 @@ class MainWindow(QMainWindow):
         ):
             QTimer.singleShot(250, self._maybe_show_first_run_walkthrough)
 
+    # Narrow window: below the first width the header drops its status badge and
+    # Undo / Open Folder / Guide show only their icons; below the second, Auto-Sort
+    # and Move Held do too.
+    HEADER_COMPACT_WIDTH = 1240
+    HEADER_TIGHT_WIDTH = 1000
+    # Short window: Home hides its "How Download Sorter Works" card, and the
+    # filename tester on Custom Rules hides its step-by-step list.
+    HOME_INTRO_MIN_HEIGHT = 740
+    TESTER_TRACE_MIN_HEIGHT = 700
+
+    def _fit_to_window(self) -> None:
+        width, height = self.width(), self.height()
+        if hasattr(self, "lbl_status_badge"):
+            self.lbl_status_badge.setVisible(width >= self.HEADER_COMPACT_WIDTH)
+            for btn in (self.btn_undo_last, self.btn_open_downloads, self.btn_walkthrough):
+                btn.set_collapsed(width < self.HEADER_COMPACT_WIDTH)
+            for btn in (self.btn_pause, self.btn_file_held):
+                btn.set_collapsed(width < self.HEADER_TIGHT_WIDTH)
+        if hasattr(self, "list_test_trace"):
+            show_trace = height >= self.TESTER_TRACE_MIN_HEIGHT
+            if self.list_test_trace.isHidden() == show_trace:
+                self.list_test_trace.setVisible(show_trace)
+                _relayout_up(self.list_test_trace)
+        if hasattr(self, "instructions_widget"):
+            slide_anim = getattr(self.instructions_widget, "_motion_slide", None)
+            if slide_anim is None or slide_anim.state() != QAbstractAnimation.State.Running:
+                show_intro = self._show_home_intro()
+                if self.instructions_widget.isHidden() == show_intro:
+                    self.instructions_widget.setVisible(show_intro)
+                    _relayout_up(self.instructions_widget)
+
+    def _show_home_intro(self) -> bool:
+        return not self.service.config.tutorial_completed and self.height() >= self.HOME_INTRO_MIN_HEIGHT
+
     def resizeEvent(self, event) -> None:  # noqa: ANN001
         super().resizeEvent(event)
+        self._fit_to_window()
         if hasattr(self, "_confetti") and self._confetti.isVisible():
             self._confetti.setGeometry(self.rect())
 

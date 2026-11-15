@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Check for Updates Now (`ui/main_window.py`).** Settings -> Updates has a button that asks GitHub straight away, even when the daily check is off, and says "You're on the latest version" when there is nothing newer.
+
+### Fixed
+- **Rules carried over from 2.x that named your profile folder filed into a folder called `${USERPROFILE}` (new `dest.py`, `config.py`, `router.py`).** A 2.x rule pointing at `%USERPROFILE%\Documents\Banking` became a folder literally named `${USERPROFILE}\Documents\Banking` inside Downloads. Every rule, file-type folder and the catch-all folder is now turned into a folder inside Downloads when the settings load: a path in your profile keeps the part below it (`Documents\Banking`), a path inside Downloads keeps the part below that, any other full path keeps its last folder name, and anything containing `..` or characters Windows doesn't allow goes to `Other`. Rules already affected are corrected the next time Download Sorter starts; files already filed into a `${USERPROFILE}` folder stay where they are and can be put back with Undo.
+- **A rule could move files out of Downloads (`fs_ops.py`, `dest.py`).** A destination such as `..\..\Desktop` or `C:\Somewhere` was followed as written. Besides the clean-up above, the move itself now refuses any target outside the watched folder.
+- **The Quick Switcher hotkey in Settings did nothing (`ui/quick_switcher_pill.py`, `quick_switcher.py`, `ui/tray_app.py`, `cli.py`).** The pill always listened for Ctrl+G. It now uses the hotkeys from Settings, and its button shows the one you chose. A hotkey needs Ctrl or Alt plus a letter, number or F-key, because the pill watches the keyboard while you type a file name; anything else is refused with a message and the previous hotkey is kept.
+- **Settings showed the watched folder as `${USERPROFILE}\Downloads` (`ui/main_window.py`, `config.py`).** It now shows the real path (`C:\Users\you\Downloads`) and still saves it in the portable form, so a setup file works on another PC. The carry-over summary shows the real path too.
+- **The window could not be made smaller than about 1310 x 745, so it didn't fit a 1080p screen at 150% scaling or half of a snapped screen (`ui/main_window.py`, `ui/architecture_canvas.py`, `ui/motion.py`).** It now goes down to 900 x 560:
+  - In a narrower window the header's Undo, Open Folder and Guide buttons, and below 1000 px Auto-Sort and Move Held, show only their icons (the words are in their tooltips), the status badge is hidden, and the folder path is shortened in the middle.
+  - Settings scrolls, and its Notifications and Quick Switcher rows are split over two lines.
+  - Folder Architecture's toolbar shortens its hint line, the Selected Folder panel scrolls, and Auto-Create Basic and Undo show only their icons below 950 px.
+  - On Home, the "How Download Sorter Works" card folds away in a window under 740 px tall, so the file lists keep their room, and the preview gets more of the height than Recent Activity.
+  - On Custom Rules, the tester's answer is on its own line under the boxes (shortened to fit, full text on hover), and its step-by-step list folds away in a window under 700 px tall.
+
 ### Changed
 - **Repository housekeeping (no change to the app).** The 2.x program files that version 3 does not use (the separate tray, watcher, rules-window and learning scripts and their tests) are no longer in the source tree; the 2.x releases and tags keep them. The package metadata (`pyproject.toml`) now lists only the v3 program, and the beta-testing guide, security notes, contributing guide, flowchart and issue templates describe version 3 instead of 2.x. Nothing in the installed app, the installer or the release files changes.
 
