@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import about
 from download_sorter import cli
 from download_sorter.config import Config, save_config
 from download_sorter.ipc import IPCServer, send_ipc_command
@@ -104,7 +105,7 @@ def test_cli_explain_status_simulate(app_paths: AppPaths, capsys) -> None:
 
     assert cli.main(["--data-dir", str(app_paths.data_dir), "--watch-dir", str(dl), "--status"]) == 0
     status_out = capsys.readouterr().out
-    assert "Download Sorter v3.0.0" in status_out
+    assert f"Download Sorter v{about.__version__}" in status_out
 
 
 def test_main_entry_version_and_held_3mf_ui_and_folder_cli(
@@ -120,7 +121,7 @@ def test_main_entry_version_and_held_3mf_ui_and_folder_cli(
     monkeypatch.setattr("download_sorter.ui.main_window.is_context_menu_enabled", lambda: False)
 
     assert root_main.main(["--version"]) == 0
-    assert "Download Sorter 3.0.0" in capsys.readouterr().out
+    assert f"Download Sorter {about.__version__}" in capsys.readouterr().out
 
     dl = app_paths.downloads_dir
     assert dl is not None

@@ -1046,10 +1046,12 @@ def test_p1_2_installer_source_waits_retries_and_renames_aside() -> None:
 
 
 def test_p0_5_versions_agree_and_cli_flags_are_registered() -> None:
+    import about as root_about
+
     verify = _load_root_module("verify_release")
     errors, version = verify.check_versions()
     assert errors == [], errors
-    assert version == "3.0.0"
+    assert version == root_about.__version__
     assert set(verify.collect_versions()) >= {
         "about.py",
         "src/download_sorter/about.py",
