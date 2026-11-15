@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-11-15
+
 ### Added
 - **Check for Updates Now (`ui/main_window.py`).** Settings -> Updates has a button that asks GitHub straight away, even when the daily check is off, and says "You're on the latest version" when there is nothing newer.
 
