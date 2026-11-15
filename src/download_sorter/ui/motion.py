@@ -18,6 +18,7 @@ from PySide6.QtCore import (
     QPointF,
     QPropertyAnimation,
     QRectF,
+    QSize,
     QTimer,
     QVariantAnimation,
     Qt,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QWidget,
 )
@@ -626,6 +628,92 @@ class InteractiveRibbonBtn(QPushButton):
             p.setBrush(QColor(255, 255, 255, int(20 * self._hover_prog)))
             p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 8, 8)
             p.end()
+
+
+class ElidedLabel(QLabel):
+    """A one-line label that shortens its text with "..." instead of widening its row.
+
+    The full text is kept (``full_text``) and shown as the tooltip while shortened.
+    """
+
+    def __init__(
+        self,
+        text: str = "",
+        parent: QWidget | None = None,
+        *,
+        mode: Qt.TextElideMode = Qt.TextElideMode.ElideRight,
+        tooltip: str = "",
+    ) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self._mode = mode
+        self._base_tooltip = tooltip
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(40)
+        self.setText(text)
+
+    def full_text(self) -> str:
+        return self._full
+
+    def text(self) -> str:  # noqa: D102 (the whole text, not the shortened one on screen)
+        return self._full
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt name)
+        self._full = str(text)
+        self._elide()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        self._elide()
+
+    def _elide(self) -> None:
+        shown = self.fontMetrics().elidedText(self._full, self._mode, max(0, self.width()))
+        super().setText(shown)
+        self.setToolTip(self._full if shown != self._full else self._base_tooltip)
+
+
+class CollapsibleRibbonBtn(InteractiveRibbonBtn):
+    """A ribbon button that can show only its icon, for a narrow window.
+
+    Its owner calls ``set_collapsed`` as the window width crosses a threshold; the
+    words stay in the tooltip. Its minimum width is always the icon-only width, so
+    the row never forces the window wider than that.
+    """
+
+    ICON_ONLY_WIDTH = 40
+
+    def __init__(self, text: str = "", icon: QIcon | None = None, parent: QWidget | None = None) -> None:
+        super().__init__(text, icon, parent)
+        self._full_text = text
+        self._collapsed = False
+        self.setMinimumWidth(self.ICON_ONLY_WIDTH)
+        self._own_tooltip = not self.toolTip()
+        if self._own_tooltip:
+            self.setToolTip(text)
+
+    def full_text(self) -> str:
+        return getattr(self, "_full_text", self.text())
+
+    def is_collapsed(self) -> bool:
+        return bool(getattr(self, "_collapsed", False))
+
+    def setText(self, text: str) -> None:  # noqa: N802 (Qt name)
+        self._full_text = text
+        super().setText("" if self.is_collapsed() else text)
+        if getattr(self, "_own_tooltip", False):
+            super().setToolTip(text)
+
+    def setToolTip(self, text: str) -> None:  # noqa: N802 (Qt name)
+        self._own_tooltip = False
+        super().setToolTip(text)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        collapsed = bool(collapsed)
+        if collapsed == self.is_collapsed():
+            return
+        self._collapsed = collapsed
+        QPushButton.setText(self, "" if collapsed else self._full_text)
+        self.updateGeometry()
 
 
 class SortyMascotWidget(QWidget):

@@ -101,6 +101,65 @@ _THREAD_LOCK = threading.RLock()
 # State File Management
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Pill hotkeys (Settings -> Quick Switcher)
+# ---------------------------------------------------------------------------
+DEFAULT_HOTKEY_SELECT = "Ctrl+G"
+DEFAULT_HOTKEY_ALL = "Ctrl+Shift+G"
+DEFAULT_HOTKEY_COPY = "Ctrl+Shift+C"
+
+_MODIFIER_NAMES = {"ctrl": "Ctrl", "control": "Ctrl", "shift": "Shift", "alt": "Alt"}
+# Windows virtual-key codes for the modifiers the pill checks.
+MODIFIER_VK = {"Ctrl": 0x11, "Shift": 0x10, "Alt": 0x12}
+
+
+@dataclass(frozen=True)
+class Hotkey:
+    """A key combination the pill listens for while a file dialog is in front."""
+
+    modifiers: frozenset[str]
+    key: str  # "G", "7", "F5"
+    vk: int
+
+    @property
+    def text(self) -> str:
+        order = [m for m in ("Ctrl", "Shift", "Alt") if m in self.modifiers]
+        return "+".join([*order, self.key])
+
+
+def parse_hotkey(text: str) -> Hotkey | None:
+    """Parse ``Ctrl+Shift+G`` style text, or return None when it can't be used.
+
+    A hotkey needs Ctrl or Alt: the pill watches the keyboard while a file dialog
+    is in front, so a bare letter or Shift+letter would fire while typing a name.
+    """
+    parts = [p.strip() for p in str(text or "").replace(" ", "").split("+")]
+    if len(parts) < 2 or any(not p for p in parts):
+        return None
+    mods: set[str] = set()
+    for raw in parts[:-1]:
+        name = _MODIFIER_NAMES.get(raw.lower())
+        if name is None or name in mods:
+            return None
+        mods.add(name)
+    if not ({"Ctrl", "Alt"} & mods):
+        return None
+    key = parts[-1].upper()
+    if len(key) == 1 and ("A" <= key <= "Z" or "0" <= key <= "9"):
+        vk = ord(key)
+    elif key.startswith("F") and key[1:].isdigit() and 1 <= int(key[1:]) <= 24:
+        vk = 0x70 + int(key[1:]) - 1
+    else:
+        return None
+    return Hotkey(frozenset(mods), key, vk)
+
+
+def normalize_hotkey(text: str, default: str) -> str:
+    """Tidy ``text`` (``ctrl + g`` -> ``Ctrl+G``), or return ``default`` if it can't be used."""
+    parsed = parse_hotkey(text)
+    return parsed.text if parsed is not None else default
+
+
 def resolve_state_file(data_dir: Path | str | None = None) -> Path:
     if data_dir is not None:
         return Path(data_dir) / STATE_NAME

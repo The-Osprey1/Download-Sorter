@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from download_sorter.db import StateDB
+from download_sorter.dest import is_under_watch_root
 from download_sorter.router import RouteDecision
 
 _CHUNK_BYTES = 1024 * 1024
@@ -314,6 +315,11 @@ def execute_move(
     size_bytes = src.stat().st_size
     src_resolved = src.resolve()
     planned_dest = (watch_root / decision.relative_dest).resolve()
+    if not is_under_watch_root(planned_dest, watch_root):
+        # Last line of defence: settings are cleaned when they load (dest.py), so
+        # this only trips on a hand-made decision. Never move a file out of the folder.
+        logging.warning("Not moving %s: %s is outside the watched folder", src.name, planned_dest)
+        return None
     final_dest, is_dup = resolve_destination(src, planned_dest, watch_root)
     if final_dest == src_resolved:
         return None

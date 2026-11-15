@@ -112,7 +112,14 @@ def main(argv: list[str] | None = None) -> int:
         recent = get_recent_file(data_dir=paths.data_dir)
         if not recent:
             return 1
-        pill = QuickSwitcherPill(args.dialog, recent)
+        cfg = load_config(paths)
+        pill = QuickSwitcherPill(
+            args.dialog,
+            recent,
+            hotkey_select=cfg.quick_switcher_hotkey,
+            hotkey_all=cfg.quick_switcher_hotkey_all,
+            hotkey_copy=cfg.quick_switcher_hotkey_copy,
+        )
         pill.run()
         return 0
     if args.quit:

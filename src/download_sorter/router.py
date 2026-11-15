@@ -8,6 +8,7 @@ import re
 from urllib.parse import urlparse
 
 from download_sorter.config import Config, Rule
+from download_sorter.dest import to_relative_dest
 
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
 
@@ -177,7 +178,7 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
         ok, detail = _evaluate_rule(rule, candidate)
         trace.append(RouteStep("User Rules", f"#{idx} {rule.name}", ok, detail))
         if ok:
-            dest_rel = Path(rule.destination) / candidate.filename
+            dest_rel = Path(to_relative_dest(rule.destination)) / candidate.filename
             return RouteDecision(
                 action="move",
                 relative_dest=dest_rel,
@@ -191,7 +192,7 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
     category = config.category_map.get(ext)
     if category:
         sub = config.type_subfolders.get(ext, "") if config.use_type_subfolders else ""
-        folder = Path(category) / sub if sub else Path(category)
+        folder = Path(to_relative_dest(str(Path(category) / sub) if sub else category))
         dest_rel = folder / candidate.filename
         detail = f"Extension '{ext}' -> '{folder}'"
         trace.append(RouteStep("Category Map", "Extension lookup", True, detail))
@@ -217,7 +218,7 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
             trace=trace,
         )
 
-    dest_rel = Path(config.default_folder) / candidate.filename
+    dest_rel = Path(to_relative_dest(config.default_folder)) / candidate.filename
     trace.append(RouteStep("Fallback", "Default folder", True, f"Routed to '{config.default_folder}'"))
     return RouteDecision(
         action="move",
