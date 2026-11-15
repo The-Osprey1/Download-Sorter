@@ -774,16 +774,6 @@ class MainWindow(QMainWindow):
         self.btn_walkthrough.clicked.connect(self.open_walkthrough)
         row.addWidget(self.btn_walkthrough)
 
-        self.btn_sort_tiers = InteractiveRibbonBtn(
-            "Sort Lower Tiers",
-            make_vector_icon("layers", "#F5F5F7", 14),
-        )
-        self.btn_sort_tiers.setToolTip(
-            "Re-sort files already inside Tier 1 & Tier 2 folders into their proper subfolders."
-        )
-        self.btn_sort_tiers.clicked.connect(self._on_sort_tiers_now)
-        row.addWidget(self.btn_sort_tiers)
-
         self.btn_sort_now = InteractiveRibbonBtn(
             "Clean Up Now",
             make_vector_icon("bolt", "#FFFFFF", 14),
@@ -891,10 +881,24 @@ class MainWindow(QMainWindow):
         self.lbl_sim_summary.setObjectName("MutedText")
         btn_sim = InteractiveRibbonBtn("Refresh Preview", make_vector_icon("refresh", "#F5F5F7", 14))
         btn_sim.clicked.connect(self._on_refresh_preview_clicked)
+        self.btn_sort_tiers = InteractiveRibbonBtn(
+            "Sort Lower Tiers",
+            make_vector_icon("layers", "#F5F5F7", 14),
+        )
+        self.btn_sort_tiers.setToolTip(
+            "Re-sort files already inside Tier 1 & Tier 2 folders into their proper subfolders."
+        )
+        self.btn_sort_tiers.clicked.connect(self._on_sort_tiers_now)
+        preview_actions = QWidget()
+        preview_actions_row = QHBoxLayout(preview_actions)
+        preview_actions_row.setContentsMargins(0, 0, 0, 0)
+        preview_actions_row.setSpacing(8)
+        preview_actions_row.addWidget(self.btn_sort_tiers)
+        preview_actions_row.addWidget(btn_sim)
         sim_card, sim_layout = _make_surface_card(
             "Downloads Folder Preview",
             self.lbl_sim_summary,
-            right_widget=btn_sim,
+            right_widget=preview_actions,
         )
 
         self.tbl_sim = QTableWidget(0, 4)
