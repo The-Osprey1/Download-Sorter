@@ -1088,11 +1088,24 @@ class MainWindow(QMainWindow):
         notif_row.addStretch(1)
         form.addRow("Notifications:", notif_row)
 
+        updates_row = QHBoxLayout()
+        updates_row.setSpacing(8)
         self.chk_check_updates = QCheckBox("Check for new versions once a day")
         self.chk_check_updates.setToolTip(
             "Asks GitHub which version is newest. Nothing about you or your files is sent."
         )
-        form.addRow("Updates:", self.chk_check_updates)
+        self.btn_check_updates = InteractiveRibbonBtn(
+            "Check for Updates Now",
+            make_vector_icon("refresh", "#F5F5F7", 14),
+        )
+        self.btn_check_updates.setToolTip(
+            "Check GitHub Releases right now for a newer version of Download Sorter."
+        )
+        self.btn_check_updates.clicked.connect(self._on_check_updates_now)
+        updates_row.addWidget(self.chk_check_updates)
+        updates_row.addWidget(self.btn_check_updates)
+        updates_row.addStretch(1)
+        form.addRow("Updates:", updates_row)
 
         qs_row = QHBoxLayout()
         qs_row.setSpacing(8)
@@ -1355,7 +1368,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Newer version available
     # ------------------------------------------------------------------
-    def check_for_updates(self, force: bool = False) -> None:
+    def _on_check_updates_now(self) -> None:
+        self.lbl_footer.setText("Checking GitHub for updates...")
+        self.check_for_updates(force=True, announce_up_to_date=True)
+
+    def check_for_updates(self, force: bool = False, *, announce_up_to_date: bool = False) -> None:
         """Ask, off the GUI thread, whether a newer version has been published.
 
         At most one request a day reaches GitHub (see update_check.check); calling
@@ -1367,6 +1384,8 @@ class MainWindow(QMainWindow):
         if not force and not update_check.is_enabled(enabled):
             return
         data_dir = self.service.paths.data_dir
+        if announce_up_to_date and hasattr(self, "btn_check_updates"):
+            self.btn_check_updates.setEnabled(False)
 
         def _work() -> dict[str, Any] | None:
             try:
@@ -1375,13 +1394,29 @@ class MainWindow(QMainWindow):
                 logging.debug("Could not tidy old update downloads", exc_info=True)
             return update_check.check(data_dir, enabled=enabled, force=force)
 
-        run_async(_work, self._on_update_checked, lambda _message: None, parent=self)
+        def _done(release: dict[str, Any] | None) -> None:
+            if hasattr(self, "btn_check_updates"):
+                self.btn_check_updates.setEnabled(True)
+            self._on_update_checked(release, announce_up_to_date=announce_up_to_date)
 
-    def _on_update_checked(self, release: dict[str, Any] | None) -> None:
-        if not release or self._update_downloading:
+        def _failed(_message: str) -> None:
+            if hasattr(self, "btn_check_updates"):
+                self.btn_check_updates.setEnabled(True)
+            self._on_update_checked(None, announce_up_to_date=announce_up_to_date)
+
+        run_async(_work, _done, _failed, parent=self)
+
+    def _on_update_checked(
+        self, release: dict[str, Any] | None, *, announce_up_to_date: bool = False
+    ) -> None:
+        if release and not self._update_downloading:
+            self._update_release = dict(release)
+            self._offer_update()
             return
-        self._update_release = dict(release)
-        self._offer_update()
+        if not release and announce_up_to_date:
+            msg = f"You're on the latest version (v{update_check.__version__})."
+            self.banner.show_message(msg, kind="success")
+            self.lbl_footer.setText(msg)
 
     def _offer_update(self) -> None:
         release = self._update_release or {}

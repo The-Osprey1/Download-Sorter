@@ -416,3 +416,20 @@ def test_window_setting_switches_the_daily_check_off(window, monkeypatch: pytest
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)  # behave like the real app
     monkeypatch.setattr(update_check, "check", lambda *a, **k: pytest.fail("checked although switched off"))
     window.check_for_updates()
+
+
+def test_window_manual_check_for_updates_button_reports_up_to_date(
+    window, monkeypatch: pytest.MonkeyPatch  # noqa: ANN001
+) -> None:
+    assert hasattr(window, "btn_check_updates")
+    monkeypatch.setattr(
+        update_check,
+        "fetch_latest",
+        lambda *a, **k: {
+            "version": "v3.0.0",
+            "url": "https://github.com/The-Osprey1/Download-Sorter/releases/tag/v3.0.0",
+        },
+    )
+    window.btn_check_updates.click()
+    assert f"You're on the latest version (v{update_check.__version__})." in window.banner._text.text()
+    assert window.btn_check_updates.isEnabled() is True
