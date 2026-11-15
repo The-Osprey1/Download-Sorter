@@ -774,6 +774,16 @@ class MainWindow(QMainWindow):
         self.btn_walkthrough.clicked.connect(self.open_walkthrough)
         row.addWidget(self.btn_walkthrough)
 
+        self.btn_sort_tiers = InteractiveRibbonBtn(
+            "Sort Lower Tiers",
+            make_vector_icon("layers", "#F5F5F7", 14),
+        )
+        self.btn_sort_tiers.setToolTip(
+            "Re-sort files already inside Tier 1 & Tier 2 folders into their proper subfolders."
+        )
+        self.btn_sort_tiers.clicked.connect(self._on_sort_tiers_now)
+        row.addWidget(self.btn_sort_tiers)
+
         self.btn_sort_now = InteractiveRibbonBtn(
             "Clean Up Now",
             make_vector_icon("bolt", "#FFFFFF", 14),
@@ -1745,6 +1755,30 @@ class MainWindow(QMainWindow):
             self.lbl_footer.setText(
                 f"Everything looks clean: 0 moved ({held_n} .3MF held for 3D printing, {res['left']} left in Downloads)."
             )
+
+    def _on_sort_tiers_now(self) -> None:
+        self._run_service_action(
+            self.service.sort_managed_tiers_now,
+            lambda res: self.refresh_all(then=lambda: self._after_sort_tiers_now(res)),
+            busy_text="Sorting lower tiers...",
+        )
+
+    def _after_sort_tiers_now(self, res: dict[str, Any]) -> None:
+        moved_n = len(res["moved"])
+        if moved_n:
+            self.header_mascot.celebrate()
+            flash_rows(
+                self.tbl_activity,
+                list(range(min(moved_n, self.tbl_activity.rowCount()))),
+                "#30D158",
+            )
+            msg = f"Sorted lower tiers: moved {moved_n} file(s) into their target folders."
+            self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
+            self.lbl_footer.setText(msg)
+        else:
+            msg = "Lower tiers are already organized — nothing needed moving."
+            self.banner.show_message(msg, kind="info")
+            self.lbl_footer.setText(msg)
 
     def _on_file_held_now(self) -> None:
         self._run_service_action(

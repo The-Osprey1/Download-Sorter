@@ -240,6 +240,44 @@ class SorterService:
             }
         return self._process_paths(held_files, settle_seconds=0.0, bypass_3mf_hold=True)
 
+    def sort_managed_tiers_now(self, *, settle_seconds: float = 0.0) -> dict[str, Any]:
+        """Re-sort top-level and managed Tier 1/Tier 2+ folders into their target subfolders."""
+        with self._lock:
+            cfg = self.config
+            watch_dir = cfg.resolved_watch_folder(self.paths)
+        if not watch_dir.is_dir():
+            return {"batch_id": "", "moved": []}
+
+        plan = self.preview_architecture_shift(cfg, root=watch_dir)
+        batch_id = f"tiers-{uuid.uuid4().hex[:8]}"
+        moved: list[dict[str, Any]] = []
+        for item in plan["moves_planned"]:
+            try:
+                rec = execute_move(
+                    item["src"],
+                    item["decision"],
+                    batch_id=batch_id,
+                    db=self.db,
+                    watch_root=watch_dir,
+                    settle_seconds=settle_seconds,
+                    source_url=str(item.get("source_url") or ""),
+                )
+            except OSError as exc:
+                logging.warning("Tier sort skipped %s: %s", item["src"], exc)
+                continue
+            if rec is not None:
+                moved.append(rec)
+
+        if moved:
+            self.db.checkpoint()
+            if self.on_moves_completed is not None:
+                try:
+                    self.on_moves_completed(batch_id, moved)
+                except Exception:
+                    logging.exception("Error in on_moves_completed callback")
+
+        return {"batch_id": batch_id if moved else "", "moved": moved}
+
     @staticmethod
     def _managed_root_names(*configs: Config) -> set[str]:
         roots: set[str] = set()

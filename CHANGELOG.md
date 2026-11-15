@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-11-15
+
+### Added
+- **Sort Lower Tiers button (`MainWindow.btn_sort_tiers`)**: Added a **Sort Lower Tiers** button in the top toolbar (`SorterService.sort_managed_tiers_now()`) to re-sort misplaced files already inside managed Tier 1 / Tier 2+ folders into their proper subfolders with full 1-click Undo support.
+
 ## [3.0.1] - 2026-11-15
 
 ### Added
