@@ -95,7 +95,9 @@ All the source code is in this repository, and the installer is built from it by
 
 Windows 11 includes **Smart App Control**, which is stricter than SmartScreen and has no **Run anyway** button. It checks every program and library file as it loads and blocks any unsigned file that Microsoft does not yet widely recognize.
 
-Until Download Sorter is code-signed, the only way to run it on a Windows 11 PC with Smart App Control enabled is to turn Smart App Control **Off** (Windows Security → **App & browser control** → **Smart App Control settings**). There is no per-app bypass, and Windows does not allow turning Smart App Control back on without resetting Windows.
+Until Download Sorter is code-signed, the only way to run it on a Windows 11 PC with Smart App Control enabled is to turn Smart App Control **Off** (Windows Security → **App & browser control** → **Smart App Control settings**). There is no per-app bypass.
+
+Since the April 2026 cumulative update (KB5083769), Smart App Control can be switched on and off in **Windows Security → App & browser control** on current builds. Microsoft has confirmed that the October 2026 update (KB5127648) greys out that switch for some people, with no fix date yet, so turning it off may be hard to undo for now.
 
 ## Privacy
 

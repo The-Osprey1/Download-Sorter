@@ -200,10 +200,10 @@ def check_signatures(
     require_signed: bool = False,
     pe_runner=None,
 ) -> tuple[list[str], str]:
-    """Inspect Authenticode signatures on built PE binaries and the setup file.
+    """Inspect embedded Authenticode signatures on built binaries, scripts, and the setup file.
 
     Returns ``(errors, summary_line)``. When ``require_signed`` is False, unsigned
-    files are reported in the summary without failing preflight.
+    or catalog-only files are reported in the summary without failing preflight.
     """
     import pe_signing
 
@@ -228,17 +228,20 @@ def check_signatures(
     unsigned_all = [*unsigned_app, *unsigned_setup]
 
     summary = (
-        f"signatures: {signed_count}/{len(all_infos)} PE file(s) validly signed, "
-        f"{len(unsigned_all)} unsigned"
+        f"signatures: {signed_count}/{len(all_infos)} signable file(s) with embedded Authenticode, "
+        f"{len(unsigned_all)} unsigned/non-embedded"
     )
     if not require_signed:
         return [], summary
 
     errors: list[str] = []
     for info in unsigned_app:
-        errors.append(f"unsigned program/library file: dist/DownloadSorter/{info.rel_path} ({info.status})")
+        kind = "script" if info.path.suffix.lower() == ".ps1" else "program/library file"
+        detail = f"{info.status}, SignatureType={info.signature_type}" if info.signature_type else info.status
+        errors.append(f"unsigned {kind}: dist/DownloadSorter/{info.rel_path} ({detail})")
     for info in unsigned_setup:
-        errors.append(f"unsigned setup file: {info.path.name} ({info.status})")
+        detail = f"{info.status}, SignatureType={info.signature_type}" if info.signature_type else info.status
+        errors.append(f"unsigned setup file: {info.path.name} ({detail})")
     return errors, summary
 
 
@@ -306,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--require-signed",
         action="store_true",
-        help="Fail artifact checks if any .exe/.dll/.pyd in dist/DownloadSorter/ or the setup file is unsigned.",
+        help="Fail artifact checks if any .exe/.dll/.pyd/.ps1 in dist/DownloadSorter/ or the setup file lacks a valid embedded Authenticode signature.",
     )
     args = parser.parse_args(argv)
 

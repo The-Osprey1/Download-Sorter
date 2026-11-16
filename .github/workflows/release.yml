@@ -89,13 +89,13 @@ jobs:
         run: |
           python build_release.py
 
-      # Signed build (two-stage): build app folder -> sign unsigned PE binaries -> package ZIP/setup -> sign setup.
+      # Signed build (two-stage): build app folder -> sign unsigned binaries/scripts -> package ZIP/setup -> sign setup.
       - name: Build app stage
         if: env.SIGNPATH_ORGANIZATION_ID != ''
         run: |
           python build_release.py --stage app
 
-      - name: Stage unsigned app executables and libraries
+      - name: Stage unsigned app executables, libraries, and scripts
         id: stage_unsigned
         if: env.SIGNPATH_ORGANIZATION_ID != ''
         run: |
@@ -110,7 +110,7 @@ jobs:
           path: dist/unsigned-app/
           if-no-files-found: error
 
-      - name: Sign app executables and libraries with SignPath
+      - name: Sign app executables, libraries, and scripts with SignPath
         if: env.SIGNPATH_ORGANIZATION_ID != '' && steps.stage_unsigned.outputs.count != '0'
         uses: SignPath/github-action-submit-signing-request@v3
         with:

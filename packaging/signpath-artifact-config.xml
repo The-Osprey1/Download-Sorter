@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  SignPath Artifact Configuration for the Download Sorter app binaries ZIP.
-  In release.yml, `pe_signing.py stage` collects only unsigned .exe, .dll, and .pyd
-  files from dist/DownloadSorter/ (preserving relative paths and leaving already-signed
-  Microsoft / Python / Qt files untouched) before uploading the artifact to SignPath.
+  SignPath Artifact Configuration for the Download Sorter app binaries and scripts ZIP.
+  In release.yml, `pe_signing.py stage` collects only .exe, .dll, .pyd, and .ps1 files
+  without an embedded Valid Authenticode signature from dist/DownloadSorter/ (preserving
+  relative paths and leaving publisher-signed files untouched) before uploading to SignPath.
 -->
 <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
   <zip-file>
@@ -15,5 +15,11 @@
         <authenticode-sign />
       </for-each>
     </pe-file-set>
+    <powershell-file-set>
+      <include path="**/*.ps1" min-matches="0" max-matches="unbounded" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </powershell-file-set>
   </zip-file>
 </artifact-configuration>

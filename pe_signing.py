@@ -1,8 +1,9 @@
-"""Inspect, stage, and restore Authenticode signatures for Download Sorter release binaries."""
+"""Inspect, stage, and restore Authenticode signatures for Download Sorter release files."""
 
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import json
@@ -10,39 +11,51 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import tempfile
 
 PE_EXTENSIONS = (".exe", ".dll", ".pyd")
+SCRIPT_EXTENSIONS = (".ps1",)
+SIGNABLE_EXTENSIONS = PE_EXTENSIONS + SCRIPT_EXTENSIONS
 _SUBPROCESS_TIMEOUT = 120
 
 
 @dataclass(frozen=True)
 class SignatureInfo:
-    """Signature inspection result for a single Windows PE binary."""
+    """Signature inspection result for a single Windows executable, library, or script."""
 
     path: Path
     rel_path: str
     status: str
+    signature_type: str = ""
     signer: str = ""
 
     @property
     def is_valid(self) -> bool:
-        return self.status == "Valid"
+        """True only for a valid embedded Authenticode signature (catalog-only is False)."""
+        return self.status == "Valid" and self.signature_type == "Authenticode"
 
 
-def find_pe_files(root_dir: Path) -> list[Path]:
-    """Return all ``.exe``, ``.dll``, and ``.pyd`` files under ``root_dir``, deterministically sorted."""
+def find_signable_files(
+    root_dir: Path,
+    *,
+    extensions: tuple[str, ...] = SIGNABLE_EXTENSIONS,
+) -> list[Path]:
+    """Return all signable release files (``.exe``, ``.dll``, ``.pyd``, ``.ps1``) sorted by relative path."""
     root = Path(root_dir)
     if not root.is_dir():
         return []
     found = [
         p
         for p in root.rglob("*")
-        if p.is_file() and p.suffix.lower() in PE_EXTENSIONS
+        if p.is_file() and p.suffix.lower() in extensions
     ]
     found.sort(key=lambda p: p.relative_to(root).as_posix().lower())
     return found
+
+
+def find_pe_files(root_dir: Path) -> list[Path]:
+    """Return only PE binary files (``.exe``, ``.dll``, ``.pyd``) under ``root_dir``."""
+    return find_signable_files(root_dir, extensions=PE_EXTENSIONS)
 
 
 def _find_powershell() -> str:
@@ -52,11 +65,12 @@ def _find_powershell() -> str:
 def _run_authenticode_query(
     files: Sequence[Path],
     *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> list[dict[str, str]]:
     """Query ``Get-AuthenticodeSignature`` for ``files`` in a single PowerShell call."""
     if not files:
         return []
+    run_cmd = runner or subprocess.run
 
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -76,13 +90,18 @@ def _run_authenticode_query(
         "$p = [string]$_; "
         "$sig = Get-AuthenticodeSignature -LiteralPath $p; "
         "$subj = if ($sig.SignerCertificate) { [string]$sig.SignerCertificate.Subject } else { '' }; "
-        "[PSCustomObject]@{ path = $p; status = [string]$sig.Status; signer = $subj } "
+        "[PSCustomObject]@{ "
+        "path = $p; "
+        "status = [string]$sig.Status; "
+        "signature_type = [string]$sig.SignatureType; "
+        "signer = $subj "
+        "} "
         "}); "
         "$items | ConvertTo-Json -Compress"
     )
 
     try:
-        res = runner(
+        res = run_cmd(
             [_find_powershell(), "-NoProfile", "-NonInteractive", "-Command", ps_script],
             capture_output=True,
             text=True,
@@ -112,11 +131,11 @@ def inspect_pe_signatures(
     root_dir: Path,
     *,
     paths: Sequence[Path] | None = None,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> list[SignatureInfo]:
-    """Return signature status for each ``.exe``, ``.dll``, and ``.pyd`` under ``root_dir``."""
+    """Return signature status for each signable file (``.exe``, ``.dll``, ``.pyd``, ``.ps1``) under ``root_dir``."""
     root = Path(root_dir)
-    targets = [Path(p) for p in paths] if paths is not None else find_pe_files(root)
+    targets = [Path(p) for p in paths] if paths is not None else find_signable_files(root)
     if not targets:
         return []
 
@@ -141,6 +160,7 @@ def inspect_pe_signatures(
                 path=path,
                 rel_path=rel,
                 status=str(rec.get("status") or "UnknownError"),
+                signature_type=str(rec.get("signature_type") or ""),
                 signer=str(rec.get("signer") or ""),
             )
         )
@@ -150,18 +170,18 @@ def inspect_pe_signatures(
 def list_unsigned_files(
     root_dir: Path,
     *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> list[SignatureInfo]:
-    """Return every PE binary under ``root_dir`` without a ``Valid`` Authenticode signature."""
+    """Return every signable file under ``root_dir`` without a valid embedded Authenticode signature."""
     return [info for info in inspect_pe_signatures(root_dir, runner=runner) if not info.is_valid]
 
 
 def partition_pe_signatures(
     root_dir: Path,
     *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> tuple[list[SignatureInfo], list[SignatureInfo]]:
-    """Split PE binaries under ``root_dir`` into ``(signed, unsigned)`` lists."""
+    """Split signable files under ``root_dir`` into ``(signed, unsigned)`` lists."""
     all_info = inspect_pe_signatures(root_dir, runner=runner)
     signed = [info for info in all_info if info.is_valid]
     unsigned = [info for info in all_info if not info.is_valid]
@@ -172,9 +192,9 @@ def stage_unsigned_files(
     dist_app_dir: Path,
     stage_dir: Path,
     *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> tuple[list[SignatureInfo], list[SignatureInfo]]:
-    """Copy only unsigned PE files from ``dist_app_dir`` into ``stage_dir``, keeping relative paths."""
+    """Copy only unsigned/catalog-only files from ``dist_app_dir`` into ``stage_dir``, keeping relative paths."""
     src_root = Path(dist_app_dir)
     dst_root = Path(stage_dir)
     if not src_root.is_dir():
@@ -194,7 +214,7 @@ def stage_unsigned_files(
 
 
 def restore_signed_files(signed_dir: Path, dist_app_dir: Path) -> list[str]:
-    """Copy signed PE files from ``signed_dir`` back into ``dist_app_dir`` at matching paths."""
+    """Copy signed files from ``signed_dir`` back into ``dist_app_dir`` at matching paths."""
     src_root = Path(signed_dir)
     dst_root = Path(dist_app_dir)
     if not src_root.is_dir():
@@ -203,7 +223,7 @@ def restore_signed_files(signed_dir: Path, dist_app_dir: Path) -> list[str]:
         raise FileNotFoundError(f"Target app directory does not exist: {dst_root}")
 
     restored: list[str] = []
-    for src_file in find_pe_files(src_root):
+    for src_file in find_signable_files(src_root):
         rel = src_file.relative_to(src_root)
         dest = (dst_root / rel).resolve()
         # Guard against unexpected traversal paths.
@@ -223,20 +243,28 @@ def _write_github_output(count: int) -> None:
         fh.write(f"count={count}\n")
 
 
+def _format_sig_reason(info: SignatureInfo) -> str:
+    if info.signature_type and info.signature_type != "None":
+        return f"{info.status}, SignatureType={info.signature_type}"
+    return info.status
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Inspect and stage unsigned Download Sorter PE files.")
+    parser = argparse.ArgumentParser(
+        description="Inspect and stage unsigned Download Sorter binaries (.exe/.dll/.pyd) and scripts (.ps1)."
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_list = sub.add_parser("list", help="List unsigned .exe/.dll/.pyd files under a directory.")
+    p_list = sub.add_parser("list", help="List signed and unsigned files under a directory.")
     p_list.add_argument("directory", nargs="?", type=Path, default=Path("dist") / "DownloadSorter")
-    p_list.add_argument("--json", action="store_true", help="Print full signature summary as JSON.")
+    p_list.add_argument("--json", action="store_true", help="Print full signature and signer details as JSON.")
 
-    p_stage = sub.add_parser("stage", help="Copy unsigned PE files to a staging folder for signing.")
+    p_stage = sub.add_parser("stage", help="Copy unsigned/catalog-only files to a staging folder for signing.")
     p_stage.add_argument("dist_dir", nargs="?", type=Path, default=Path("dist") / "DownloadSorter")
     p_stage.add_argument("stage_dir", nargs="?", type=Path, default=Path("dist") / "unsigned-app")
     p_stage.add_argument("--github-output", action="store_true", help="Write count=<n> to GITHUB_OUTPUT.")
 
-    p_restore = sub.add_parser("restore", help="Copy signed PE files back into the app folder.")
+    p_restore = sub.add_parser("restore", help="Copy signed files back into the app folder.")
     p_restore.add_argument("signed_dir", type=Path)
     p_restore.add_argument("dist_dir", nargs="?", type=Path, default=Path("dist") / "DownloadSorter")
 
@@ -244,38 +272,64 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "list":
         signed, unsigned = partition_pe_signatures(args.directory)
+        signer_counts = dict(sorted(Counter(s.signer or "(unknown)" for s in signed).items()))
         if args.json:
             payload = {
                 "directory": str(args.directory),
                 "signed_count": len(signed),
                 "unsigned_count": len(unsigned),
+                "signers": signer_counts,
+                "signed": [
+                    {
+                        "rel_path": s.rel_path,
+                        "status": s.status,
+                        "signature_type": s.signature_type,
+                        "signer": s.signer,
+                    }
+                    for s in signed
+                ],
                 "unsigned": [
-                    {"rel_path": u.rel_path, "status": u.status, "path": str(u.path)}
+                    {
+                        "rel_path": u.rel_path,
+                        "status": u.status,
+                        "signature_type": u.signature_type,
+                        "signer": u.signer,
+                        "path": str(u.path),
+                    }
                     for u in unsigned
                 ],
             }
             print(json.dumps(payload, indent=2))
         else:
-            print(f"Signed: {len(signed)}, Unsigned: {len(unsigned)} under {args.directory}")
-            for u in unsigned:
-                print(f"  {u.rel_path} ({u.status})")
+            print(
+                f"Signed (embedded Authenticode): {len(signed)}, "
+                f"Needs signature: {len(unsigned)} under {args.directory}"
+            )
+            if signer_counts:
+                print("Signers:")
+                for signer, count in signer_counts.items():
+                    print(f"  [{count}] {signer}")
+            if unsigned:
+                print("Files needing signature:")
+                for u in unsigned:
+                    print(f"  {u.rel_path} ({_format_sig_reason(u)})")
         return 0
 
     if args.command == "stage":
         signed, unsigned = stage_unsigned_files(args.dist_dir, args.stage_dir)
         print(
-            f"Staged {len(unsigned)} unsigned PE file(s) to {args.stage_dir} "
-            f"(kept {len(signed)} publisher-signed file(s) untouched)."
+            f"Staged {len(unsigned)} file(s) needing signature to {args.stage_dir} "
+            f"(kept {len(signed)} embedded-Authenticode file(s) untouched)."
         )
         for u in unsigned:
-            print(f"  + {u.rel_path} ({u.status})")
+            print(f"  + {u.rel_path} ({_format_sig_reason(u)})")
         if args.github_output:
             _write_github_output(len(unsigned))
         return 0
 
     if args.command == "restore":
         restored = restore_signed_files(args.signed_dir, args.dist_dir)
-        print(f"Restored {len(restored)} signed PE file(s) into {args.dist_dir}:")
+        print(f"Restored {len(restored)} signed file(s) into {args.dist_dir}:")
         for rel in restored:
             print(f"  <- {rel}")
         return 0

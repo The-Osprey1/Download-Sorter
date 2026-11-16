@@ -1,4 +1,4 @@
-"""Tests for two-stage release packaging, unsigned PE detection, and signing workflow checks."""
+"""Tests for two-stage release packaging, unsigned file detection, and signing workflow checks."""
 
 from __future__ import annotations
 
@@ -27,11 +27,13 @@ def _load_root_module(name: str):
     return mod
 
 
-def _fake_runner(status_by_name: dict[str, tuple[str, str]]):
-    """Build a fake subprocess runner mimicking PowerShell Get-AuthenticodeSignature JSON."""
+def _fake_runner(sig_by_name: dict[str, tuple[str, str, str]]):
+    """Build a fake subprocess runner mimicking PowerShell Get-AuthenticodeSignature JSON.
+
+    Each entry maps basename -> ``(status, signature_type, signer_subject)``.
+    """
 
     def _run(cmd, **kwargs):
-        # Extract temp list file path passed to Get-Content -LiteralPath '...'
         ps_cmd = cmd[-1]
         marker = "Get-Content -LiteralPath '"
         start = ps_cmd.index(marker) + len(marker)
@@ -41,55 +43,74 @@ def _fake_runner(status_by_name: dict[str, tuple[str, str]]):
         records = []
         for p_str in paths:
             name = Path(p_str).name
-            status, signer = status_by_name.get(name, ("NotSigned", ""))
-            records.append({"path": p_str, "status": status, "signer": signer})
-        # Mirror PowerShell 5.1 behavior: single item serializes as dict unless wrapped in @(...)
+            status, sig_type, signer = sig_by_name.get(name, ("NotSigned", "None", ""))
+            records.append(
+                {
+                    "path": p_str,
+                    "status": status,
+                    "signature_type": sig_type,
+                    "signer": signer,
+                }
+            )
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(records), stderr="")
 
     return _run
 
 
-def test_find_pe_files_and_inspect_with_mock_runner(tmp_path: Path) -> None:
+def test_find_signable_files_and_require_embedded_authenticode(tmp_path: Path) -> None:
     pe_signing = _load_root_module("pe_signing")
 
     app_dir = tmp_path / "DownloadSorter"
     (app_dir / "_internal" / "PySide6").mkdir(parents=True)
     (app_dir / "DownloadSorter.exe").write_bytes(b"exe")
     (app_dir / "DownloadSorter-cli.exe").write_bytes(b"cli")
+    (app_dir / "uninstall.ps1").write_text("Write-Host 'uninstall'", encoding="utf-8")
     (app_dir / "_internal" / "python312.dll").write_bytes(b"dll")
     (app_dir / "_internal" / "PySide6" / "QtCore.pyd").write_bytes(b"pyd")
+    (app_dir / "_internal" / "PySide6" / "MSVCP140.dll").write_bytes(b"catalog-dll")
     (app_dir / "_internal" / "custom.pyd").write_bytes(b"pyd")
     (app_dir / "README.md").write_text("ignore", encoding="utf-8")
 
-    found = pe_signing.find_pe_files(app_dir)
+    found = pe_signing.find_signable_files(app_dir)
     assert [p.relative_to(app_dir).as_posix() for p in found] == [
         "_internal/custom.pyd",
+        "_internal/PySide6/MSVCP140.dll",
         "_internal/PySide6/QtCore.pyd",
         "_internal/python312.dll",
         "DownloadSorter-cli.exe",
         "DownloadSorter.exe",
+        "uninstall.ps1",
     ]
 
+    # Catalog-only signature (Valid + Catalog) must NOT count as signed!
     runner = _fake_runner(
         {
-            "python312.dll": ("Valid", "CN=Python Software Foundation"),
-            "QtCore.pyd": ("Valid", "CN=The QT Company Oy"),
-            "custom.pyd": ("NotSigned", ""),
-            "DownloadSorter.exe": ("NotSigned", ""),
-            "DownloadSorter-cli.exe": ("HashMismatch", ""),
+            "python312.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
+            "QtCore.pyd": ("Valid", "Authenticode", "CN=The QT Company Oy"),
+            "MSVCP140.dll": ("Valid", "Catalog", "CN=Microsoft Windows"),
+            "custom.pyd": ("NotSigned", "None", ""),
+            "DownloadSorter.exe": ("NotSigned", "None", ""),
+            "DownloadSorter-cli.exe": ("HashMismatch", "Authenticode", "CN=Stale"),
+            "uninstall.ps1": ("NotSigned", "None", ""),
         }
     )
 
     signed, unsigned = pe_signing.partition_pe_signatures(app_dir, runner=runner)
     assert [s.rel_path for s in signed] == ["_internal/PySide6/QtCore.pyd", "_internal/python312.dll"]
-    assert [(u.rel_path, u.status) for u in unsigned] == [
-        ("_internal/custom.pyd", "NotSigned"),
-        ("DownloadSorter-cli.exe", "HashMismatch"),
-        ("DownloadSorter.exe", "NotSigned"),
+    assert [(u.rel_path, u.status, u.signature_type) for u in unsigned] == [
+        ("_internal/custom.pyd", "NotSigned", "None"),
+        ("_internal/PySide6/MSVCP140.dll", "Valid", "Catalog"),
+        ("DownloadSorter-cli.exe", "HashMismatch", "Authenticode"),
+        ("DownloadSorter.exe", "NotSigned", "None"),
+        ("uninstall.ps1", "NotSigned", "None"),
     ]
 
 
-def test_inspect_pe_signatures_handles_single_dict_and_empty_dir(tmp_path: Path) -> None:
+def test_list_json_includes_signers_and_handles_single_dict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     pe_signing = _load_root_module("pe_signing")
 
     empty_dir = tmp_path / "empty"
@@ -102,13 +123,52 @@ def test_inspect_pe_signatures_handles_single_dict_and_empty_dir(tmp_path: Path)
     exe.write_bytes(b"mz")
 
     def _single_dict_runner(cmd, **kwargs):
-        payload = {"path": {"value": str(exe)}, "status": "Valid", "signer": "CN=Test"}
+        payload = {
+            "path": {"value": str(exe)},
+            "status": "Valid",
+            "signature_type": "Authenticode",
+            "signer": "CN=Test Publisher",
+        }
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
     infos = pe_signing.inspect_pe_signatures(single_dir, runner=_single_dict_runner)
     assert len(infos) == 1
     assert infos[0].is_valid
-    assert infos[0].signer == "CN=Test"
+    assert infos[0].signature_type == "Authenticode"
+    assert infos[0].signer == "CN=Test Publisher"
+
+    # Also test `pe_signing.py list --json` CLI payload includes each signed file's signer
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "a.dll").write_bytes(b"a")
+    (app_dir / "b.dll").write_bytes(b"b")
+    (app_dir / "u.ps1").write_text("Write-Host 'hi'", encoding="utf-8")
+
+    monkeypatch.setattr(
+        pe_signing.subprocess,
+        "run",
+        _fake_runner(
+            {
+                "a.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
+                "b.dll": ("Valid", "Catalog", "CN=Microsoft Windows"),
+                "u.ps1": ("NotSigned", "None", ""),
+            }
+        ),
+    )
+    assert pe_signing.main(["list", str(app_dir), "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["signed_count"] == 1
+    assert out["unsigned_count"] == 2
+    assert out["signers"] == {"CN=Python Software Foundation": 1}
+    assert out["signed"] == [
+        {
+            "rel_path": "a.dll",
+            "status": "Valid",
+            "signature_type": "Authenticode",
+            "signer": "CN=Python Software Foundation",
+        }
+    ]
+    assert [u["rel_path"] for u in out["unsigned"]] == ["b.dll", "u.ps1"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Authenticode relies on Windows PowerShell")
@@ -117,60 +177,87 @@ def test_real_windows_authenticode_signature_check(tmp_path: Path) -> None:
 
     unsigned_exe = tmp_path / "unsigned_dummy.exe"
     unsigned_exe.write_bytes(b"MZ" + b"\x00" * 128)
+    unsigned_ps1 = tmp_path / "uninstall.ps1"
+    unsigned_ps1.write_text("Write-Output 'test'", encoding="utf-8")
+    # kernel32.dll is catalog-signed on Windows (Valid + Catalog -> is_valid is False!)
     win_dll = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "kernel32.dll"
+    # Python executable / stdlib DLLs carry embedded Authenticode signatures
+    py_exe = Path(sys.executable).resolve()
 
-    infos = pe_signing.inspect_pe_signatures(tmp_path, paths=[unsigned_exe, win_dll])
-    assert len(infos) == 2
+    infos = pe_signing.inspect_pe_signatures(tmp_path, paths=[unsigned_exe, unsigned_ps1, win_dll, py_exe])
+    assert len(infos) == 4
     assert infos[0].path == unsigned_exe and not infos[0].is_valid
-    assert infos[1].path == win_dll and infos[1].is_valid
+    assert infos[1].path == unsigned_ps1 and not infos[1].is_valid
+    assert infos[2].path == win_dll and infos[2].status == "Valid" and infos[2].signature_type == "Catalog"
+    assert not infos[2].is_valid
+    assert infos[3].path == py_exe and infos[3].status == "Valid"
 
 
-def test_stage_and_restore_preserves_signed_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stage_and_restore_includes_ps1_and_catalog_dlls_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pe_signing = _load_root_module("pe_signing")
 
     app_dir = tmp_path / "DownloadSorter"
     (app_dir / "_internal").mkdir(parents=True)
     pub_dll = app_dir / "_internal" / "python312.dll"
-    pub_dll.write_bytes(b"ORIGINAL_SIGNED_DLL")
+    pub_dll.write_bytes(b"ORIGINAL_EMBEDDED_DLL")
+    cat_dll = app_dir / "_internal" / "MSVCP140.dll"
+    cat_dll.write_bytes(b"CATALOG_ONLY_DLL")
     app_exe = app_dir / "DownloadSorter.exe"
     app_exe.write_bytes(b"UNSIGNED_EXE")
     sub_pyd = app_dir / "_internal" / "extra.pyd"
     sub_pyd.write_bytes(b"UNSIGNED_PYD")
+    uninstall_ps1 = app_dir / "uninstall.ps1"
+    uninstall_ps1.write_text("Write-Output 'bye'", encoding="utf-8")
 
     runner = _fake_runner(
         {
-            "python312.dll": ("Valid", "CN=Python Software Foundation"),
-            "DownloadSorter.exe": ("NotSigned", ""),
-            "extra.pyd": ("NotSigned", ""),
+            "python312.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
+            "MSVCP140.dll": ("Valid", "Catalog", "CN=Microsoft Windows"),
+            "DownloadSorter.exe": ("NotSigned", "None", ""),
+            "extra.pyd": ("NotSigned", "None", ""),
+            "uninstall.ps1": ("NotSigned", "None", ""),
         }
     )
 
     stage_dir = tmp_path / "unsigned-app"
     signed, unsigned = pe_signing.stage_unsigned_files(app_dir, stage_dir, runner=runner)
     assert len(signed) == 1
-    assert len(unsigned) == 2
+    assert len(unsigned) == 4
     assert not (stage_dir / "_internal" / "python312.dll").exists()
+    assert (stage_dir / "_internal" / "MSVCP140.dll").read_bytes() == b"CATALOG_ONLY_DLL"
     assert (stage_dir / "DownloadSorter.exe").read_bytes() == b"UNSIGNED_EXE"
     assert (stage_dir / "_internal" / "extra.pyd").read_bytes() == b"UNSIGNED_PYD"
+    assert (stage_dir / "uninstall.ps1").read_text(encoding="utf-8") == "Write-Output 'bye'"
 
-    # Simulate SignPath returning signed versions of only the staged files
+    # Simulate SignPath returning signed versions of staged files
     signed_dir = tmp_path / "signed-app"
     shutil.copytree(stage_dir, signed_dir)
     (signed_dir / "DownloadSorter.exe").write_bytes(b"SIGNED_EXE")
     (signed_dir / "_internal" / "extra.pyd").write_bytes(b"SIGNED_PYD")
+    (signed_dir / "_internal" / "MSVCP140.dll").write_bytes(b"SIGNED_RUNTIME_DLL")
+    (signed_dir / "uninstall.ps1").write_text("Write-Output 'bye'\n# SIG # signed", encoding="utf-8")
 
     restored = pe_signing.restore_signed_files(signed_dir, app_dir)
-    assert sorted(restored) == ["DownloadSorter.exe", "_internal/extra.pyd"]
+    assert sorted(restored) == [
+        "DownloadSorter.exe",
+        "_internal/MSVCP140.dll",
+        "_internal/extra.pyd",
+        "uninstall.ps1",
+    ]
     assert app_exe.read_bytes() == b"SIGNED_EXE"
     assert sub_pyd.read_bytes() == b"SIGNED_PYD"
-    # Publisher-signed file must remain untouched
-    assert pub_dll.read_bytes() == b"ORIGINAL_SIGNED_DLL"
+    assert cat_dll.read_bytes() == b"SIGNED_RUNTIME_DLL"
+    assert "# SIG # signed" in uninstall_ps1.read_text(encoding="utf-8")
+    # Embedded publisher-signed file must remain untouched
+    assert pub_dll.read_bytes() == b"ORIGINAL_EMBEDDED_DLL"
 
-    # Verify GITHUB_OUTPUT emission
     gh_out = tmp_path / "gh_output.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(gh_out))
     pe_signing._write_github_output(len(unsigned))
-    assert gh_out.read_text(encoding="utf-8") == "count=2\n"
+    assert gh_out.read_text(encoding="utf-8") == "count=4\n"
 
 
 def test_build_release_stage_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,7 +269,6 @@ def test_build_release_stage_split(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(build_release, "RELEASE_DIR", release_dir)
     monkeypatch.setattr(build_release.installer_builder, "generate_app_icon", lambda p: p)
 
-    # Package stage alone must fail clearly before app stage exists
     assert build_release.build_standalone(stage="package") == 1
 
     def _fake_pyinstaller(cmd, cwd=None):
@@ -197,24 +283,21 @@ def test_build_release_stage_split(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("version_resource.write", lambda *a, **k: None)
 
     def _fake_build_setup(*, dist_dir, version, output_exe, use_inno=False):
-        # Prove package stage reads the latest contents of dist/DownloadSorter
         marker = (Path(dist_dir) / "DownloadSorter.exe").read_bytes()
         Path(output_exe).write_bytes(b"SETUP|" + marker)
         return Path(output_exe)
 
     monkeypatch.setattr(build_release.installer_builder, "build_setup_exe", _fake_build_setup)
 
-    # Stage 1: app only (no ZIP, no setup, no checksums)
     assert build_release.build_standalone(stage="app") == 0
     assert (release_dir / "DownloadSorter.exe").is_file()
     assert (release_dir / "DownloadSorter.cmd").is_file()
+    assert (release_dir / "uninstall.ps1").is_file()
     assert not (dist_dir / build_release.ZIP_NAME).exists()
     assert not (dist_dir / build_release.SETUP_NAME).exists()
 
-    # Simulate signing step replacing DownloadSorter.exe before package stage
     (release_dir / "DownloadSorter.exe").write_bytes(b"APP_EXE_SIGNED")
 
-    # Stage 2: package only
     assert build_release.build_standalone(stage="package") == 0
     zip_file = dist_dir / build_release.ZIP_NAME
     setup_file = dist_dir / build_release.SETUP_NAME
@@ -226,7 +309,7 @@ def test_build_release_stage_split(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         assert zf.read("DownloadSorter/DownloadSorter.exe") == b"APP_EXE_SIGNED"
 
 
-def test_verify_release_reports_and_enforces_signatures(
+def test_verify_release_reports_and_enforces_embedded_signatures_and_ps1(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -239,7 +322,9 @@ def test_verify_release_reports_and_enforces_signatures(
     (app_dir / "_internal").mkdir(parents=True)
     (app_dir / "DownloadSorter.exe").write_bytes(b"gui")
     (app_dir / "DownloadSorter-cli.exe").write_bytes(b"cli")
+    (app_dir / "uninstall.ps1").write_text("Write-Host 'uninstall'", encoding="utf-8")
     (app_dir / "_internal" / "python312.dll").write_bytes(b"py")
+    (app_dir / "_internal" / "MSVCP140.dll").write_bytes(b"vc")
 
     zip_file = dist / f"DownloadSorter-v{version}-windows-x64.zip"
     zip_file.write_bytes(b"zip-bytes")
@@ -256,31 +341,35 @@ def test_verify_release_reports_and_enforces_signatures(
 
     mixed_runner = _fake_runner(
         {
-            "python312.dll": ("Valid", "CN=Python Software Foundation"),
-            "DownloadSorter.exe": ("NotSigned", ""),
-            "DownloadSorter-cli.exe": ("NotSigned", ""),
-            setup_file.name: ("NotSigned", ""),
+            "python312.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
+            "MSVCP140.dll": ("Valid", "Catalog", "CN=Microsoft Windows"),
+            "DownloadSorter.exe": ("NotSigned", "None", ""),
+            "DownloadSorter-cli.exe": ("NotSigned", "None", ""),
+            "uninstall.ps1": ("NotSigned", "None", ""),
+            setup_file.name: ("NotSigned", "None", ""),
         }
     )
 
-    # Without --require-signed: reports unsigned files but succeeds
     assert verify.check_artifacts(version, require_signed=False, pe_runner=mixed_runner) == []
 
-    # With --require-signed: fails and lists every unsigned file
     errors = verify.check_artifacts(version, require_signed=True, pe_runner=mixed_runner)
     joined = "\n".join(errors)
     assert "DownloadSorter.exe" in joined
     assert "DownloadSorter-cli.exe" in joined
+    assert "uninstall.ps1" in joined
+    assert "MSVCP140.dll" in joined
+    assert "Catalog" in joined
     assert setup_file.name in joined
     assert "python312.dll" not in joined
 
-    # When all files carry valid signatures, --require-signed passes
     all_signed_runner = _fake_runner(
         {
-            "python312.dll": ("Valid", "CN=Python Software Foundation"),
-            "DownloadSorter.exe": ("Valid", "CN=SignPath Foundation"),
-            "DownloadSorter-cli.exe": ("Valid", "CN=SignPath Foundation"),
-            setup_file.name: ("Valid", "CN=SignPath Foundation"),
+            "python312.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
+            "MSVCP140.dll": ("Valid", "Authenticode", "CN=SignPath Foundation"),
+            "DownloadSorter.exe": ("Valid", "Authenticode", "CN=SignPath Foundation"),
+            "DownloadSorter-cli.exe": ("Valid", "Authenticode", "CN=SignPath Foundation"),
+            "uninstall.ps1": ("Valid", "Authenticode", "CN=SignPath Foundation"),
+            setup_file.name: ("Valid", "Authenticode", "CN=SignPath Foundation"),
         }
     )
     assert verify.check_artifacts(version, require_signed=True, pe_runner=all_signed_runner) == []
@@ -293,13 +382,15 @@ def test_signpath_artifact_config_and_release_workflow_order() -> None:
     root = tree.getroot()
     text = xml_path.read_text(encoding="utf-8")
     assert root.tag.endswith("artifact-configuration")
-    assert "*.exe" in text and "*.dll" in text and "*.pyd" in text
+    assert "<pe-file-set>" in text
+    assert "<powershell-file-set>" in text
+    assert "*.exe" in text and "*.dll" in text and "*.pyd" in text and "*.ps1" in text
     assert "authenticode-sign" in text
 
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     idx_app = workflow.index("python build_release.py --stage app")
     idx_stage = workflow.index("python pe_signing.py stage dist/DownloadSorter dist/unsigned-app")
-    idx_sign_app = workflow.index("name: Sign app executables and libraries with SignPath")
+    idx_sign_app = workflow.index("name: Sign app executables, libraries, and scripts with SignPath")
     idx_restore = workflow.index("python pe_signing.py restore dist/signed-app dist/DownloadSorter")
     idx_pkg = workflow.index("python build_release.py --stage package")
     idx_sign_setup = workflow.index("name: Sign the setup file with SignPath")

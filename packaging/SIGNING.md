@@ -11,26 +11,37 @@ What the build now does, and what still needs a person:
    often flag. This needs Visual C++, which GitHub's `windows-latest` runner has; it has not been
    run on a local machine.
 3. **Whole-folder code signing (in the release workflow, off until set up).**
-   Windows 11 **Smart App Control** checks every `.exe`, `.dll`, and `.pyd` as it loads and blocks
-   any unsigned binary that Microsoft does not yet widely trust. Signing only the setup installer
-   would let the installer run and then block `DownloadSorter.exe` (or `DownloadSorter-cli.exe`
-   for the Chrome connector) at launch.
+   Windows 11 **Smart App Control** checks every `.exe`, `.dll`, `.pyd`, and PowerShell `.ps1`
+   script as it runs or loads. Signing only the setup installer would let the installer run and then
+   block `DownloadSorter.exe` (or `DownloadSorter-cli.exe` for the Chrome connector) at launch,
+   while unsigned PowerShell uninstall scripts (`uninstall.ps1`, `uninstall_context_menu.ps1`,
+   `uninstall_startup.ps1`) can be forced into Constrained Language Mode under App Control—blocking
+   the `.NET` path and registry/shortcut calls in `uninstall.ps1` (lines 99–106) when invoked from
+   **Installed apps**.
+
+   A file counts as already signed **only** when `Get-AuthenticodeSignature` reports both
+   `Status == "Valid"` **and** `SignatureType == "Authenticode"` (an embedded signature). A
+   catalog-only signature (`SignatureType == "Catalog"`) validates on the build machine's OS
+   catalogs but does not travel with the file to users' PCs.
 
    When `SIGNPATH_ORGANIZATION_ID` is set, `.github/workflows/release.yml` runs a two-stage build:
    1. `python build_release.py --stage app` assembles `dist/DownloadSorter/`.
    2. `python pe_signing.py stage dist/DownloadSorter dist/unsigned-app --github-output` inspects every
-      `.exe`, `.dll`, and `.pyd` with PowerShell's `Get-AuthenticodeSignature` and stages only the
-      unsigned files (leaving files already validly signed by Microsoft, Python Software Foundation,
-      The Qt Company, etc. untouched).
-   3. The staged `DownloadSorter-app-unsigned` artifact is submitted to SignPath (`SignPath/github-action-submit-signing-request@v3`),
-      which signs all staged `.exe`, `.dll`, and `.pyd` files using `packaging/signpath-artifact-config.xml`.
-   4. `python pe_signing.py restore dist/signed-app dist/DownloadSorter` writes the signed binaries back
+      `.exe`, `.dll`, `.pyd`, and `.ps1` with PowerShell's `Get-AuthenticodeSignature` and stages
+      only files lacking a valid embedded Authenticode signature (leaving files that already carry
+      embedded upstream signatures from Microsoft, Python Software Foundation, The Qt Company, etc.
+      untouched).
+   3. The staged `DownloadSorter-app-unsigned` artifact is submitted to SignPath
+      (`SignPath/github-action-submit-signing-request@v3`), which signs all staged `.exe`, `.dll`,
+      `.pyd`, and `.ps1` files using `packaging/signpath-artifact-config.xml`.
+   4. `python pe_signing.py restore dist/signed-app dist/DownloadSorter` writes the signed files back
       into `dist/DownloadSorter/`.
    5. `python build_release.py --stage package` builds the ZIP, setup file, and `checksums.txt`.
    6. The setup file (`DownloadSorter-Setup-v*-windows-x64.exe`) is uploaded, signed by SignPath,
       copied back into `dist/`, and `checksums.txt` is refreshed for both the ZIP and the setup file.
-   7. `python verify_release.py --skip-tests --require-signed` verifies that zero unsigned `.exe`, `.dll`,
-      or `.pyd` files remain in `dist/DownloadSorter/` and that the setup file carries a valid signature.
+   7. `python verify_release.py --skip-tests --require-signed` verifies that zero `.exe`, `.dll`,
+      `.pyd`, or `.ps1` files under `dist/DownloadSorter/` (and the setup file) lack a valid
+      embedded Authenticode signature.
    8. The live update check (`"Check that an update replaces a running copy and opens it again"`) runs
       last, verifying the actual signed installer and signed executables.
 
@@ -44,7 +55,8 @@ To enable signing with SignPath (free for open-source projects through the SignP
 1. **Create a SignPath project** linked to this GitHub repository and configure Authors, Reviewers,
    and Approvers with MFA per SignPath Foundation requirements.
 2. **Upload the app artifact configuration:** Import `packaging/signpath-artifact-config.xml` into your
-   SignPath project (for example, as `app-binaries`). Also configure a single-file PE artifact
+   SignPath project (for example, as `app-binaries`) so both `<pe-file-set>` (`.exe`, `.dll`, `.pyd`)
+   and `<powershell-file-set>` (`.ps1`) are signed. Also configure a single-file PE artifact
    configuration (or default PE configuration) for the setup installer (`DownloadSorter-Setup-*.exe`).
 3. **Add GitHub repository settings:**
    - Variables (required):
@@ -61,7 +73,7 @@ To enable signing with SignPath (free for open-source projects through the SignP
    (acknowledging free code signing provided by SignPath.io and the certificate by SignPath Foundation,
    along with team roles and privacy disclosures).
 
-### Open question: third-party files without upstream signatures
+### Open question: third-party files without embedded upstream signatures
 
 SignPath Foundation's published terms (`https://signpath.org/terms`) state that projects may include
 standard **System Libraries** (as defined in GPL v3 section 1) in signed packages, but prohibit using a
@@ -69,22 +81,27 @@ SignPath Foundation project certificate to directly sign third-party / upstream 
 publishers did not sign (because the SignPath Foundation certificate identifies SignPath Foundation as
 the publisher of code built from *this* repository).
 
-In the current v3.0.3 build, inspection with `pe_signing.py` shows that 117 of the 119 PE files under
-`DownloadSorter/` (Microsoft CRT/API-sets, Python Software Foundation `.dll`/`.pyd`, The Qt Company
-PySide6 `.dll`/`.pyd`, Oracle) are already validly signed by their upstream publishers; only
-`DownloadSorter.exe` and `DownloadSorter-cli.exe` (compiled from this repository) are unsigned.
+In the shipped v3.0.3 build, `pe_signing.py list --json` distinguishes embedded upstream Authenticode
+signatures from OS-catalog-only signatures:
+- **Already embedded-signed (`Valid`, `Authenticode`):** 111 binaries signed by Microsoft Corporation,
+  Python Software Foundation, The Qt Company Oy, and Oracle America, Inc.
+- **Catalog-only (`Valid`, `Catalog`):** 6 Visual C++ runtime DLLs (`MSVCP140.dll`, `VCRUNTIME140.dll`,
+  `VCRUNTIME140_1.dll` inside `_internal/PySide6/` and `_internal/shiboken6/`).
+- **Unsigned (`NotSigned`):** `DownloadSorter.exe`, `DownloadSorter-cli.exe`, `uninstall.ps1`,
+  `uninstall_context_menu.ps1`, and `uninstall_startup.ps1`.
 
-- **Open question to resolve before enabling SignPath:** If a future dependency wheel (for example, a
-  compiled C extension in a future package) ships an unsigned `.dll` or `.pyd`, confirm with SignPath
-  Foundation during onboarding whether signing that file under the project's policy is permitted, or
-  whether those dependencies must be replaced/excluded or signed with an organization-owned certificate
-  instead.
+- **Open question to resolve before enabling SignPath:** Because catalog-only signatures do not travel
+  with the extracted files, `pe_signing.py` flags those 6 bundled VC++ runtime DLLs (plus any future
+  dependency wheel's unsigned `.dll`/`.pyd`) for signing. Confirm with SignPath Foundation during
+  onboarding whether signing bundled redistributable/dependency DLLs lacking embedded signatures is
+  permitted under the project's policy, or whether they must be excluded/replaced or signed with an
+  organization-owned certificate instead.
 
 ## Alternative: Microsoft Artifact Signing (Trusted Signing)
 
-If SignPath Foundation's third-party policy blocks a needed dependency—or if you prefer an
-organization-owned publisher certificate (~$10/month for an individual/organization profile via Azure
-Microsoft Artifact Signing, formerly Trusted Signing)—the two-stage build requires no structural rewrite:
+If SignPath Foundation's third-party policy blocks bundled runtime DLLs or a dependency—or if you
+prefer an organization-owned publisher certificate (~$10/month via Azure Microsoft Artifact Signing,
+formerly Trusted Signing)—the two-stage build requires no structural rewrite:
 
 1. Keep `python build_release.py --stage app`, `pe_signing.py stage`, `python build_release.py --stage package`,
    and `verify_release.py --require-signed` unchanged.
@@ -98,11 +115,14 @@ Microsoft Artifact Signing, formerly Trusted Signing)—the two-stage build requ
 - **Finding the exact blocked file:** Open **Event Viewer** → **Applications and Services Logs** →
   **Microsoft** → **Windows** → **CodeIntegrity** → **Operational** and check **Event ID 3076**
   (evaluation/audit block warning) and **Event ID 3077** (enforcement block). Each event logs the exact
-  `.exe`, `.dll`, or `.pyd` file path that Smart App Control refused to load.
-- **Reputation ramp after signing:** Even after Download Sorter and every bundled binary carry valid
-  Authenticode signatures, Smart App Control can still block a newly signed binary from a new publisher
-  (because Microsoft's Intelligent Security Graph weighs code-signing reputation and install volume)
-  until enough users install and run the signed build.
+  `.exe`, `.dll`, `.pyd`, or `.ps1` file path that Smart App Control refused to load.
+- **Reputation ramp after signing:** Even after Download Sorter and every bundled binary and script
+  carry valid embedded Authenticode signatures, Smart App Control can still block a newly signed binary
+  from a new publisher (because Microsoft's Intelligent Security Graph weighs code-signing reputation
+  and install volume) until enough users install and run the signed build.
+- **Verify uninstall under Smart App Control:** Once signing is enabled, test uninstalling from Windows
+  **Installed apps** on a PC with Smart App Control on to confirm `uninstall.ps1` runs with full
+  language mode and completes cleanly.
 
 ## Other distribution steps
 
