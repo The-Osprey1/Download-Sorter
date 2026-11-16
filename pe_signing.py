@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 import json
 import os
@@ -30,6 +30,20 @@ OWNED_SIGNABLE_FILES: frozenset[str] = frozenset(
 )
 
 _OWNED_LOWER = frozenset(name.lower() for name in OWNED_SIGNABLE_FILES)
+
+# Expected CN/O publisher names for valid embedded signatures shipped in dist/DownloadSorter/.
+# Includes SignPath Foundation / Download Sorter for our own signed releases once enabled.
+ALLOWED_SIGNERS: frozenset[str] = frozenset(
+    {
+        "The Qt Company Oy",
+        "Microsoft Corporation",
+        "Microsoft Windows Software Compatibility Publisher",
+        "Python Software Foundation",
+        "SignPath Foundation",
+        "Download Sorter",
+    }
+)
+
 _SUBPROCESS_TIMEOUT = 120
 
 
@@ -65,6 +79,80 @@ class SignatureInfo:
 def is_owned_signable_file(rel_path: str) -> bool:
     """True when ``rel_path`` (relative to ``dist/DownloadSorter``) is one of our built files."""
     return rel_path.replace("\\", "/").lower() in _OWNED_LOWER
+
+
+def extract_subject_cn_o(subject: str) -> tuple[str, ...]:
+    """Return all ``CN`` and ``O`` values parsed from an X.509 Subject string."""
+    if not subject:
+        return ()
+
+    parts: list[str] = []
+    buf: list[str] = []
+    in_quotes = False
+    i = 0
+    n = len(subject)
+    while i < n:
+        ch = subject[i]
+        if ch == "\\" and not in_quotes and i + 1 < n:
+            buf.append(subject[i + 1])
+            i += 2
+            continue
+        if ch == '"':
+            if in_quotes and i + 1 < n and subject[i + 1] == '"':
+                buf.append('"')
+                i += 2
+                continue
+            in_quotes = not in_quotes
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "," and not in_quotes:
+            parts.append("".join(buf))
+            buf.clear()
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if buf:
+        parts.append("".join(buf))
+
+    identities: list[str] = []
+    for raw_part in parts:
+        if "=" not in raw_part:
+            continue
+        key, value = raw_part.split("=", 1)
+        if key.strip().upper() not in ("CN", "O"):
+            continue
+        cleaned = value.strip()
+        if len(cleaned) >= 2 and cleaned[0] == '"' and cleaned[-1] == '"':
+            cleaned = cleaned[1:-1]
+        if cleaned:
+            identities.append(cleaned)
+    return tuple(identities)
+
+
+def is_allowed_signer(
+    subject: str,
+    *,
+    allowed_signers: Iterable[str] | None = None,
+) -> bool:
+    """Return True if any ``CN`` or ``O`` field in ``subject`` matches the allowed publisher list."""
+    allow = ALLOWED_SIGNERS if allowed_signers is None else allowed_signers
+    allowed_lower = {name.strip().casefold() for name in allow if name and name.strip()}
+    return any(identity.casefold() in allowed_lower for identity in extract_subject_cn_o(subject))
+
+
+def find_unexpected_signers(
+    infos: Sequence[SignatureInfo],
+    *,
+    allowed_signers: Iterable[str] | None = None,
+) -> list[SignatureInfo]:
+    """Return signed entries in ``infos`` whose signer CN/O is absent from the allowlist."""
+    return [
+        info
+        for info in infos
+        if info.is_valid and not is_allowed_signer(info.signer, allowed_signers=allowed_signers)
+    ]
 
 
 def find_signable_files(

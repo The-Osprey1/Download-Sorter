@@ -231,10 +231,13 @@ def check_signatures(
         f"signatures: {signed_count}/{len(all_infos)} signable file(s) with embedded Authenticode, "
         f"{len(unsigned_all)} unsigned/non-embedded"
     )
-    if not require_signed:
-        return [], summary
-
     errors: list[str] = []
+    for info in pe_signing.find_unexpected_signers(app_infos):
+        signer_label = info.signer or "(unknown)"
+        errors.append(f"unexpected signer: dist/DownloadSorter/{info.rel_path} ({signer_label})")
+    if not require_signed:
+        return errors, summary
+
     for info in unsigned_app:
         kind = "script" if info.path.suffix.lower() == ".ps1" else "program/library file"
         detail = f"{info.status}, SignatureType={info.signature_type}" if info.signature_type else info.status
