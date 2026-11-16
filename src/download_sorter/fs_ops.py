@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 import hashlib
 import logging
@@ -16,6 +16,8 @@ from typing import Any
 from download_sorter.db import StateDB
 from download_sorter.dest import is_under_watch_root
 from download_sorter.router import RouteDecision
+
+ProgressCallback = Callable[[int, int, str], None]
 
 _CHUNK_BYTES = 1024 * 1024
 
@@ -393,14 +395,23 @@ def _invalidate_recent(paths: list[str]) -> None:
         pass
 
 
-def _undo_records(db: StateDB, records: list[dict[str, Any]]) -> dict[str, Any]:
+def _undo_records(
+    db: StateDB,
+    records: list[dict[str, Any]],
+    *,
+    on_progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
     restored_ids: list[int] = []
     orphaned_ids: list[int] = []
     stale_paths: list[str] = []
     locked_files: list[str] = []
     renamed: list[dict[str, str]] = []
     failed = 0
-    for rec in records:
+    total = len(records)
+    for index, rec in enumerate(records, start=1):
+        name = str(rec.get("filename") or Path(str(rec.get("dest_path") or "")).name)
+        if on_progress is not None:
+            on_progress(index - 1, total, name)
         try:
             outcome, target = _restore_one(rec)
         except OSError as exc:
@@ -425,6 +436,8 @@ def _undo_records(db: StateDB, records: list[dict[str, Any]]) -> dict[str, Any]:
     db.mark_undone(restored_ids)
     db.mark_orphaned(orphaned_ids)
     _invalidate_recent(stale_paths)
+    if on_progress is not None and total > 0:
+        on_progress(total, total, "Complete")
     return {
         "restored": len(restored_ids),
         "skipped": len(locked_files) + len(orphaned_ids) + failed,
@@ -447,7 +460,12 @@ def _empty_undo_result() -> dict[str, Any]:
     }
 
 
-def undo_move(db: StateDB, move_id: int) -> dict[str, Any]:
+def undo_move(
+    db: StateDB,
+    move_id: int,
+    *,
+    on_progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
     """Undo a single recorded move by ID."""
     rec = db.get_move(move_id)
     if (
@@ -456,12 +474,17 @@ def undo_move(db: StateDB, move_id: int) -> dict[str, Any]:
         or str(rec.get("status") or "COMPLETED") != "COMPLETED"
     ):
         return _empty_undo_result()
-    res = _undo_records(db, [rec])
+    res = _undo_records(db, [rec], on_progress=on_progress)
     res["batch_id"] = rec["batch_id"]
     return res
 
 
-def undo_batch(db: StateDB, batch_id: str | None = None) -> dict[str, Any]:
+def undo_batch(
+    db: StateDB,
+    batch_id: str | None = None,
+    *,
+    on_progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
     """Undo every active move in ``batch_id`` (or the latest active batch).
 
     Files that are open in another program are skipped and stay undoable; files
@@ -470,6 +493,186 @@ def undo_batch(db: StateDB, batch_id: str | None = None) -> dict[str, Any]:
     moves = db.get_batch_moves(batch_id)
     if not moves:
         return _empty_undo_result()
-    res = _undo_records(db, moves)
+    res = _undo_records(db, moves, on_progress=on_progress)
     res["batch_id"] = str(moves[0]["batch_id"])
     return res
+
+
+def _send_to_recycle_bin_win32(paths: list[str]) -> bool:
+    """Move files to the Windows Recycle Bin using native Shell ``SHFileOperationW``."""
+    if sys.platform != "win32" or not paths:
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    class _SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", wintypes.WORD),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", wintypes.LPVOID),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
+
+    fo_delete = 0x0003
+    fof_silent = 0x0004
+    fof_noconfirmation = 0x0010
+    fof_allowundo = 0x0040
+    fof_noerrorui = 0x0400
+
+    op = _SHFILEOPSTRUCTW()
+    op.hwnd = None
+    op.wFunc = fo_delete
+    op.pFrom = "\0".join(paths) + "\0\0"
+    op.pTo = None
+    op.fFlags = fof_allowundo | fof_noconfirmation | fof_noerrorui | fof_silent
+
+    shell32 = getattr(ctypes, "windll", None)
+    if shell32 is None:
+        return False
+    result = int(shell32.shell32.SHFileOperationW(ctypes.byref(op)))
+    return result == 0 and not bool(op.fAnyOperationsAborted)
+
+
+def scan_duplicate_files(watch_root: Path) -> list[dict[str, Any]]:
+    """Return quarantined files inside ``watch_root / '_Duplicates'``, newest first."""
+    root = watch_root.resolve()
+    dup_root = root / "_Duplicates"
+    if not dup_root.is_dir():
+        return []
+    entries: list[dict[str, Any]] = []
+    for fpath in dup_root.rglob("*"):
+        if not fpath.is_file():
+            continue
+        try:
+            st = fpath.stat()
+            rel = str(fpath.relative_to(root))
+            rel_parent = str(fpath.parent.relative_to(root))
+        except (OSError, ValueError):
+            continue
+        entries.append(
+            {
+                "path": str(fpath),
+                "name": fpath.name,
+                "rel_path": rel,
+                "subfolder": rel_parent,
+                "size_bytes": int(st.st_size),
+                "mtime": float(st.st_mtime),
+            }
+        )
+    entries.sort(key=lambda item: (-float(item["mtime"]), str(item["name"]).lower()))
+    return entries
+
+
+def delete_files_safely(
+    paths: list[Path | str],
+    *,
+    watch_root: Path,
+    confine_dir: Path | None = None,
+    use_recycle_bin: bool = True,
+    on_progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """Safely send unlocked files under ``confine_dir`` (default ``watch_root``) to Recycle Bin or delete them."""
+    root = watch_root.resolve()
+    scope_root = (confine_dir if confine_dir is not None else root).resolve()
+    unique_paths: list[Path] = []
+    seen: set[Path] = set()
+    for raw in paths:
+        cand = Path(raw)
+        try:
+            resolved = cand.resolve()
+        except OSError:
+            resolved = cand
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_paths.append(cand)
+
+    deleted: list[str] = []
+    skipped_locked: list[str] = []
+    failed: list[dict[str, str]] = []
+    missing: list[str] = []
+    freed_bytes = 0
+    eligible: list[tuple[Path, int]] = []
+
+    for fpath in unique_paths:
+        if not os.path.lexists(fpath):
+            missing.append(str(fpath))
+            continue
+        if not is_under_watch_root(fpath, scope_root) or fpath.resolve() == scope_root:
+            failed.append({"path": str(fpath), "error": "Refused path outside allowed folder"})
+            continue
+        if fpath.is_dir():
+            failed.append({"path": str(fpath), "error": "Directories are not deleted individually"})
+            continue
+        if is_file_locked(fpath):
+            skipped_locked.append(str(fpath))
+            continue
+        try:
+            size = int(fpath.stat().st_size)
+        except OSError:
+            size = 0
+        eligible.append((fpath, size))
+
+    total = len(eligible)
+    used_recycle = False
+    recycle_attempted = False
+    if eligible and use_recycle_bin and sys.platform == "win32":
+        recycle_attempted = True
+        if on_progress is not None:
+            label = eligible[0][0].name if total == 1 else f"{total} file(s)"
+            on_progress(0, total, label)
+        try:
+            recycle_ok = _send_to_recycle_bin_win32([str(p) for p, _sz in eligible])
+        except Exception as exc:
+            logging.warning("Windows Recycle Bin call failed: %s", exc)
+            recycle_ok = False
+        if recycle_ok:
+            used_recycle = True
+            for idx, (fpath, size) in enumerate(eligible, start=1):
+                if on_progress is not None:
+                    on_progress(idx, total, fpath.name)
+                if not os.path.lexists(fpath):
+                    deleted.append(str(fpath))
+                    freed_bytes += size
+                else:
+                    failed.append({"path": str(fpath), "error": "File remained after Recycle Bin request"})
+            eligible = []
+
+    for idx, (fpath, size) in enumerate(eligible, start=1):
+        if on_progress is not None:
+            on_progress(idx - 1, total, fpath.name)
+        try:
+            # Permanent fallback only when caller opted out of Recycle Bin or Windows Shell unavailable/aborted
+            if recycle_attempted and use_recycle_bin:
+                # Re-try single-file Shell recycle before falling back to unlink only when Recycle Bin failed cleanly
+                if _send_to_recycle_bin_win32([str(fpath)]) and not os.path.lexists(fpath):
+                    used_recycle = True
+                    deleted.append(str(fpath))
+                    freed_bytes += size
+                    continue
+            fpath.unlink()
+            deleted.append(str(fpath))
+            freed_bytes += size
+        except OSError as exc:
+            if getattr(exc, "winerror", None) in _LOCK_WINERRORS:
+                skipped_locked.append(str(fpath))
+            else:
+                failed.append({"path": str(fpath), "error": str(exc)})
+
+    if deleted:
+        _invalidate_recent(deleted)
+    if on_progress is not None and total > 0:
+        on_progress(total, total, "Complete")
+
+    return {
+        "deleted": deleted,
+        "skipped_locked": skipped_locked,
+        "failed": failed,
+        "missing": missing,
+        "freed_bytes": freed_bytes,
+        "recycled": used_recycle,
+    }

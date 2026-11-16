@@ -762,6 +762,9 @@ class ArchitectureTab(QWidget):
     architecture_applied = Signal(str)
     undo_requested = Signal()
     carry_over_requested = Signal()
+    action_started = Signal(str)
+    action_progress = Signal(int, int, str)
+    action_finished = Signal(str, str)  # (summary_msg, kind)
 
     def __init__(self, service: SorterService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1115,7 +1118,14 @@ class ArchitectureTab(QWidget):
         self._dirty = True
         self._redraw_canvas()
 
-    def _run_background(self, work, on_done) -> None:  # noqa: ANN001
+    def _run_background(
+        self,
+        work,  # noqa: ANN001
+        on_done,  # noqa: ANN001
+        *,
+        title: str = "Updating folders...",
+        pass_progress: bool = False,
+    ) -> None:
         """Run a disk-heavy service call off the GUI thread, one at a time.
 
         Under pytest this is a plain synchronous call followed by ``on_done``.
@@ -1123,19 +1133,33 @@ class ArchitectureTab(QWidget):
         if getattr(self, "_busy", False):
             return
         self._busy = True
+        self.action_started.emit(title)
 
         def _finished(result) -> None:  # noqa: ANN001
             self._busy = False
+            self.action_finished.emit(title, "success")
             on_done(result)
 
         def _failed(message: str) -> None:
             self._busy = False
+            self.action_finished.emit(f"Failed: {message}", "warning")
             QMessageBox.warning(self, "Folder Architecture", f"That did not finish:\n{message}")
 
+        def _progress(done: int, total: int, label: str) -> None:
+            self.action_progress.emit(done, total, label)
+
         try:
-            run_async(work, _finished, _failed, parent=self)
+            run_async(
+                work,
+                _finished,
+                _failed,
+                parent=self,
+                on_progress=_progress,
+                pass_progress=pass_progress,
+            )
         except Exception:
             self._busy = False
+            self.action_finished.emit("Failed", "warning")
             raise
 
     def _on_apply_and_shift(self) -> None:
@@ -1144,6 +1168,7 @@ class ArchitectureTab(QWidget):
         self._run_background(
             lambda: self.service.preview_architecture_shift(target_cfg),
             lambda plan: self._confirm_and_shift(target_cfg, plan),
+            title="Scanning managed folders...",
         )
 
     def _confirm_and_shift(self, target_cfg, plan: dict[str, Any]) -> None:  # noqa: ANN001
@@ -1152,11 +1177,12 @@ class ArchitectureTab(QWidget):
             return
         create_empty = dlg.chk_create_empty.isChecked()
 
-        def _work() -> dict[str, Any]:
+        def _work(report_progress) -> dict[str, Any]:  # noqa: ANN001
             return self.service.apply_architecture_and_shift(
                 target_cfg,
                 shift_files=True,
                 create_empty_folders=create_empty,
+                on_progress=report_progress,
             )
 
         def _done(res: dict[str, Any]) -> None:
@@ -1167,9 +1193,17 @@ class ArchitectureTab(QWidget):
                 f"Applied {self._arch.tier_count}-tier Folder Architecture and shifted {shifted} file(s)."
             )
 
-        self._run_background(_work, _done)
+        self._run_background(
+            _work,
+            _done,
+            title="Applying Folder Architecture...",
+            pass_progress=True,
+        )
 
     def _on_undo_clicked(self) -> None:
+        def _work(report_progress) -> dict[str, Any]:  # noqa: ANN001
+            return self.service.undo_architecture_or_last_batch(on_progress=report_progress)
+
         def _done(res: dict[str, Any]) -> None:
             self._dirty = False
             self.sync_from_service(force=True)
@@ -1189,7 +1223,12 @@ class ArchitectureTab(QWidget):
             else:
                 self.architecture_applied.emit("Nothing to undo right now.")
 
-        self._run_background(self.service.undo_architecture_or_last_batch, _done)
+        self._run_background(
+            _work,
+            _done,
+            title="Undoing architecture change...",
+            pass_progress=True,
+        )
 
     def _on_return_to_defaults(self) -> None:
         ans = QMessageBox.question(

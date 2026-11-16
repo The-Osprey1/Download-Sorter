@@ -357,6 +357,25 @@ class StateDB:
             )
             conn.commit()
 
+    def mark_orphaned_by_dest(self, dest_paths: list[str]) -> int:
+        """Retire active COMPLETED move rows matching deleted ``dest_path`` entries."""
+        cleaned = [str(p) for p in dest_paths if p]
+        if not cleaned:
+            return 0
+        now = time.time()
+        placeholders = ",".join("?" for _ in cleaned)
+        with self._lock, closing(self._connect()) as conn:
+            cur = conn.execute(
+                f"""
+                UPDATE moves
+                SET undone_at = ?, status = ?
+                WHERE undone_at IS NULL AND status = 'COMPLETED' AND dest_path IN ({placeholders})
+                """,
+                [now, STATUS_ORPHANED, *cleaned],
+            )
+            conn.commit()
+            return int(cur.rowcount or 0)
+
     def stats(self) -> dict[str, Any]:
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(

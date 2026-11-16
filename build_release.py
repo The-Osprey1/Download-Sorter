@@ -108,6 +108,11 @@ def build_standalone(use_inno: bool = False) -> int:
         else:
             print(f"[WARNING] Optional release file not found to bundle: {filename}")
 
+    ext_src = ROOT / "chrome_extension"
+    if ext_src.is_dir():
+        shutil.copytree(ext_src, RELEASE_DIR / "chrome_extension", dirs_exist_ok=True)
+        print("[*] Bundled: chrome_extension/")
+
     # 4. Package into ZIP archive
     zip_path = DIST_DIR / ZIP_NAME
     if zip_path.exists():

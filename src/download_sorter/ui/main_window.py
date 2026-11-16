@@ -6,6 +6,8 @@ import copy
 from datetime import datetime
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 from collections.abc import Callable
 import logging
@@ -13,9 +15,11 @@ from typing import Any
 
 from PySide6.QtCore import QAbstractAnimation, QPoint, Qt, QTimer, Signal
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -33,8 +37,11 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
+    QRadioButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
@@ -45,20 +52,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from PySide6.QtWidgets import (
-    QButtonGroup,
-    QDialog,
-    QFileDialog,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QRadioButton,
-    QScrollArea,
-    QVBoxLayout,
+from download_sorter.chrome_bridge import (
+    EXTENSION_ID as CHROME_EXTENSION_ID,
+    find_extension_dir,
+    install_chrome_native_host,
+    is_chrome_host_registered,
 )
-
 from download_sorter.config import (
     Config,
     Rule,
@@ -80,6 +79,7 @@ from download_sorter.ui.motion import (
     ConfettiOverlayWidget,
     ElidedLabel,
     InteractiveRibbonBtn,
+    SortingProgressHUD,
     SortyMascotWidget,
     WalkthroughDiagramCanvas,
     breathe,
@@ -626,6 +626,322 @@ def _make_surface_card(
     return card, root
 
 
+def _format_bytes(size_bytes: int) -> str:
+    """Format byte counts concisely for Apple-style storage pills and table columns."""
+    value = float(max(0, int(size_bytes)))
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024.0 or unit == "TB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}" if value < 100 else f"{value:.0f} {unit}"
+        value /= 1024.0
+    return "0 B"
+
+
+def _reveal_in_explorer(target: Path) -> None:
+    """Open Windows Explorer selecting ``target`` when present, or its parent folder."""
+    if sys.platform != "win32":
+        return
+    try:
+        if target.exists():
+            subprocess.Popen(["explorer.exe", f"/select,{target}"])
+        elif target.parent.exists() and hasattr(os, "startfile"):
+            os.startfile(str(target.parent))
+    except Exception as exc:
+        logging.debug("Could not reveal %s in Explorer: %s", target, exc)
+
+
+def _dup_group_key(item: dict[str, Any]) -> tuple[int, str]:
+    """Group quarantined copies sharing exact size and normalized base filename stem."""
+    stem = Path(str(item["name"])).stem
+    normalized = re.sub(r"(?:\s+\(\d+\)|\s+\(Restored(?:\s+\d+)?\))$", "", stem, flags=re.IGNORECASE)
+    return (int(item.get("size_bytes", 0)), normalized.lower())
+
+
+class DuplicateManagerDialog(QDialog):
+    """Native Apple Sequoia dialog to inspect and safely delete files quarantined in ``_Duplicates``."""
+
+    duplicates_changed = Signal()
+
+    def __init__(self, service: SorterService, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.service = service
+        self._entries: list[dict[str, Any]] = []
+        self._checkboxes: list[QCheckBox] = []
+        self._syncing_checks = False
+
+        self.setWindowTitle("Manage Duplicate Files")
+        self.setMinimumSize(680, 440)
+        self.resize(760, 520)
+        self.setStyleSheet(STYLESHEET)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+
+        hdr_row = QHBoxLayout()
+        hdr_row.setSpacing(12)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(3)
+        self.lbl_title = QLabel("Duplicate Files")
+        self.lbl_title.setObjectName("CardTitle")
+        lbl_sub = QLabel(
+            "Identical SHA-256 copies isolated inside _Duplicates\\. Your sorted originals stay untouched."
+        )
+        lbl_sub.setObjectName("MutedText")
+        lbl_sub.setWordWrap(True)
+        title_col.addWidget(self.lbl_title)
+        title_col.addWidget(lbl_sub)
+        hdr_row.addLayout(title_col, 1)
+
+        self.lbl_reclaim_pill = QLabel("0 B")
+        self.lbl_reclaim_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hdr_row.addWidget(self.lbl_reclaim_pill)
+        root.addLayout(hdr_row)
+
+        # Smart selection toolbar
+        tools = QHBoxLayout()
+        tools.setSpacing(8)
+        self.btn_select_all = InteractiveRibbonBtn("Select All")
+        self.btn_select_all.clicked.connect(self.select_all)
+        self.btn_keep_newest = InteractiveRibbonBtn("Keep Newest Copy")
+        self.btn_keep_newest.setToolTip(
+            "Leave the newest quarantined copy in each group unchecked and select older duplicate copies"
+        )
+        self.btn_keep_newest.clicked.connect(self.select_all_except_newest)
+        self.btn_clear_sel = InteractiveRibbonBtn("Clear")
+        self.btn_clear_sel.setObjectName("GhostButton")
+        self.btn_clear_sel.clicked.connect(self.clear_selection)
+        tools.addWidget(self.btn_select_all)
+        tools.addWidget(self.btn_keep_newest)
+        tools.addWidget(self.btn_clear_sel)
+        tools.addStretch(1)
+        root.addLayout(tools)
+
+        self.tbl_dups = QTableWidget(0, 5)
+        self.tbl_dups.setHorizontalHeaderLabels(["", "Duplicate File", "Quarantine Folder", "Modified", "Size"])
+        _style_table(self.tbl_dups)
+        hdr = self.tbl_dups.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.tbl_dups.setColumnWidth(0, 38)
+        self.tbl_dups.setColumnWidth(2, 150)
+        self.tbl_dups.setColumnWidth(3, 138)
+        self.tbl_dups.setColumnWidth(4, 88)
+        self.tbl_dups.cellClicked.connect(self._on_cell_clicked)
+        self.tbl_dups.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tbl_dups.customContextMenuRequested.connect(self._show_context_menu)
+        root.addWidget(self.tbl_dups, 1)
+
+        self.lbl_empty = QLabel("No quarantined duplicates right now — your _Duplicates folder is clean!")
+        self.lbl_empty.setObjectName("MutedText")
+        self.lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(self.lbl_empty)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(10)
+        self.btn_open_dups = InteractiveRibbonBtn(
+            "Open _Duplicates Folder",
+            make_vector_icon("folder", "#F5F5F7", 14),
+        )
+        self.btn_open_dups.setObjectName("GhostButton")
+        self.btn_open_dups.clicked.connect(self._open_duplicates_folder)
+        footer.addWidget(self.btn_open_dups)
+        footer.addStretch(1)
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        footer.addWidget(btn_close)
+
+        self.btn_delete_checked = InteractiveRibbonBtn(
+            "Delete Selected to Recycle Bin",
+            make_vector_icon("delete", "#FFFFFF", 14),
+        )
+        self.btn_delete_checked.setObjectName("DangerButton")
+        self.btn_delete_checked.clicked.connect(lambda: self.delete_checked_files(confirm=True))
+        footer.addWidget(self.btn_delete_checked)
+        root.addLayout(footer)
+
+        self.reload()
+
+    def reload(self) -> None:
+        self._entries = self.service.list_duplicate_files()
+        self._checkboxes.clear()
+        self.tbl_dups.setRowCount(len(self._entries))
+        has_rows = len(self._entries) > 0
+        self.tbl_dups.setVisible(has_rows)
+        self.lbl_empty.setVisible(not has_rows)
+
+        for idx, entry in enumerate(self._entries):
+            chk = QCheckBox()
+            chk.stateChanged.connect(lambda _s: self._update_summary())
+            holder = QWidget()
+            hl = QHBoxLayout(holder)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            hl.addWidget(chk)
+            self.tbl_dups.setCellWidget(idx, 0, holder)
+            self._checkboxes.append(chk)
+
+            name_item = QTableWidgetItem(str(entry["name"]))
+            name_item.setToolTip(str(entry["path"]))
+            name_item.setData(Qt.ItemDataRole.UserRole, str(entry["path"]))
+            self.tbl_dups.setItem(idx, 1, name_item)
+
+            sub_item = QTableWidgetItem(str(entry["subfolder"]))
+            sub_item.setForeground(QColor("#8E8E93"))
+            self.tbl_dups.setItem(idx, 2, sub_item)
+
+            ts = datetime.fromtimestamp(float(entry["mtime"])).strftime("%Y-%m-%d %H:%M")
+            ts_item = QTableWidgetItem(ts)
+            ts_item.setForeground(QColor("#8E8E93"))
+            self.tbl_dups.setItem(idx, 3, ts_item)
+
+            sz_item = QTableWidgetItem(_format_bytes(int(entry["size_bytes"])))
+            sz_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.tbl_dups.setItem(idx, 4, sz_item)
+
+        self._update_summary()
+
+    def _on_cell_clicked(self, row: int, col: int) -> None:
+        if col != 0 and 0 <= row < len(self._checkboxes):
+            chk = self._checkboxes[row]
+            chk.setChecked(not chk.isChecked())
+
+    def checked_paths(self) -> list[Path]:
+        return [
+            Path(str(self._entries[idx]["path"]))
+            for idx, chk in enumerate(self._checkboxes)
+            if idx < len(self._entries) and chk.isChecked()
+        ]
+
+    def select_all(self) -> None:
+        self._syncing_checks = True
+        try:
+            for chk in self._checkboxes:
+                chk.setChecked(True)
+        finally:
+            self._syncing_checks = False
+        self._update_summary()
+
+    def clear_selection(self) -> None:
+        self._syncing_checks = True
+        try:
+            for chk in self._checkboxes:
+                chk.setChecked(False)
+        finally:
+            self._syncing_checks = False
+        self._update_summary()
+
+    def select_all_except_newest(self) -> None:
+        """Select older duplicate copies within each matching group, leaving the newest unchecked."""
+        newest_index_by_key: dict[tuple[int, str], int] = {}
+        for idx, entry in enumerate(self._entries):
+            key = _dup_group_key(entry)
+            if key not in newest_index_by_key:
+                # _entries is sorted newest-first, so the first seen index is newest.
+                newest_index_by_key[key] = idx
+        keep_indices = set(newest_index_by_key.values())
+        self._syncing_checks = True
+        try:
+            for idx, chk in enumerate(self._checkboxes):
+                chk.setChecked(idx not in keep_indices)
+        finally:
+            self._syncing_checks = False
+        self._update_summary()
+
+    def _update_summary(self) -> None:
+        if self._syncing_checks:
+            return
+        total_count = len(self._entries)
+        total_bytes = sum(int(e["size_bytes"]) for e in self._entries)
+        selected_indices = [i for i, chk in enumerate(self._checkboxes) if chk.isChecked()]
+        sel_count = len(selected_indices)
+        sel_bytes = sum(int(self._entries[i]["size_bytes"]) for i in selected_indices)
+
+        self.lbl_title.setText(f"Duplicate Files ({total_count})" if total_count else "Duplicate Files")
+        if sel_count > 0:
+            self.lbl_reclaim_pill.setText(f"Reclaim {_format_bytes(sel_bytes)} ({sel_count} selected)")
+            self.lbl_reclaim_pill.setStyleSheet(
+                "background-color: rgba(48, 209, 88, 0.16); color: #30D158; "
+                "border: 1px solid rgba(48, 209, 88, 0.42); border-radius: 12px; "
+                "padding: 5px 12px; font-size: 12px; font-weight: 600;"
+            )
+            self.btn_delete_checked.setText(f"Delete Selected ({sel_count})")
+            self.btn_delete_checked.setEnabled(True)
+        else:
+            self.lbl_reclaim_pill.setText(
+                f"Total Quarantined: {_format_bytes(total_bytes)}" if total_count else "0 B Quarantined"
+            )
+            self.lbl_reclaim_pill.setStyleSheet(
+                "background-color: rgba(255, 159, 10, 0.14); color: #FF9F0A; "
+                "border: 1px solid rgba(255, 159, 10, 0.38); border-radius: 12px; "
+                "padding: 5px 12px; font-size: 12px; font-weight: 600;"
+            )
+            self.btn_delete_checked.setText("Delete Selected to Recycle Bin")
+            self.btn_delete_checked.setEnabled(False)
+
+        self.btn_select_all.setEnabled(total_count > 0)
+        self.btn_keep_newest.setEnabled(total_count > 1)
+        self.btn_clear_sel.setEnabled(sel_count > 0)
+
+    def _show_context_menu(self, pos: QPoint) -> None:
+        row = self.tbl_dups.rowAt(pos.y())
+        if row < 0 or row >= len(self._entries):
+            return
+        menu = QMenu(self)
+        act_reveal = menu.addAction("Show in File Explorer")
+        act_toggle = menu.addAction(
+            "Uncheck File" if self._checkboxes[row].isChecked() else "Select File for Deletion"
+        )
+        chosen = menu.exec(self.tbl_dups.viewport().mapToGlobal(pos))
+        if chosen == act_reveal:
+            _reveal_in_explorer(Path(str(self._entries[row]["path"])))
+        elif chosen == act_toggle:
+            self._checkboxes[row].setChecked(not self._checkboxes[row].isChecked())
+
+    def _open_duplicates_folder(self) -> None:
+        dup_dir = self.service.watch_root / "_Duplicates"
+        target = dup_dir if dup_dir.exists() else self.service.watch_root
+        if sys.platform == "win32" and hasattr(os, "startfile") and target.exists():
+            os.startfile(str(target))
+
+    def delete_checked_files(self, *, confirm: bool = True) -> dict[str, Any]:
+        paths = self.checked_paths()
+        if not paths:
+            return {"deleted": [], "skipped_locked": [], "failed": [], "missing": [], "freed_bytes": 0}
+        sel_bytes = sum(
+            int(self._entries[i]["size_bytes"])
+            for i, chk in enumerate(self._checkboxes)
+            if i < len(self._entries) and chk.isChecked()
+        )
+        if confirm:
+            ans = QMessageBox.question(
+                self,
+                "Move Duplicates to Recycle Bin",
+                f"Move {len(paths)} duplicate file(s) ({_format_bytes(sel_bytes)}) to the Recycle Bin?\n\n"
+                "Your sorted originals stay safe, and you can still recover deleted copies from the Recycle Bin.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return {"deleted": [], "skipped_locked": [], "failed": [], "missing": [], "freed_bytes": 0}
+
+        res = self.service.delete_duplicate_files(paths)
+        self.reload()
+        self.duplicates_changed.emit()
+        if res["skipped_locked"]:
+            QMessageBox.warning(
+                self,
+                "Some Files Skipped",
+                f"Deleted {len(res['deleted'])} file(s), but {len(res['skipped_locked'])} file(s) were open in another app.",
+            )
+        return res
+
+
 class MainWindow(QMainWindow):
     """Unified, Apple-clean Download Sorter control window."""
 
@@ -641,6 +957,8 @@ class MainWindow(QMainWindow):
         self._refresh_callbacks: list[Callable[[], None]] = []
         self._footer_at_refresh: str | None = None
         self._held_count = 0
+        self._dup_count = 0
+        self._dup_bytes = 0
         self._action_running = False
         self._update_release: dict[str, Any] | None = None
         self._update_downloading = False
@@ -664,6 +982,9 @@ class MainWindow(QMainWindow):
         self.banner = AnimatedBanner(self)
         root_layout.addWidget(self.banner)
 
+        self.progress_hud = SortingProgressHUD(self)
+        root_layout.addWidget(self.progress_hud)
+
         self._tab_icon_names = ["home", "layers", "rules", "settings"]
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_home_tab(), make_vector_icon("home", "#F5F5F7", 15), "Home")
@@ -671,6 +992,9 @@ class MainWindow(QMainWindow):
         self.arch_tab.architecture_applied.connect(self._on_architecture_applied)
         self.arch_tab.undo_requested.connect(self.refresh_all)
         self.arch_tab.carry_over_requested.connect(self.open_carry_over_dialog)
+        self.arch_tab.action_started.connect(self._on_arch_action_started)
+        self.arch_tab.action_progress.connect(self._on_arch_action_progress)
+        self.arch_tab.action_finished.connect(self._on_arch_action_finished)
         self.tabs.addTab(
             self.arch_tab,
             make_vector_icon("layers", "#8E8E93", 15),
@@ -879,8 +1203,28 @@ class MainWindow(QMainWindow):
         # Card A: Downloads Folder Preview
         self.lbl_sim_summary = QLabel("Scanning Downloads...")
         self.lbl_sim_summary.setObjectName("MutedText")
-        btn_sim = InteractiveRibbonBtn("Refresh Preview", make_vector_icon("refresh", "#F5F5F7", 14))
-        btn_sim.clicked.connect(self._on_refresh_preview_clicked)
+        self.btn_delete_selected = InteractiveRibbonBtn(
+            "Delete",
+            make_vector_icon("delete", "#FFFFFF", 14),
+        )
+        self.btn_delete_selected.setObjectName("DangerButton")
+        self.btn_delete_selected.setToolTip("Move selected files from Downloads to Recycle Bin (Del)")
+        self.btn_delete_selected.setVisible(False)
+        self.btn_delete_selected.clicked.connect(lambda: self._delete_selected_sim_files(confirm=True))
+
+        self.btn_duplicates = InteractiveRibbonBtn(
+            "Duplicates",
+            make_vector_icon("duplicates", "#FF9F0A", 14),
+        )
+        self.btn_duplicates.setToolTip("Inspect and delete quarantined duplicate files inside _Duplicates/")
+        self.btn_duplicates.clicked.connect(self._open_duplicates_dialog)
+
+        self.btn_refresh_preview = InteractiveRibbonBtn(
+            "Refresh",
+            make_vector_icon("refresh", "#F5F5F7", 14),
+        )
+        self.btn_refresh_preview.setToolTip("Refresh Preview")
+        self.btn_refresh_preview.clicked.connect(self._on_refresh_preview_clicked)
         self.btn_sort_tiers = InteractiveRibbonBtn(
             "Sort Lower Tiers",
             make_vector_icon("layers", "#F5F5F7", 14),
@@ -892,9 +1236,11 @@ class MainWindow(QMainWindow):
         preview_actions = QWidget()
         preview_actions_row = QHBoxLayout(preview_actions)
         preview_actions_row.setContentsMargins(0, 0, 0, 0)
-        preview_actions_row.setSpacing(8)
+        preview_actions_row.setSpacing(6)
+        preview_actions_row.addWidget(self.btn_delete_selected)
+        preview_actions_row.addWidget(self.btn_duplicates)
         preview_actions_row.addWidget(self.btn_sort_tiers)
-        preview_actions_row.addWidget(btn_sim)
+        preview_actions_row.addWidget(self.btn_refresh_preview)
         sim_card, sim_layout = _make_surface_card(
             "Downloads Folder Preview",
             self.lbl_sim_summary,
@@ -906,6 +1252,14 @@ class MainWindow(QMainWindow):
             ["File in Downloads", "Action", "Destination Folder", "Why"]
         )
         _style_table(self.tbl_sim)
+        self.tbl_sim.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tbl_sim.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.tbl_sim.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tbl_sim.customContextMenuRequested.connect(self._show_sim_context_menu)
+        self.tbl_sim.selectionModel().selectionChanged.connect(self._on_sim_selection_changed)
+        self._sim_delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.tbl_sim)
+        self._sim_delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._sim_delete_shortcut.activated.connect(lambda: self._delete_selected_sim_files(confirm=True))
         s_hdr = self.tbl_sim.horizontalHeader()
         s_hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         s_hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
@@ -1231,6 +1585,51 @@ class MainWindow(QMainWindow):
         )
         form.addRow("", self.chk_context_menu)
 
+        chrome_col = QVBoxLayout()
+        chrome_col.setSpacing(6)
+        chrome_row = QHBoxLayout()
+        chrome_row.setSpacing(8)
+        self.lbl_chrome_status = _make_badge("READY TO SETUP", "neutral")
+        chrome_row.addWidget(self.lbl_chrome_status)
+
+        self.btn_install_chrome_host = InteractiveRibbonBtn(
+            "Install Chrome Host",
+            make_vector_icon("bolt", "#FFFFFF", 14),
+        )
+        self.btn_install_chrome_host.setToolTip(
+            "Register the Chrome/Edge Native Messaging host so Chrome saves straight into sorted folders"
+        )
+        self.btn_install_chrome_host.clicked.connect(self._on_install_chrome_host)
+        chrome_row.addWidget(self.btn_install_chrome_host)
+
+        self.btn_open_chrome_ext = InteractiveRibbonBtn(
+            "Extension Folder",
+            make_vector_icon("folder", "#F5F5F7", 14),
+        )
+        self.btn_open_chrome_ext.setObjectName("GhostButton")
+        self.btn_open_chrome_ext.setToolTip("Open the Chrome extension folder to load in chrome://extensions")
+        self.btn_open_chrome_ext.clicked.connect(self._on_open_chrome_extension)
+        chrome_row.addWidget(self.btn_open_chrome_ext)
+
+        self.btn_copy_chrome_path = InteractiveRibbonBtn(
+            "Copy Path",
+            make_vector_icon("edit", "#F5F5F7", 14),
+        )
+        self.btn_copy_chrome_path.setObjectName("GhostButton")
+        self.btn_copy_chrome_path.setToolTip("Copy the extension folder path for Chrome 'Load unpacked'")
+        self.btn_copy_chrome_path.clicked.connect(self._on_copy_chrome_extension_path)
+        chrome_row.addWidget(self.btn_copy_chrome_path)
+        chrome_row.addStretch(1)
+        chrome_col.addLayout(chrome_row)
+
+        self.lbl_chrome_hint = QLabel(
+            f"Keep Chrome's download bubble draggable: enable Developer mode in chrome://extensions → Load unpacked (ID: {CHROME_EXTENSION_ID})."
+        )
+        self.lbl_chrome_hint.setObjectName("MutedText")
+        self.lbl_chrome_hint.setWordWrap(True)
+        chrome_col.addWidget(self.lbl_chrome_hint)
+        form.addRow("Chrome Extension:", chrome_col)
+
         backup_row = QHBoxLayout()
         backup_row.setSpacing(8)
         self.btn_carry_over_settings = InteractiveRibbonBtn(
@@ -1368,12 +1767,15 @@ class MainWindow(QMainWindow):
         """Disk / ADS / SQLite reads only. Runs on a worker thread: no widgets here."""
         service = self.service
         cfg = service.config
+        dups = service.list_duplicate_files()
         return {
             "paused": cfg.paused,
             "hold_days": cfg.hold_3mf_days,
             "rules_enabled": sum(1 for r in cfg.rules if r.enabled),
             "watch_dir": service.watch_root,
             "held_count": len(service.list_held_3mf()),
+            "dup_count": len(dups),
+            "dup_bytes": sum(int(d.get("size_bytes", 0)) for d in dups),
             "simulation": service.simulate_top_level(),
             "activity": service.db.list_active_moves(limit=150),
             "stats": service.db.stats(),
@@ -1415,6 +1817,24 @@ class MainWindow(QMainWindow):
         )
         self.btn_file_held.setEnabled(held_count > 0)
         self.btn_file_held.setVisible(held_count > 0)
+
+        dup_count = int(snap.get("dup_count", 0))
+        dup_bytes = int(snap.get("dup_bytes", 0))
+        self._dup_count = dup_count
+        self._dup_bytes = dup_bytes
+        if hasattr(self, "btn_duplicates"):
+            self.btn_duplicates.setText(f"Duplicates ({dup_count})" if dup_count else "Duplicates")
+            self.btn_duplicates.setToolTip(
+                f"{dup_count} quarantined duplicate(s) ({_format_bytes(dup_bytes)} reclaimable) in _Duplicates/"
+                if dup_count
+                else "No duplicate files quarantined in _Duplicates/"
+            )
+            self.btn_duplicates.setStyleSheet(
+                "background-color: rgba(255, 159, 10, 0.14); border: 1px solid rgba(255, 159, 10, 0.45); "
+                "color: #FFB340; font-weight: 600;"
+                if dup_count
+                else ""
+            )
 
         self._run_simulation(snap["simulation"], hold_days=int(snap["hold_days"]))
         self._refresh_activity(snap["activity"], watch_dir=snap["watch_dir"])
@@ -1543,11 +1963,32 @@ class MainWindow(QMainWindow):
         except updater.UpdateError as exc:  # inline (test) mode raises directly
             _failed(str(exc))
 
+    def _restore_mascot_resting(self) -> None:
+        self.header_mascot.set_working(False)
+        self.header_mascot.set_pose("sleeping" if self.service.paused else ("safe" if self._held_count > 0 else "smart"))
+
+    def _on_arch_action_started(self, title: str) -> None:
+        self.header_mascot.set_working(True, mode="scanning")
+        self.progress_hud.start(title, detail="Preparing...", total=0)
+        self.lbl_footer.setText(title)
+
+    def _on_arch_action_progress(self, done: int, total: int, label: str) -> None:
+        if total > 0:
+            self.header_mascot.set_working(True, mode="working")
+        self.progress_hud.update_progress(done, total, label)
+
+    def _on_arch_action_finished(self, summary: str, kind: str) -> None:
+        self._restore_mascot_resting()
+        self.progress_hud.finish(summary, kind="warning" if kind == "warning" else "success")
+
     def _run_service_action(
         self,
-        work: Callable[[], Any],
+        work: Callable[..., Any],
         on_done: Callable[[Any], None],
         busy_text: str = "Working...",
+        *,
+        pass_progress: bool = False,
+        finish_text: str = "Done",
     ) -> None:
         """Run a file-moving service call off the GUI thread, then ``on_done(result)``.
 
@@ -1558,24 +1999,43 @@ class MainWindow(QMainWindow):
             self.lbl_footer.setText("Still working on the previous request...")
             return
         self._action_running = True
+        self.header_mascot.set_working(True, mode="scanning")
+        self.progress_hud.start(busy_text, detail="Preparing...", total=0)
+        self.lbl_footer.setText(busy_text)
+
+        def _on_progress(done: int, total: int, label: str) -> None:
+            if total > 0:
+                self.header_mascot.set_working(True, mode="working")
+            self.progress_hud.update_progress(done, total, label)
 
         def _finished(result: Any) -> None:
             self._action_running = False
+            self._restore_mascot_resting()
+            self.progress_hud.finish(finish_text, kind="success")
             on_done(result)
 
         def _failed(message: str) -> None:
             self._action_running = False
+            self._restore_mascot_resting()
+            self.progress_hud.finish("Action did not finish", detail=message, kind="warning")
             self.banner.show_message(f"That did not finish: {message}", kind="warning")
             self.lbl_footer.setText(f"That did not finish: {message}")
             self.refresh_all()
 
         try:
-            dispatched = run_async(work, _finished, _failed, parent=self)
+            run_async(
+                work,
+                _finished,
+                _failed,
+                parent=self,
+                on_progress=_on_progress,
+                pass_progress=pass_progress,
+            )
         except Exception:
             self._action_running = False
+            self._restore_mascot_resting()
+            self.progress_hud.collapse()
             raise
-        if dispatched:
-            self.lbl_footer.setText(busy_text)
 
     def _refresh_activity(
         self,
@@ -1649,6 +2109,51 @@ class MainWindow(QMainWindow):
         self.spin_hold_days.setEnabled(cfg.hold_3mf_enabled)
         self.chk_startup.setChecked(is_startup_enabled())
         self.chk_context_menu.setChecked(is_context_menu_enabled())
+        self._refresh_chrome_status()
+
+    def _refresh_chrome_status(self) -> None:
+        if not hasattr(self, "lbl_chrome_status"):
+            return
+        registered = is_chrome_host_registered(self.service.paths.data_dir)
+        ext_dir = find_extension_dir()
+        if registered:
+            self.lbl_chrome_status.setText("HOST REGISTERED")
+            self.lbl_chrome_status.setProperty("variant", "success")
+            self.btn_install_chrome_host.setText("Repair Host")
+        else:
+            self.lbl_chrome_status.setText("HOST NOT SET")
+            self.lbl_chrome_status.setProperty("variant", "warning")
+            self.btn_install_chrome_host.setText("Install Chrome Host")
+        _refresh_style(self.lbl_chrome_status)
+        self.btn_open_chrome_ext.setEnabled(ext_dir is not None)
+        self.btn_copy_chrome_path.setEnabled(ext_dir is not None)
+
+    def _on_install_chrome_host(self) -> None:
+        info = install_chrome_native_host(self.service.paths.data_dir)
+        self._refresh_chrome_status()
+        msg = f"Chrome Native Messaging host registered ({Path(info['host_target']).name})."
+        self.banner.show_message(msg, kind="success")
+        self.lbl_footer.setText(msg)
+
+    def _on_open_chrome_extension(self) -> None:
+        ext_dir = find_extension_dir()
+        if ext_dir is None:
+            QMessageBox.warning(self, "Chrome Extension", "Could not find the chrome_extension folder.")
+            return
+        if sys.platform == "win32" and hasattr(os, "startfile"):
+            os.startfile(str(ext_dir))
+
+    def _on_copy_chrome_extension_path(self) -> None:
+        ext_dir = find_extension_dir()
+        if ext_dir is None:
+            QMessageBox.warning(self, "Chrome Extension", "Could not find the chrome_extension folder.")
+            return
+        cb = QApplication.clipboard()
+        if cb is not None:
+            cb.setText(str(ext_dir))
+        msg = f"Copied extension path to clipboard: {ext_dir}"
+        self.banner.show_message("Copied Chrome extension folder path — paste it in 'Load unpacked'.", kind="info")
+        self.lbl_footer.setText(msg)
 
     def _update_live_tester(self) -> None:
         filename = self.edit_test_name.text().strip()
@@ -1732,9 +2237,11 @@ class MainWindow(QMainWindow):
 
     def _on_sort_now(self) -> None:
         self._run_service_action(
-            self.service.scan_top_level_now,
+            lambda report: self.service.scan_top_level_now(on_progress=report),
             lambda res: self.refresh_all(then=lambda: self._after_sort_now(res)),
             busy_text="Sorting Downloads...",
+            pass_progress=True,
+            finish_text="Sorting Complete",
         )
 
     def _after_sort_now(self, res: dict[str, Any]) -> None:
@@ -1746,15 +2253,22 @@ class MainWindow(QMainWindow):
                 list(range(min(moved_n, self.tbl_activity.rowCount()))),
                 "#30D158",
             )
+            msg = f"Cleaned up Downloads: moved {moved_n} file(s)."
+            self.progress_hud.finish(msg, detail="All eligible files organized", kind="success")
             self.banner.show_message(
-                f"Cleaned up Downloads: moved {moved_n} file(s).",
+                msg,
                 kind="success",
                 action_text="Undo",
                 action=self._on_undo_last,
             )
-            self.lbl_footer.setText(f"Cleaned up Downloads: moved {moved_n} file(s).")
+            self.lbl_footer.setText(msg)
         else:
             held_n = res.get("held", 0)
+            self.progress_hud.finish(
+                "Downloads looks clean",
+                detail=f"0 moved ({held_n} .3MF held, {res['left']} left)",
+                kind="success",
+            )
             self.banner.show_message("Downloads looks clean — nothing needed moving right now.", kind="info")
             self.lbl_footer.setText(
                 f"Everything looks clean: 0 moved ({held_n} .3MF held for 3D printing, {res['left']} left in Downloads)."
@@ -1762,9 +2276,11 @@ class MainWindow(QMainWindow):
 
     def _on_sort_tiers_now(self) -> None:
         self._run_service_action(
-            self.service.sort_managed_tiers_now,
+            lambda report: self.service.sort_managed_tiers_now(on_progress=report),
             lambda res: self.refresh_all(then=lambda: self._after_sort_tiers_now(res)),
             busy_text="Sorting lower tiers...",
+            pass_progress=True,
+            finish_text="Lower Tiers Organized",
         )
 
     def _after_sort_tiers_now(self, res: dict[str, Any]) -> None:
@@ -1777,18 +2293,22 @@ class MainWindow(QMainWindow):
                 "#30D158",
             )
             msg = f"Sorted lower tiers: moved {moved_n} file(s) into their target folders."
+            self.progress_hud.finish(msg, kind="success")
             self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
             self.lbl_footer.setText(msg)
         else:
             msg = "Lower tiers are already organized — nothing needed moving."
+            self.progress_hud.finish("Lower tiers are already organized", kind="success")
             self.banner.show_message(msg, kind="info")
             self.lbl_footer.setText(msg)
 
     def _on_file_held_now(self) -> None:
         self._run_service_action(
-            self.service.file_held_3mf_now,
+            lambda report: self.service.file_held_3mf_now(on_progress=report),
             lambda res: self.refresh_all(then=lambda: self._after_file_held_now(res)),
             busy_text="Moving held .3MF files...",
+            pass_progress=True,
+            finish_text="Moved Held .3MF Files",
         )
 
     def _after_file_held_now(self, res: dict[str, Any]) -> None:
@@ -1828,15 +2348,21 @@ class MainWindow(QMainWindow):
         return ("  " + "; ".join(notes) + ".") if notes else ""
 
     def _on_undo_last(self) -> None:
-        def _work() -> dict[str, Any]:
-            return self.service.undo_architecture_or_last_batch()
+        def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
+            return self.service.undo_architecture_or_last_batch(on_progress=report)
 
         def _done(res: dict[str, Any]) -> None:
             if hasattr(self, "arch_tab"):
                 self.arch_tab._dirty = False
             self.refresh_all(then=lambda: self._after_undo_last(res))
 
-        self._run_service_action(_work, _done, busy_text="Undoing...")
+        self._run_service_action(
+            _work,
+            _done,
+            busy_text="Undoing...",
+            pass_progress=True,
+            finish_text="Undo Complete",
+        )
 
     def _after_undo_last(self, res: dict[str, Any]) -> None:
         restored = res.get("restored", 0)
@@ -1862,9 +2388,11 @@ class MainWindow(QMainWindow):
 
     def _on_undo_single(self, move_id: int) -> None:
         self._run_service_action(
-            lambda: self.service.undo_single_move(move_id),
+            lambda report: self.service.undo_single_move(move_id, on_progress=report),
             lambda res: self.refresh_all(then=lambda: self._after_undo_single(res)),
-            busy_text="Undoing...",
+            busy_text="Restoring file...",
+            pass_progress=True,
+            finish_text="File Restored",
         )
 
     def _after_undo_single(self, res: dict[str, Any]) -> None:
@@ -1999,11 +2527,12 @@ class MainWindow(QMainWindow):
         shift_now = bool(dlg.should_shift_now)
         summary = dict(dlg.carry_summary)
 
-        def _work() -> dict[str, Any]:
+        def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
             return self.service.apply_architecture_and_shift(
                 carried_config,
                 shift_files=shift_now,
                 create_empty_folders=False,
+                on_progress=report,
             )
 
         def _announce(res: dict[str, Any]) -> None:
@@ -2014,6 +2543,7 @@ class MainWindow(QMainWindow):
                 + (f" (shifted {shifted} file(s))." if shifted else ".")
             )
             self.header_mascot.celebrate()
+            self.progress_hud.finish("Setup Carried Over", detail=msg, kind="success")
             self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
             self.lbl_footer.setText(msg)
 
@@ -2023,7 +2553,13 @@ class MainWindow(QMainWindow):
                 self.arch_tab.sync_from_service(force=True)
             self.refresh_all(then=lambda: _announce(res))
 
-        self._run_service_action(_work, _done, busy_text="Carrying over your setup...")
+        self._run_service_action(
+            _work,
+            _done,
+            busy_text="Carrying over your setup...",
+            pass_progress=True,
+            finish_text="Setup Carried Over",
+        )
 
     def _export_current_setup(self) -> None:
         out_path, _ = QFileDialog.getSaveFileName(
@@ -2126,6 +2662,7 @@ class MainWindow(QMainWindow):
             results = self.service.simulate_top_level()
         if hold_days is None:
             hold_days = self.service.config.hold_3mf_days
+        self.tbl_sim.clearSelection()
         self.tbl_sim.setRowCount(len(results))
         move_count = sum(1 for _p, d in results if d.action == "move")
         held_count = sum(1 for _p, d in results if d.match_type == "hold")
@@ -2157,7 +2694,10 @@ class MainWindow(QMainWindow):
                 dest_text = "Downloads (unchanged)"
                 why_text = dec.reason
 
-            self.tbl_sim.setItem(idx, 0, QTableWidgetItem(path.name))
+            name_item = QTableWidgetItem(path.name)
+            name_item.setData(Qt.ItemDataRole.UserRole, str(path))
+            name_item.setToolTip(f"{path}\nRight-click or press Delete to move to Recycle Bin")
+            self.tbl_sim.setItem(idx, 0, name_item)
             holder = QWidget()
             hl = QHBoxLayout(holder)
             hl.setContentsMargins(6, 0, 6, 0)
@@ -2181,6 +2721,118 @@ class MainWindow(QMainWindow):
                 f"{len(results)} file(s) currently in Downloads "
                 f"({move_count} ready to move now, {held_count} held for 3D printing)."
             )
+        self._on_sim_selection_changed()
+
+    # ------------------------------------------------------------------
+    # Preview Selection Deletion & Native Duplicate Manager
+    # ------------------------------------------------------------------
+    def _selected_sim_paths(self) -> list[Path]:
+        if not hasattr(self, "tbl_sim") or self.tbl_sim.selectionModel() is None:
+            return []
+        rows = sorted({idx.row() for idx in self.tbl_sim.selectionModel().selectedRows()})
+        paths: list[Path] = []
+        for row in rows:
+            item = self.tbl_sim.item(row, 0)
+            if item is None:
+                continue
+            raw = item.data(Qt.ItemDataRole.UserRole)
+            if raw:
+                paths.append(Path(str(raw)))
+        return paths
+
+    def _on_sim_selection_changed(self) -> None:
+        if not hasattr(self, "btn_delete_selected"):
+            return
+        selected = self._selected_sim_paths()
+        count = len(selected)
+        self.btn_delete_selected.setText(f"Delete ({count})" if count else "Delete")
+        self.btn_delete_selected.setVisible(count > 0)
+        self.btn_delete_selected.setEnabled(count > 0)
+
+    def _show_sim_context_menu(self, pos: QPoint) -> None:
+        selected = self._selected_sim_paths()
+        if not selected:
+            row = self.tbl_sim.rowAt(pos.y())
+            if row >= 0:
+                self.tbl_sim.selectRow(row)
+                selected = self._selected_sim_paths()
+        if not selected:
+            return
+        menu = QMenu(self)
+        act_reveal = menu.addAction("Show in File Explorer")
+        menu.addSeparator()
+        act_delete = menu.addAction(
+            f"Move {len(selected)} File(s) to Recycle Bin\tDel"
+            if len(selected) > 1
+            else f"Move '{selected[0].name}' to Recycle Bin\tDel"
+        )
+        chosen = menu.exec(self.tbl_sim.viewport().mapToGlobal(pos))
+        if chosen == act_reveal:
+            _reveal_in_explorer(selected[0])
+        elif chosen == act_delete:
+            self._delete_selected_sim_files(confirm=True)
+
+    def _delete_selected_sim_files(self, *, confirm: bool = True) -> None:
+        paths = self._selected_sim_paths()
+        if not paths:
+            return
+        total_bytes = 0
+        for p in paths:
+            try:
+                if p.exists():
+                    total_bytes += int(p.stat().st_size)
+            except OSError:
+                pass
+        if confirm:
+            preview_names = "\n".join(f"• {p.name}" for p in paths[:6])
+            if len(paths) > 6:
+                preview_names += f"\n• ...and {len(paths) - 6} more"
+            ans = QMessageBox.question(
+                self,
+                "Move Selected Files to Recycle Bin",
+                f"Move {len(paths)} selected file(s) ({_format_bytes(total_bytes)}) to the Windows Recycle Bin?\n\n"
+                f"{preview_names}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+
+        self._run_service_action(
+            lambda report: self.service.delete_watch_files(paths, on_progress=report),
+            lambda res: self.refresh_all(then=lambda: self._after_delete_sim_files(res)),
+            busy_text=f"Deleting {len(paths)} selected file(s)...",
+            pass_progress=True,
+            finish_text="Files Removed",
+        )
+
+    def _after_delete_sim_files(self, res: dict[str, Any]) -> None:
+        deleted_n = len(res.get("deleted", []))
+        locked_n = len(res.get("skipped_locked", []))
+        freed = _format_bytes(int(res.get("freed_bytes", 0)))
+        if deleted_n and not locked_n:
+            where = "Recycle Bin" if res.get("recycled") else "disk"
+            msg = f"Moved {deleted_n} file(s) ({freed}) to {where}."
+            self.progress_hud.finish("Files Moved to Recycle Bin", detail=msg, kind="success")
+            self.banner.show_message(msg, kind="success")
+            self.lbl_footer.setText(msg)
+        elif deleted_n and locked_n:
+            msg = f"Deleted {deleted_n} file(s) ({freed}); {locked_n} file(s) are open in another app."
+            self.progress_hud.finish("Deleted with Warnings", detail=msg, kind="warning")
+            self.banner.show_message(msg, kind="warning")
+            self.lbl_footer.setText(msg)
+        elif locked_n:
+            msg = f"Could not delete {locked_n} file(s) because they are open in another app."
+            self.progress_hud.finish("Files Locked", detail=msg, kind="warning")
+            self.banner.show_message(msg, kind="warning")
+            self.lbl_footer.setText(msg)
+
+    def _open_duplicates_dialog(self) -> DuplicateManagerDialog:
+        dlg = DuplicateManagerDialog(self.service, self)
+        dlg.duplicates_changed.connect(self.refresh_all)
+        dlg.exec()
+        self.refresh_all()
+        return dlg
 
     def complete_walkthrough(self) -> None:
         """Persist tutorial completion and smoothly hide the Home instructions block."""

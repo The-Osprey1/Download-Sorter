@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--home", action="store_true", help="Open single-process UI window + tray")
     parser.add_argument("--tray", "-t", action="store_true", help="Start single-process tray in background")
     parser.add_argument("--dialog", type=int, help="Target dialog HWND to dock Quick Switcher against")
+    parser.add_argument("--native-host", action="store_true", help="Run Chrome Native Messaging host over stdio")
     parser.add_argument("--quit", action="store_true", help="Stop running Download Sorter v3 process")
     parser.add_argument("--data-dir", type=Path, help="Override state directory")
     parser.add_argument("--watch-dir", type=Path, help="Override watched Downloads directory")
@@ -88,7 +89,16 @@ def main(argv: list[str] | None = None) -> int:
                 stream.reconfigure(errors="replace")
             except Exception:
                 pass
-    args = build_parser().parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    # Chrome launches the native host binary with 'chrome-extension://<id>/' on argv.
+    if "--native-host" in raw_argv or any(
+        str(tok).startswith(("chrome-extension://", "extension://")) for tok in raw_argv
+    ):
+        from download_sorter.chrome_bridge import run_native_host
+
+        return run_native_host(AppPaths.default())
+
+    args = build_parser().parse_args(raw_argv)
     if args.version:
         print(f"Download Sorter {__version__}")
         return 0

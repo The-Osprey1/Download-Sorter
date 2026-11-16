@@ -28,23 +28,40 @@ def async_enabled() -> bool:
 
 
 class WorkerSignals(QObject):
-    """Lives on the GUI thread; carries a worker's result back to it."""
+    """Lives on the GUI thread; carries a worker's progress and result back to it."""
 
     finished = Signal(object)
     error = Signal(str)
+    progress = Signal(int, int, str)
 
     def __init__(
         self,
         on_done: Callable[[Any], None] | None,
         on_error: Callable[[str], None] | None,
         parent: QObject | None = None,
+        on_progress: Callable[[int, int, str], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_done = on_done
         self._on_error = on_error
+        self._on_progress = on_progress
         # Queued explicitly: the emit happens on a pool thread, the slot must not.
         self.finished.connect(self._deliver_result, Qt.ConnectionType.QueuedConnection)
         self.error.connect(self._deliver_error, Qt.ConnectionType.QueuedConnection)
+        self.progress.connect(self._deliver_progress, Qt.ConnectionType.QueuedConnection)
+
+    def emit_progress(self, done: int, total: int, label: str = "") -> None:
+        """Thread-safe progress emission from a worker thread."""
+        try:
+            self.progress.emit(int(done), int(total), str(label))
+        except RuntimeError:
+            # Owning window was closed while task was running.
+            pass
+
+    @Slot(int, int, str)
+    def _deliver_progress(self, done: int, total: int, label: str) -> None:
+        if self._on_progress is not None:
+            self._on_progress(done, total, label)
 
     @Slot(object)
     def _deliver_result(self, result: Any) -> None:
@@ -67,6 +84,7 @@ class WorkerSignals(QObject):
     def _release(self) -> None:
         self._on_done = None
         self._on_error = None
+        self._on_progress = None
         _LIVE_SIGNALS.discard(self)
         self.deleteLater()
 
@@ -104,26 +122,32 @@ class AsyncTask(QRunnable):
 
 
 def run_async(
-    fn: Callable[[], Any],
+    fn: Callable[..., Any],
     on_done: Callable[[Any], None] | None = None,
     on_error: Callable[[str], None] | None = None,
     *,
     parent: QObject | None = None,
     force_async: bool = False,
+    on_progress: Callable[[int, int, str], None] | None = None,
+    pass_progress: bool = False,
 ) -> bool:
     """Run ``fn`` off the GUI thread and hand its result to ``on_done`` on the GUI thread.
 
     Returns True when the work was dispatched to the pool, False when it ran inline.
     ``parent`` ties delivery to a widget's lifetime: if it is destroyed first, the
-    result is dropped instead of being delivered to a dead window.
+    result is dropped instead of being delivered to a dead window. When
+    ``pass_progress`` is True, ``fn`` is invoked with a thread-safe ``(done, total, label)``
+    reporter callback.
     """
     if not (force_async or async_enabled()):
-        result = fn()
+        progress_cb = on_progress if on_progress is not None else (lambda _d, _t, _s="": None)
+        result = fn(progress_cb) if pass_progress else fn()
         if on_done is not None:
             on_done(result)
         return False
 
-    signals = WorkerSignals(on_done, on_error, parent)
+    signals = WorkerSignals(on_done, on_error, parent, on_progress=on_progress)
     _LIVE_SIGNALS.add(signals)
-    QThreadPool.globalInstance().start(AsyncTask(fn, signals))
+    args = (signals.emit_progress,) if pass_progress else ()
+    QThreadPool.globalInstance().start(AsyncTask(fn, signals, *args))
     return True

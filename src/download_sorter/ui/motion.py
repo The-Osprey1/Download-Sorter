@@ -24,7 +24,18 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -33,6 +44,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QTableWidget,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -554,6 +566,9 @@ def make_vector_icon(name: str, color_hex: str = "#F3F4F6", size: int = 16) -> Q
         path.arcTo(QRectF(3.0, 3.0, 10.0, 10.0), 40, 290)
         p.drawPath(path)
         p.drawPolyline([QPointF(10.5, 3.0), QPointF(13.0, 5.2), QPointF(9.8, 6.2)])
+    elif name == "duplicates":
+        p.drawRoundedRect(QRectF(5.5, 2.5, 7.5, 9.0), 1.4, 1.4)
+        p.drawRoundedRect(QRectF(3.0, 5.0, 7.5, 9.0), 1.4, 1.4)
 
     p.end()
     return QIcon(px)
@@ -722,7 +737,18 @@ class SortyMascotWidget(QWidget):
     clicked = Signal(str)
     easter_egg_triggered = Signal()
 
-    POSES = ("smart", "waving", "safe", "protective", "celebrating", "happy", "sleeping", "party")
+    POSES = (
+        "smart",
+        "waving",
+        "safe",
+        "protective",
+        "celebrating",
+        "happy",
+        "sleeping",
+        "party",
+        "working",
+        "scanning",
+    )
     SORTY_TIPS: tuple[str, ...] = (
         "Open the Folder Architecture tab to add layers (tiers), pick premade folders, or design custom rule folders.",
         "Clicked 'Apply & Shift Files'? Don't worry — Undo always puts shifted files and folders right back.",
@@ -747,11 +773,20 @@ class SortyMascotWidget(QWidget):
         self._cute_prog = 0.0
         self._party_mode = False
         self._party_phase = 0.0
+        self._working = False
+        self._work_phase = 0.0
         self._click_timestamps: list[float] = []
         self._tip_index = -1
         self.setFixedSize(size, size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        self._work_anim = QVariantAnimation(self)
+        self._work_anim.setDuration(1100)
+        self._work_anim.setStartValue(0.0)
+        self._work_anim.setEndValue(1.0)
+        self._work_anim.setLoopCount(-1)
+        self._work_anim.valueChanged.connect(self._on_work_anim)
 
         self._pose_anim = QVariantAnimation(self)
         self._pose_anim.setDuration(350)
@@ -808,8 +843,19 @@ class SortyMascotWidget(QWidget):
         if norm in self.POSES:
             changed = norm != self._pose
             self._pose = norm
-            if norm not in ("celebrating", "happy", "party"):
+            if norm not in ("celebrating", "happy", "party", "working", "scanning"):
                 self._resting_pose = norm
+            if norm in ("working", "scanning"):
+                self._working = True
+                if animations_enabled() and not os.environ.get("PYTEST_CURRENT_TEST"):
+                    if self._work_anim.state() != QAbstractAnimation.State.Running:
+                        self._work_anim.start()
+                else:
+                    self._work_phase = 0.35
+            elif self._working:
+                self._working = False
+                self._work_anim.stop()
+                self._work_phase = 0.0
             if changed and animations_enabled() and not os.environ.get("PYTEST_CURRENT_TEST"):
                 self._pose_anim.stop()
                 self._pose_prog = 0.0
@@ -817,6 +863,22 @@ class SortyMascotWidget(QWidget):
             else:
                 self._pose_prog = 1.0
                 self.update()
+
+    def set_working(self, active: bool, mode: str = "working") -> None:
+        """Animate Sorty sorting or scanning files, then restore resting pose cleanly."""
+        if active:
+            self.set_pose("scanning" if mode == "scanning" else "working")
+        else:
+            self._working = False
+            self._work_anim.stop()
+            self._work_phase = 0.0
+            if not self._party_mode and self._pose in ("working", "scanning"):
+                self._pose = self._resting_pose
+            self.update()
+
+    def _on_work_anim(self, value: object) -> None:
+        self._work_phase = float(value)  # type: ignore[arg-type]
+        self.update()
 
     def set_state(self, state: str, expression: str | None = None) -> None:
         self.set_pose(state)
@@ -944,6 +1006,7 @@ class SortyMascotWidget(QWidget):
         self._pose_anim.stop()
         self._cute_anim.stop()
         self._party_anim.stop()
+        self._work_anim.stop()
         super().hideEvent(event)
 
     def to_pixmap(self, width: int = 64, height: int = 64) -> QPixmap:
@@ -982,12 +1045,19 @@ class SortyMascotWidget(QWidget):
             p.translate(32.0, 32.0 + hop)
             p.rotate(tilt)
             p.translate(-32.0, -32.0)
+        elif self._working or self._pose in ("working", "scanning"):
+            work_bob = math.sin(self._work_phase * math.pi * 2.0) * -1.8
+            work_tilt = math.sin(self._work_phase * math.pi * 2.0) * 2.4
+            p.translate(32.0, 32.0 + work_bob)
+            p.rotate(work_tilt)
+            p.translate(-32.0, -32.0)
         else:
             p.translate(0.0, settle)
 
-        # Back folder tab & body (Apple Finder Blue)
-        p.setPen(QPen(QColor("#0055B3"), 1.5))
-        p.setBrush(QColor("#0071E3"))
+        # Back folder tab & body (Apple Finder Blue / warm amber glow while scanning)
+        is_scanning = self._pose == "scanning"
+        p.setPen(QPen(QColor("#D97706" if is_scanning else "#0055B3"), 1.5))
+        p.setBrush(QColor("#FF9F0A" if is_scanning else "#0071E3"))
         back = QPainterPath()
         back.moveTo(10, 22)
         back.lineTo(10, 17)
@@ -1001,13 +1071,34 @@ class SortyMascotWidget(QWidget):
         back.closeSubpath()
         p.drawPath(back)
 
-        # Peeking crisp white doc sheet
+        # Peeking crisp white doc sheet (gentle breathing when sorting/scanning)
+        sheet_dy = math.sin(self._work_phase * math.pi * 2.0) * -2.2 if (self._working or self._pose in ("working", "scanning")) else 0.0
         p.setPen(QPen(QColor("#D1D1D6"), 1.0))
         p.setBrush(QColor("#F5F5F7"))
-        p.drawRoundedRect(QRectF(20, 11, 24, 16), 3, 3)
+        p.drawRoundedRect(QRectF(20, 11 + sheet_dy, 24, 16), 3, 3)
+
+        # Orbiting mini file cards gliding into Sorty's folder mouth while sorting
+        if self._working or self._pose in ("working", "scanning"):
+            for card_idx, card_color in enumerate(("#5AC8FA", "#30D158", "#FFD60A")):
+                t = (self._work_phase + card_idx / 3.0) % 1.0
+                # Parabolic arc from upper-right (52, 8) into folder mouth (32, 22)
+                cx = 52.0 * (1.0 - t) + 32.0 * t
+                cy = 7.0 + math.sin(t * math.pi) * -5.0 + t * 14.0
+                scale = 1.0 - 0.55 * t
+                alpha = int(235 * (1.0 - max(0.0, (t - 0.72) / 0.28)))
+                p.save()
+                p.translate(cx, cy)
+                p.scale(scale, scale)
+                p.rotate(-18.0 * (1.0 - t))
+                col = QColor(card_color)
+                col.setAlpha(alpha)
+                p.setPen(QPen(QColor(255, 255, 255, min(200, alpha)), 0.9))
+                p.setBrush(col)
+                p.drawRoundedRect(QRectF(-4.0, -5.0, 8.0, 10.0), 1.8, 1.8)
+                p.restore()
 
         # Front folder face body
-        p.setPen(QPen(QColor("#64D2FF"), 1.6))
+        p.setPen(QPen(QColor("#FFD60A" if is_scanning else "#64D2FF"), 1.6))
         p.setBrush(QColor("#0A84FF"))
         p.drawRoundedRect(QRectF(8, 25, 48, 29), 8, 8)
 
@@ -1017,7 +1108,7 @@ class SortyMascotWidget(QWidget):
         p.drawEllipse(QRectF(13, 41, 6, 4))
         p.drawEllipse(QRectF(45, 41, 6, 4))
 
-        # Eyes with quiet natural blink (~every 4.5s)
+        # Eyes with quiet natural blink (~every 4.5s) or focused darting pupils when working
         if self._pose == "sleeping" or self._blinking:
             p.setPen(QPen(QColor("#FFFFFF"), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             p.setBrush(Qt.BrushStyle.NoBrush)
@@ -1035,9 +1126,12 @@ class SortyMascotWidget(QWidget):
             p.setBrush(QColor("#FFFFFF"))
             p.drawEllipse(QPointF(23.5, 38.0), 2.8, 3.2)
             p.drawEllipse(QPointF(40.5, 38.0), 2.8, 3.2)
+            pupil_dx = 0.7
+            if self._working or self._pose in ("working", "scanning"):
+                pupil_dx = math.sin(self._work_phase * math.pi * 4.0) * 1.15
             p.setBrush(QColor("#002B5C"))
-            p.drawEllipse(QPointF(24.2, 38.3), 1.2, 1.4)
-            p.drawEllipse(QPointF(41.2, 38.3), 1.2, 1.4)
+            p.drawEllipse(QPointF(23.5 + pupil_dx, 38.3), 1.2, 1.4)
+            p.drawEllipse(QPointF(40.5 + pupil_dx, 38.3), 1.2, 1.4)
 
         # Smile mouth
         p.setPen(QPen(QColor("#FFFFFF"), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
@@ -1467,6 +1561,333 @@ class WalkthroughDiagramCanvas(QWidget):
             _sub_progress(self._anim_progress, 0.55, 1.00),
             mini_ribbon=(self._step == 2),
         )
+
+
+class SortingProgressHUD(QFrame):
+    """Inline Apple Sequoia dark-mode processing HUD with 60fps QPainter shimmer progress bar."""
+
+    _TARGET_HEIGHT = 68
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._height_anim = QPropertyAnimation(self, b"maximumHeight", self)
+        self._height_anim.setDuration(260)
+        self._height_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._height_anim.finished.connect(self._on_height_anim_done)
+
+        self._frame_timer = QTimer(self)
+        self._frame_timer.setInterval(16)
+        self._frame_timer.timeout.connect(self._on_tick)
+
+        self._collapse_timer = QTimer(self)
+        self._collapse_timer.setSingleShot(True)
+        self._collapse_timer.timeout.connect(self.collapse)
+
+        self.setObjectName("SortingProgressHUD")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMaximumHeight(0)
+        self.setVisible(False)
+
+        self._mode = "indeterminate"  # "indeterminate" | "determinate" | "success" | "warning"
+        self._phase = 0.0
+        self._pulse = 0.0
+        self._display_progress = 0.0
+        self._target_progress = 0.0
+        self._raw_detail = ""
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 10, 16, 16)
+        outer.setSpacing(6)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(10)
+
+        # Space on the left is painted directly as an animated pulsing status orb / check badge
+        spacer_dot = QWidget(self)
+        spacer_dot.setFixedSize(16, 16)
+        header.addWidget(spacer_dot)
+
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(1)
+
+        self._title_label = QLabel("Processing...")
+        self._title_label.setStyleSheet("color: #FFFFFF; font-size: 13px; font-weight: 600; background: transparent;")
+        self._detail_label = QLabel("")
+        self._detail_label.setStyleSheet("color: #8E8E93; font-size: 11px; background: transparent;")
+        self._detail_label.setMinimumWidth(80)
+        text_col.addWidget(self._title_label)
+        text_col.addWidget(self._detail_label)
+        header.addLayout(text_col, 1)
+
+        self._count_pill = QLabel("")
+        self._count_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._count_pill.setStyleSheet(
+            "background-color: #111113; color: #AEAEB2; border: 1px solid #2C2C2E; "
+            "border-radius: 10px; padding: 3px 9px; font-size: 11px; font-weight: 600;"
+        )
+        self._count_pill.setVisible(False)
+        header.addWidget(self._count_pill)
+
+        self._pct_pill = QLabel("···")
+        self._pct_pill.setFixedWidth(54)
+        self._pct_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._apply_pct_style("active")
+        header.addWidget(self._pct_pill)
+
+        outer.addLayout(header)
+        outer.addSpacing(10)
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def progress(self) -> float:
+        return self._target_progress
+
+    def _apply_pct_style(self, tone: str) -> None:
+        if tone == "success":
+            bg, fg, border = "rgba(48, 209, 88, 0.16)", "#30D158", "rgba(48, 209, 88, 0.40)"
+        elif tone == "warning":
+            bg, fg, border = "rgba(255, 159, 10, 0.16)", "#FF9F0A", "rgba(255, 159, 10, 0.40)"
+        else:
+            bg, fg, border = "rgba(10, 132, 255, 0.15)", "#5AC8FA", "rgba(10, 132, 255, 0.35)"
+        self._pct_pill.setStyleSheet(
+            f"background-color: {bg}; color: {fg}; border: 1px solid {border}; "
+            "border-radius: 10px; padding: 3px 6px; font-size: 11px; font-weight: 700;"
+        )
+
+    def _refresh_elided_detail(self) -> None:
+        if not self._raw_detail:
+            self._detail_label.setText("")
+            return
+        avail = max(140, self._detail_label.width() if self._detail_label.width() > 40 else 360)
+        fm = QFontMetrics(self._detail_label.font())
+        self._detail_label.setText(fm.elidedText(self._raw_detail, Qt.TextElideMode.ElideMiddle, avail))
+        self._detail_label.setToolTip(self._raw_detail)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        self._refresh_elided_detail()
+
+    def start(self, title: str = "Processing...", detail: str = "Scanning files...", total: int = 0) -> None:
+        self._collapse_timer.stop()
+        self._height_anim.stop()
+        self._phase = 0.0
+        self._pulse = 0.0
+        self._title_label.setText(title)
+        self._raw_detail = detail
+        self._refresh_elided_detail()
+
+        if total > 0:
+            self._mode = "determinate"
+            self._target_progress = 0.0
+            self._display_progress = 0.04
+            self._count_pill.setText(f"0 / {total}")
+            self._count_pill.setVisible(True)
+            self._pct_pill.setText("0%")
+        else:
+            self._mode = "indeterminate"
+            self._target_progress = 0.0
+            self._display_progress = 0.0
+            self._count_pill.setVisible(False)
+            self._pct_pill.setText("···")
+        self._apply_pct_style("active")
+
+        self.setVisible(True)
+        if animations_enabled() and not os.environ.get("PYTEST_CURRENT_TEST"):
+            self._height_anim.setStartValue(self.maximumHeight())
+            self._height_anim.setEndValue(self._TARGET_HEIGHT)
+            self._height_anim.start()
+            if not self._frame_timer.isActive():
+                self._frame_timer.start()
+        else:
+            self.setMaximumHeight(self._TARGET_HEIGHT)
+        self.update()
+
+    def update_progress(
+        self,
+        done: int,
+        total: int,
+        detail: str = "",
+        *,
+        title: str | None = None,
+    ) -> None:
+        if not self.isVisible():
+            self.start(title=title or "Processing...", detail=detail, total=total)
+        if title is not None:
+            self._title_label.setText(title)
+        if detail:
+            self._raw_detail = detail
+            self._refresh_elided_detail()
+
+        if total > 0:
+            clamped_done = max(0, min(int(done), int(total)))
+            frac = clamped_done / float(total)
+            self._mode = "determinate"
+            self._target_progress = frac
+            if not animations_enabled() or os.environ.get("PYTEST_CURRENT_TEST"):
+                self._display_progress = frac
+            self._count_pill.setText(f"{clamped_done} / {total}")
+            self._count_pill.setVisible(True)
+            self._pct_pill.setText(f"{int(round(frac * 100))}%")
+        else:
+            self._mode = "indeterminate"
+            self._count_pill.setVisible(False)
+            self._pct_pill.setText("···")
+        self.update()
+
+    def finish(
+        self,
+        title: str = "Complete",
+        detail: str = "",
+        *,
+        kind: str = "success",
+        hold_ms: int = 1350,
+    ) -> None:
+        self._collapse_timer.stop()
+        self._mode = "warning" if kind == "warning" else "success"
+        self._target_progress = 1.0
+        self._display_progress = 1.0
+        self._title_label.setText(title)
+        if detail:
+            self._raw_detail = detail
+            self._refresh_elided_detail()
+        self._pct_pill.setText("100%" if self._mode == "success" else "Done")
+        self._apply_pct_style("warning" if self._mode == "warning" else "success")
+        self.update()
+
+        if animations_enabled() and not os.environ.get("PYTEST_CURRENT_TEST"):
+            self._collapse_timer.start(max(450, int(hold_ms)))
+        else:
+            # Stop active animation ticks cleanly under tests while leaving final state inspectable
+            self._frame_timer.stop()
+
+    def collapse(self) -> None:
+        self._collapse_timer.stop()
+        self._frame_timer.stop()
+        self._height_anim.stop()
+        if animations_enabled() and not os.environ.get("PYTEST_CURRENT_TEST") and self.isVisible():
+            self._height_anim.setStartValue(self.maximumHeight())
+            self._height_anim.setEndValue(0)
+            self._height_anim.start()
+        else:
+            self.setMaximumHeight(0)
+            self.setVisible(False)
+
+    def _on_height_anim_done(self) -> None:
+        if self.maximumHeight() <= 2:
+            self.setVisible(False)
+
+    def _on_tick(self) -> None:
+        self._phase = (self._phase + 0.018) % 1.0
+        self._pulse = (self._pulse + 0.055) % (math.pi * 2.0)
+        if self._mode == "determinate":
+            self._display_progress += (self._target_progress - self._display_progress) * 0.22
+        self.update()
+
+    def hideEvent(self, event) -> None:  # noqa: ANN001
+        if hasattr(self, "_frame_timer"):
+            self._frame_timer.stop()
+        if hasattr(self, "_collapse_timer"):
+            self._collapse_timer.stop()
+        if hasattr(self, "_height_anim"):
+            self._height_anim.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001
+        if self.height() < 12:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        card = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        if self._mode == "success":
+            border_color = QColor(48, 209, 88, 150)
+        elif self._mode == "warning":
+            border_color = QColor(255, 159, 10, 150)
+        else:
+            glow_alpha = int(85 + 55 * (0.5 + 0.5 * math.sin(self._pulse)))
+            border_color = QColor(10, 132, 255, glow_alpha)
+
+        p.setBrush(QColor("#1C1C1E"))
+        p.setPen(QPen(border_color, 1.1))
+        p.drawRoundedRect(card, 10.0, 10.0)
+
+        # Animated pulsing orb or completion dot at (24, 24)
+        orb_cx, orb_cy = 24.0, 23.0
+        if self._mode == "success":
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(48, 209, 88, 55))
+            p.drawEllipse(QPointF(orb_cx, orb_cy), 8.0, 8.0)
+            p.setBrush(QColor("#30D158"))
+            p.drawEllipse(QPointF(orb_cx, orb_cy), 5.5, 5.5)
+            p.setPen(QPen(QColor("#111113"), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            p.drawPolyline([QPointF(orb_cx - 2.4, orb_cy + 0.2), QPointF(orb_cx - 0.5, orb_cy + 2.2), QPointF(orb_cx + 2.6, orb_cy - 2.0)])
+        elif self._mode == "warning":
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 159, 10, 55))
+            p.drawEllipse(QPointF(orb_cx, orb_cy), 8.0, 8.0)
+            p.setBrush(QColor("#FF9F0A"))
+            p.drawEllipse(QPointF(orb_cx, orb_cy), 4.5, 4.5)
+        else:
+            pulse_r = 6.2 + 2.6 * (0.5 + 0.5 * math.sin(self._pulse))
+            halo_alpha = int(40 + 50 * (0.5 + 0.5 * math.cos(self._pulse)))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(10, 132, 255, halo_alpha))
+            p.drawEllipse(QPointF(orb_cx, orb_cy), pulse_r, pulse_r)
+            p.setBrush(QColor("#64D2FF" if self._mode == "indeterminate" else "#0A84FF"))
+            p.drawEllipse(QPointF(orb_cx, orb_cy), 3.6, 3.6)
+
+        # 6px capsule track along bottom of card
+        track = QRectF(16.0, self.height() - 15.0, max(20.0, self.width() - 32.0), 6.0)
+        track_path = QPainterPath()
+        track_path.addRoundedRect(track, 3.0, 3.0)
+        p.fillPath(track_path, QColor("#111113"))
+
+        p.save()
+        p.setClipPath(track_path)
+        if self._mode == "indeterminate":
+            shuttle_w = max(48.0, track.width() * 0.34)
+            eased = 0.5 * (1.0 - math.cos(2.0 * math.pi * self._phase))
+            x = track.left() + (track.width() + shuttle_w * 0.6) * eased - shuttle_w * 0.5
+            grad = QLinearGradient(x, 0.0, x + shuttle_w, 0.0)
+            grad.setColorAt(0.0, QColor(10, 132, 255, 0))
+            grad.setColorAt(0.42, QColor("#0A84FF"))
+            grad.setColorAt(0.62, QColor("#64D2FF"))
+            grad.setColorAt(1.0, QColor(10, 132, 255, 0))
+            p.fillRect(QRectF(x, track.top(), shuttle_w, track.height()), grad)
+        else:
+            frac = max(0.03, min(1.0, self._display_progress))
+            fill_w = max(8.0, track.width() * frac)
+            fill_rect = QRectF(track.left(), track.top(), fill_w, track.height())
+            fill_path = QPainterPath()
+            fill_path.addRoundedRect(fill_rect, 3.0, 3.0)
+
+            base_grad = QLinearGradient(fill_rect.left(), 0.0, fill_rect.right(), 0.0)
+            if self._mode == "success":
+                base_grad.setColorAt(0.0, QColor("#28B84D"))
+                base_grad.setColorAt(1.0, QColor("#30D158"))
+            elif self._mode == "warning":
+                base_grad.setColorAt(0.0, QColor("#D97706"))
+                base_grad.setColorAt(1.0, QColor("#FF9F0A"))
+            else:
+                base_grad.setColorAt(0.0, QColor("#0060DF"))
+                base_grad.setColorAt(0.7, QColor("#0A84FF"))
+                base_grad.setColorAt(1.0, QColor("#5AC8FA"))
+            p.fillPath(fill_path, base_grad)
+
+            if self._mode == "determinate":
+                sweep_w = 110.0
+                sweep_x = fill_rect.left() - sweep_w + (fill_rect.width() + sweep_w * 2.0) * self._phase
+                spec = QLinearGradient(sweep_x, 0.0, sweep_x + sweep_w, 0.0)
+                spec.setColorAt(0.0, QColor(255, 255, 255, 0))
+                spec.setColorAt(0.5, QColor(255, 255, 255, 115))
+                spec.setColorAt(1.0, QColor(255, 255, 255, 0))
+                p.fillRect(QRectF(sweep_x, fill_rect.top(), sweep_w, fill_rect.height()), spec)
+        p.restore()
 
 
 WalkthroughCanvas = WalkthroughDiagramCanvas

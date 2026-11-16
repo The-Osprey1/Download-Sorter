@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Download Sorter Connector</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 320px;
+      background: #111113;
+      color: #f5f5f7;
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 12.5px;
+      padding: 14px;
+    }
+    .card {
+      background: #1c1c1e;
+      border: 1px solid #2c2c2e;
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .title-wrap img { width: 22px; height: 22px; }
+    .title { font-size: 14px; font-weight: 600; color: #ffffff; }
+    .pill {
+      padding: 3px 9px;
+      border-radius: 10px;
+      font-size: 10.5px;
+      font-weight: 600;
+      border: 1px solid transparent;
+    }
+    .pill.ok {
+      background: rgba(48, 209, 88, 0.16);
+      color: #30d158;
+      border-color: rgba(48, 209, 88, 0.4);
+    }
+    .pill.warn {
+      background: rgba(255, 159, 10, 0.16);
+      color: #ff9f0a;
+      border-color: rgba(255, 159, 10, 0.4);
+    }
+    .pill.err {
+      background: rgba(255, 69, 58, 0.16);
+      color: #ff453a;
+      border-color: rgba(255, 69, 58, 0.4);
+    }
+    .muted { color: #8e8e93; font-size: 11.5px; line-height: 1.4; }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .toggle-btn {
+      flex: 1;
+      border: 1px solid #3a3a3c;
+      background: #2c2c2e;
+      color: #f5f5f7;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .toggle-btn:hover { background: #363639; }
+    .primary-btn {
+      flex: 1;
+      border: none;
+      background: #0a84ff;
+      color: #ffffff;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .primary-btn:hover { background: #2693ff; }
+    .recent-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-weight: 600;
+      color: #ebebf5;
+    }
+    .link-btn {
+      background: none;
+      border: none;
+      color: #8e8e93;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .link-btn:hover { color: #ffffff; }
+    .list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+    .item {
+      background: #141416;
+      border: 1px solid #252528;
+      border-radius: 8px;
+      padding: 6px 8px;
+    }
+    .item-name {
+      font-weight: 500;
+      color: #f5f5f7;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .item-dest {
+      color: #5ac8fa;
+      font-size: 11px;
+      margin-top: 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="title-wrap">
+        <img src="icons/icon48.png" alt="Download Sorter" />
+        <span class="title">Download Sorter</span>
+      </div>
+      <span id="status-pill" class="pill warn">Checking...</span>
+    </div>
+    <p id="status-detail" class="muted">Connecting to desktop sorter...</p>
+    <div class="row">
+      <button id="btn-toggle" class="toggle-btn">Routing: ON</button>
+      <button id="btn-open" class="primary-btn">Open App</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom: 0;">
+    <div class="recent-title">
+      <span>Recently Routed in Chrome</span>
+      <button id="btn-clear" class="link-btn">Clear</button>
+    </div>
+    <ul id="recent-list" class="list"></ul>
+    <p id="recent-empty" class="muted">New Chrome downloads save straight into your sorted folders so dragging never breaks.</p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.3] - 2026-11-15
+
+### Added
+- **Chrome Extension Connector & Native Messaging Bridge (`chrome_extension/`, `chrome_bridge.py`, `tray_app.py`).** Manifest V3 Chrome extension routes downloads straight into Download Sorter's sorted subfolders via `chrome.downloads.onDeterminingFilename` + Native Messaging, keeping Chrome's download bubble draggable/clickable (never marked "Removed") while updating `StateDB`, Quick Switcher (`Ctrl+G`), Side Ribbons, and Recent Activity in real time.
+- **Animated Processing HUD (`SortingProgressHUD`) & Working Sorty Mascot (`ui/motion.py`, `ui/workers.py`, `service.py`).** Sorting, lower-tier cleanup, moving held `.3MF` files, Folder Architecture shifts, and Undo now expand an inline dark-mode progress HUD with an indeterminate scanning shuttle sweep, determinate gradient bar + specular highlight catch-light, middle-elided active filename, step & percentage pills, completion transition, and a live working/scanning Sorty folder mascot animation.
+- **Native Duplicate File Manager (`DuplicateManagerDialog`, `SorterService.list_duplicate_files`, `delete_duplicate_files`).** Added a **`Duplicates (N)`** button in the Downloads Folder Preview header showing how many files and bytes sit in `_Duplicates\`, with one-click **`Keep Newest Copy`** / **`Select All`** controls and Recycle Bin cleanup confined strictly to `_Duplicates\`.
+- **Direct Selection & Deletion in Downloads Folder Preview (`ui/main_window.py`, `fs_ops.py`).** Multi-select files in the Downloads preview table to reveal a contextual **`Delete (N)`** button, press **`Del`**, or right-click to reveal in Explorer or move selected unlocked files directly to the Windows Recycle Bin.
+
 ## [3.0.2] - 2026-11-15
 
 ### Added

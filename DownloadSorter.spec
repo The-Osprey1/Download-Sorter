@@ -27,6 +27,7 @@ hidden_imports = [
     'download_sorter.service',
     'download_sorter.ipc',
     'download_sorter.cli',
+    'download_sorter.chrome_bridge',
     'download_sorter.windows_integration',
     'download_sorter.ui',
     'download_sorter.ui.theme',

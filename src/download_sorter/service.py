@@ -17,7 +17,15 @@ from watchdog.observers import Observer
 from download_sorter.architecture import architecture_from_config
 from download_sorter.config import Config, DEFAULT_CATEGORY_MAP, load_config, save_config
 from download_sorter.db import StateDB
-from download_sorter.fs_ops import execute_move, is_slicer_running, undo_batch, undo_move
+from download_sorter.fs_ops import (
+    ProgressCallback,
+    delete_files_safely,
+    execute_move,
+    is_slicer_running,
+    scan_duplicate_files,
+    undo_batch,
+    undo_move,
+)
 from download_sorter.paths import AppPaths
 from download_sorter.router import FileCandidate, RouteDecision, candidate_from_path, evaluate
 
@@ -204,8 +212,11 @@ class SorterService:
         settle_seconds: float | None = None,
         *,
         bypass_3mf_hold: bool = False,
+        on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         """Sort eligible top-level files in ``watch_root`` cleanly in one batch."""
+        if on_progress is not None:
+            on_progress(0, 0, "Scanning Downloads...")
         with self._lock:
             cfg = self.config
             root = cfg.resolved_watch_folder(self.paths)
@@ -220,14 +231,21 @@ class SorterService:
             }
 
         wait = cfg.settle_seconds if settle_seconds is None else float(settle_seconds)
-        candidates = [entry for entry in root.iterdir() if entry.is_file()]
+        candidates = sorted((entry for entry in root.iterdir() if entry.is_file()), key=lambda p: p.name.lower())
         # An explicit sort is a fresh start: forget what the background loop backed off.
         with self._lock:
             self._busy_backoff.clear()
-        return self._process_paths(candidates, settle_seconds=wait, bypass_3mf_hold=bypass_3mf_hold)
+        return self._process_paths(
+            candidates,
+            settle_seconds=wait,
+            bypass_3mf_hold=bypass_3mf_hold,
+            on_progress=on_progress,
+        )
 
-    def file_held_3mf_now(self) -> dict[str, Any]:
+    def file_held_3mf_now(self, *, on_progress: ProgressCallback | None = None) -> dict[str, Any]:
         """Immediately sort all top-level ``.3mf`` files currently inside the grace hold."""
+        if on_progress is not None:
+            on_progress(0, 0, "Checking held .3MF files...")
         held_files = self.list_held_3mf()
         if not held_files:
             return {
@@ -238,10 +256,22 @@ class SorterService:
                 "held": 0,
                 "skipped_busy": 0,
             }
-        return self._process_paths(held_files, settle_seconds=0.0, bypass_3mf_hold=True)
+        return self._process_paths(
+            held_files,
+            settle_seconds=0.0,
+            bypass_3mf_hold=True,
+            on_progress=on_progress,
+        )
 
-    def sort_managed_tiers_now(self, *, settle_seconds: float = 0.0) -> dict[str, Any]:
+    def sort_managed_tiers_now(
+        self,
+        *,
+        settle_seconds: float = 0.0,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         """Re-sort top-level and managed Tier 1/Tier 2+ folders into their target subfolders."""
+        if on_progress is not None:
+            on_progress(0, 0, "Scanning managed folders...")
         with self._lock:
             cfg = self.config
             watch_dir = cfg.resolved_watch_folder(self.paths)
@@ -249,9 +279,13 @@ class SorterService:
             return {"batch_id": "", "moved": []}
 
         plan = self.preview_architecture_shift(cfg, root=watch_dir)
+        planned = plan["moves_planned"]
+        total = len(planned)
         batch_id = f"tiers-{uuid.uuid4().hex[:8]}"
         moved: list[dict[str, Any]] = []
-        for item in plan["moves_planned"]:
+        for idx, item in enumerate(planned, start=1):
+            if on_progress is not None:
+                on_progress(idx - 1, total, Path(item["src"]).name)
             try:
                 rec = execute_move(
                     item["src"],
@@ -268,6 +302,9 @@ class SorterService:
             if rec is not None:
                 moved.append(rec)
 
+        if on_progress is not None and total > 0:
+            on_progress(total, total, "Complete")
+
         if moved:
             self.db.checkpoint()
             if self.on_moves_completed is not None:
@@ -277,6 +314,71 @@ class SorterService:
                     logging.exception("Error in on_moves_completed callback")
 
         return {"batch_id": batch_id if moved else "", "moved": moved}
+
+    # ------------------------------------------------------------------
+    # Native Duplicate & Watch-Folder Deletion Helpers
+    # ------------------------------------------------------------------
+    def list_duplicate_files(self, root: Path | None = None) -> list[dict[str, Any]]:
+        """Return quarantined duplicate files inside ``watch_root / '_Duplicates'``."""
+        watch_dir = (root or self.watch_root).resolve()
+        return scan_duplicate_files(watch_dir)
+
+    def delete_duplicate_files(
+        self,
+        paths: list[Path | str],
+        *,
+        use_recycle_bin: bool = True,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Safely remove selected duplicate files confined strictly inside ``_Duplicates``."""
+        watch_dir = self.watch_root.resolve()
+        dup_root = watch_dir / "_Duplicates"
+        res = delete_files_safely(
+            paths,
+            watch_root=watch_dir,
+            confine_dir=dup_root,
+            use_recycle_bin=use_recycle_bin,
+            on_progress=on_progress,
+        )
+        if res["deleted"]:
+            self.db.mark_orphaned_by_dest(res["deleted"])
+            self.db.checkpoint()
+            # Clean up any empty monthly subfolders inside _Duplicates
+            if dup_root.is_dir():
+                for subdir in sorted(
+                    [p for p in dup_root.rglob("*") if p.is_dir()],
+                    key=lambda p: len(p.parts),
+                    reverse=True,
+                ):
+                    try:
+                        if not any(subdir.iterdir()):
+                            subdir.rmdir()
+                    except OSError:
+                        pass
+        return res
+
+    def delete_watch_files(
+        self,
+        paths: list[Path | str],
+        *,
+        use_recycle_bin: bool = True,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Safely delete selected files inside ``watch_root`` (via Recycle Bin on Windows)."""
+        watch_dir = self.watch_root.resolve()
+        res = delete_files_safely(
+            paths,
+            watch_root=watch_dir,
+            confine_dir=watch_dir,
+            use_recycle_bin=use_recycle_bin,
+            on_progress=on_progress,
+        )
+        if res["deleted"]:
+            for deleted_str in res["deleted"]:
+                self._clear_busy(Path(deleted_str))
+            self.db.mark_orphaned_by_dest(res["deleted"])
+            self.db.checkpoint()
+        return res
 
     @staticmethod
     def _managed_root_names(*configs: Config) -> set[str]:
@@ -382,8 +484,11 @@ class SorterService:
         shift_files: bool = True,
         create_empty_folders: bool = False,
         batch_prefix: str = "arch",
+        on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         """Persist ``target_config`` and shift existing managed/top-level files into their expected folders."""
+        if on_progress is not None:
+            on_progress(0, 0, "Planning folder shift...")
         with self._lock:
             prev_cfg = copy.deepcopy(self.config)
             watch_dir = target_config.resolved_watch_folder(self.paths)
@@ -406,7 +511,11 @@ class SorterService:
 
         moved: list[dict[str, Any]] = []
         if shift_files:
-            for item in plan["moves_planned"]:
+            planned = plan["moves_planned"]
+            total = len(planned)
+            for idx, item in enumerate(planned, start=1):
+                if on_progress is not None:
+                    on_progress(idx - 1, total, Path(item["src"]).name)
                 try:
                     rec = execute_move(
                         item["src"],
@@ -422,6 +531,8 @@ class SorterService:
                     continue
                 if rec is not None:
                     moved.append(rec)
+            if on_progress is not None and total > 0:
+                on_progress(total, total, "Complete")
 
             # Remove now-empty old managed directories cleanly (never touch _Duplicates or unmanaged dirs)
             if watch_dir.is_dir():
@@ -479,9 +590,15 @@ class SorterService:
             batch_prefix="arch",
         )
 
-    def undo_architecture_or_last_batch(self) -> dict[str, Any]:
+    def undo_architecture_or_last_batch(
+        self,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         """Undo last file batch and also restore previous Folder Architecture config if applicable."""
-        res = undo_batch(self.db)
+        if on_progress is not None:
+            on_progress(0, 0, "Preparing undo...")
+        res = undo_batch(self.db, on_progress=on_progress)
         config_restored = False
         if self._config_undo_stack:
             top_id, prev_cfg = self._config_undo_stack[-1]
@@ -492,8 +609,8 @@ class SorterService:
         res["config_restored"] = config_restored
         return res
 
-    def undo_last_batch(self) -> dict[str, Any]:
-        res = undo_batch(self.db)
+    def undo_last_batch(self, *, on_progress: ProgressCallback | None = None) -> dict[str, Any]:
+        res = undo_batch(self.db, on_progress=on_progress)
         config_restored = False
         if self._config_undo_stack and res.get("batch_id") == self._config_undo_stack[-1][0]:
             _, prev_cfg = self._config_undo_stack.pop()
@@ -502,8 +619,15 @@ class SorterService:
         res["config_restored"] = config_restored
         return res
 
-    def undo_single_move(self, move_id: int) -> dict[str, Any]:
-        return undo_move(self.db, move_id)
+    def undo_single_move(
+        self,
+        move_id: int,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        if on_progress is not None:
+            on_progress(0, 1, "Restoring file...")
+        return undo_move(self.db, move_id, on_progress=on_progress)
 
     def start(self) -> None:
         if self._worker_thread is not None and self._worker_thread.is_alive():
@@ -699,6 +823,7 @@ class SorterService:
         settle_seconds: float,
         requeue_unsettled: bool = False,
         bypass_3mf_hold: bool = False,
+        on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             cfg = self.config
@@ -710,7 +835,10 @@ class SorterService:
         held = 0
         skipped_busy = 0
 
-        for path in paths_list:
+        total = len(paths_list)
+        for index, path in enumerate(paths_list, start=1):
+            if on_progress is not None:
+                on_progress(index - 1, total, path.name)
             if not path.exists() or not path.is_file():
                 self._clear_busy(path)  # deleted or moved by the user: nothing to retry
                 continue
@@ -782,6 +910,9 @@ class SorterService:
                         )
                     except Exception as exc:
                         logging.debug("Error recording recent file in service: %s", exc)
+
+        if on_progress is not None and total > 0:
+            on_progress(total, total, "Complete")
 
         if moved:
             self.db.checkpoint()

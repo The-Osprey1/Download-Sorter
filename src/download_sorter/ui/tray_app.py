@@ -9,11 +9,14 @@ from pathlib import Path
 import sys
 import time
 from typing import Any
+import uuid
 
 from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from download_sorter.db import STATUS_COMPLETED
+from download_sorter.dest import is_under_watch_root
 from download_sorter.ipc import DEFAULT_IPC_NAME, DeferredReply, IPCServer, send_ipc_command
 from download_sorter.paths import AppPaths
 from download_sorter.service import SorterService
@@ -119,6 +122,81 @@ def build_ipc_handler(
             return _in_background(service.file_held_3mf_now, lambda res: {"moved": len(res["moved"])})
         if cmd == "undo":
             return _in_background(service.undo_last_batch, lambda res: dict(res))
+        if cmd == "chrome_routed":
+            watch_dir = service.watch_root.resolve()
+            raw_dest = str(req.get("dest_path") or "").strip()
+            if not raw_dest:
+                return {"ok": False, "error": "Missing dest_path"}
+            dest_path = Path(raw_dest).resolve()
+            if not is_under_watch_root(dest_path, watch_dir):
+                return {"ok": False, "error": "Destination outside watch root"}
+            filename = str(req.get("filename") or dest_path.name)
+            src_path = str(req.get("src_path") or (watch_dir / filename))
+            matched_rule = str(req.get("matched_rule") or "Chrome Extension")
+            match_type = str(req.get("match_type") or "chrome")
+            reason = str(req.get("reason") or "Routed directly by Chrome Extension")
+            source_url = str(req.get("source_url") or "")
+            size_bytes = int(req.get("size_bytes") or (dest_path.stat().st_size if dest_path.is_file() else 0))
+            batch_id = f"chrome-{uuid.uuid4().hex[:8]}"
+            now_ts = time.time()
+            move_id = service.db.record_move(
+                batch_id=batch_id,
+                filename=filename,
+                src_path=src_path,
+                dest_path=str(dest_path),
+                reason=reason,
+                matched_rule=matched_rule,
+                match_type=match_type,
+                source_url=source_url,
+                size_bytes=size_bytes,
+                is_duplicate=False,
+                moved_at=now_ts,
+                status=STATUS_COMPLETED,
+            )
+            service.db.checkpoint()
+            if service.config.quick_switcher_enabled and dest_path.is_file():
+                try:
+                    from download_sorter.quick_switcher import record_recent_file
+
+                    record_recent_file(
+                        str(dest_path),
+                        downloads_root=watch_dir,
+                        batch_id=batch_id,
+                        settings={
+                            "timeout_seconds": service.config.quick_switcher_timeout_seconds,
+                            "3d_timeout_hours": service.config.quick_switcher_3d_timeout_hours,
+                        },
+                        data_dir=service.paths.data_dir,
+                    )
+                except Exception as exc:
+                    logging.debug("Quick Switcher chrome_routed error: %s", exc)
+            try:
+                folder_display = str(dest_path.parent.relative_to(watch_dir))
+            except ValueError:
+                folder_display = str(dest_path.parent)
+            rec = {
+                "id": move_id,
+                "batch_id": batch_id,
+                "file_name": filename,
+                "filename": filename,
+                "src_path": src_path,
+                "dest_path": str(dest_path),
+                "folder_display": folder_display,
+                "reason": reason,
+                "matched_rule": matched_rule,
+                "match_type": match_type,
+                "source_url": source_url,
+                "size_bytes": size_bytes,
+                "moved_at": now_ts,
+            }
+            if service.on_moves_completed is not None:
+                try:
+                    service.on_moves_completed(batch_id, [rec])
+                except Exception:
+                    logging.exception("Error emitting chrome_routed move notification")
+            else:
+                window.refresh_all()
+            return {"ok": True, "move_id": move_id, "batch_id": batch_id}
         if cmd == "quit":
             on_quit()
             return {"ok": True}
@@ -272,6 +350,13 @@ def run_app(
     tray.show()
 
     service.start()
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from download_sorter.chrome_bridge import install_chrome_native_host
+
+            install_chrome_native_host(app_paths.data_dir)
+        except Exception as exc:
+            logging.debug("Could not sync Chrome Native Messaging host on startup: %s", exc)
     if show_window:
         _present_window(window)
 
