@@ -5,6 +5,7 @@ Run from the project root with the project interpreter:
     python verify_release.py                 # everything, including built artifacts
     python verify_release.py --skip-artifacts  # before build_release.py has run
     python verify_release.py --skip-tests      # quick re-check of a finished build
+    python verify_release.py --require-signed  # fail if any shipped binary is unsigned
 
 Stages (the script exits 1 at the first stage that fails):
 
@@ -193,7 +194,63 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def check_artifacts(version: str) -> list[str]:
+def check_signatures(
+    version: str,
+    *,
+    require_signed: bool = False,
+    pe_runner=None,
+) -> tuple[list[str], str]:
+    """Inspect embedded Authenticode signatures on built binaries, scripts, and the setup file.
+
+    Returns ``(errors, summary_line)``. When ``require_signed`` is False, unsigned
+    or catalog-only files are reported in the summary without failing preflight.
+    """
+    import pe_signing
+
+    app_dir = DIST / "DownloadSorter"
+    setup_file = DIST / f"DownloadSorter-Setup-v{version}-windows-x64.exe"
+    if sys.platform != "win32" and pe_runner is None:
+        if require_signed:
+            return ["Authenticode verification requires Windows (--require-signed)"], "unavailable on non-Windows"
+        return [], "skipped on non-Windows"
+
+    runner_kwargs = {"runner": pe_runner} if pe_runner is not None else {}
+    app_infos = pe_signing.inspect_pe_signatures(app_dir, **runner_kwargs)
+    setup_infos = (
+        pe_signing.inspect_pe_signatures(DIST, paths=[setup_file], **runner_kwargs)
+        if setup_file.is_file()
+        else []
+    )
+    all_infos = [*app_infos, *setup_infos]
+    signed_count = sum(1 for info in all_infos if info.is_valid)
+    unsigned_app = [info for info in app_infos if not info.is_valid]
+    unsigned_setup = [info for info in setup_infos if not info.is_valid]
+    unsigned_all = [*unsigned_app, *unsigned_setup]
+
+    summary = (
+        f"signatures: {signed_count}/{len(all_infos)} signable file(s) with embedded Authenticode, "
+        f"{len(unsigned_all)} unsigned/non-embedded"
+    )
+    if not require_signed:
+        return [], summary
+
+    errors: list[str] = []
+    for info in unsigned_app:
+        kind = "script" if info.path.suffix.lower() == ".ps1" else "program/library file"
+        detail = f"{info.status}, SignatureType={info.signature_type}" if info.signature_type else info.status
+        errors.append(f"unsigned {kind}: dist/DownloadSorter/{info.rel_path} ({detail})")
+    for info in unsigned_setup:
+        detail = f"{info.status}, SignatureType={info.signature_type}" if info.signature_type else info.status
+        errors.append(f"unsigned setup file: {info.path.name} ({detail})")
+    return errors, summary
+
+
+def check_artifacts(
+    version: str,
+    *,
+    require_signed: bool = False,
+    pe_runner=None,
+) -> list[str]:
     gui_exe = DIST / "DownloadSorter" / "DownloadSorter.exe"
     cli_exe = DIST / "DownloadSorter" / "DownloadSorter-cli.exe"
     zip_file = DIST / f"DownloadSorter-v{version}-windows-x64.zip"
@@ -220,6 +277,14 @@ def check_artifacts(version: str) -> list[str]:
         elif expected != _sha256(artifact):
             errors.append(f"checksums.txt does not match {artifact.name} (stale build?)")
 
+    sig_errors, sig_summary = check_signatures(
+        version,
+        require_signed=require_signed,
+        pe_runner=pe_runner,
+    )
+    print(f"  [INFO] {sig_summary}")
+    errors += sig_errors
+
     errors += _smoke([str(cli_exe)], cli_exe.name, version, simulate=True)
     errors += _smoke([str(gui_exe)], gui_exe.name, version, simulate=True)
     return errors
@@ -240,6 +305,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-tests", action="store_true", help="Do not run the pytest suite.")
     parser.add_argument(
         "--skip-artifacts", action="store_true", help="Do not check dist/ (use before build_release.py)."
+    )
+    parser.add_argument(
+        "--require-signed",
+        action="store_true",
+        help="Fail artifact checks if any .exe/.dll/.pyd/.ps1 in dist/DownloadSorter/ or the setup file lacks a valid embedded Authenticode signature.",
     )
     args = parser.parse_args(argv)
 
@@ -280,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.skip_artifacts:
         print("  [SKIP] --skip-artifacts")
     elif not _report(
-        check_artifacts(version),
+        check_artifacts(version, require_signed=args.require_signed),
         "executables, ZIP, setup file and checksums present, matching and runnable",
     ):
         return 1

@@ -24,6 +24,8 @@ on:
       - 'src/**'
       - 'tests_v3/**'
       - 'verify_release.py'
+      - 'pe_signing.py'
+      - 'packaging/**'
       - 'uninstall.ps1'
       - '.github/workflows/release.yml'
   workflow_dispatch:
@@ -81,15 +83,100 @@ jobs:
         run: |
           pytest tests_v3 -v
 
+      # Unsigned build (when SIGNPATH_ORGANIZATION_ID is not configured): identical to single-stage build.
       - name: Build Standalone Executable & Package
+        if: env.SIGNPATH_ORGANIZATION_ID == ''
         run: |
           python build_release.py
+
+      # Signed build (two-stage): build app folder -> sign owned binaries/scripts -> package ZIP/setup -> sign setup.
+      - name: Build app stage
+        if: env.SIGNPATH_ORGANIZATION_ID != ''
+        run: |
+          python build_release.py --stage app
+
+      - name: List embedded Authenticode signers in dist/DownloadSorter
+        run: |
+          python pe_signing.py list --json
+
+      - name: Stage owned unsigned executables and scripts
+        id: stage_unsigned
+        if: env.SIGNPATH_ORGANIZATION_ID != ''
+        run: |
+          python pe_signing.py stage dist/DownloadSorter dist/unsigned-app --github-output
+
+      - name: Keep unsigned app files for signing
+        id: unsigned_app
+        if: env.SIGNPATH_ORGANIZATION_ID != '' && steps.stage_unsigned.outputs.count != '0'
+        uses: actions/upload-artifact@v7
+        with:
+          name: DownloadSorter-app-unsigned
+          path: dist/unsigned-app/
+          if-no-files-found: error
+
+      - name: Sign app executables, libraries, and scripts with SignPath
+        if: env.SIGNPATH_ORGANIZATION_ID != '' && steps.stage_unsigned.outputs.count != '0'
+        uses: SignPath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_APP_SIGNING_POLICY_SLUG || vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_APP_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned_app.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist/signed-app
+
+      - name: Put signed files back into dist/DownloadSorter
+        if: env.SIGNPATH_ORGANIZATION_ID != '' && steps.stage_unsigned.outputs.count != '0'
+        run: |
+          python pe_signing.py restore dist/signed-app dist/DownloadSorter
+
+      - name: Package ZIP, setup file, and checksums
+        if: env.SIGNPATH_ORGANIZATION_ID != ''
+        run: |
+          python build_release.py --stage package
+
+      - name: Keep the unsigned setup file for signing
+        id: unsigned
+        if: env.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: DownloadSorter-setup-unsigned
+          path: dist/DownloadSorter-Setup-v*-windows-x64.exe
+          if-no-files-found: error
+
+      - name: Sign the setup file with SignPath
+        if: env.SIGNPATH_ORGANIZATION_ID != ''
+        uses: SignPath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_SETUP_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist/signed
+
+      - name: Use the signed setup file and refresh checksums
+        if: env.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: |
+          Copy-Item dist/signed/DownloadSorter-Setup-v*-windows-x64.exe dist/ -Force
+          python -c "import build_release; build_release.write_checksums()"
 
       # Same gate as a local release: versions agree, every CLI flag exists, the
       # checksums match the files, and both built programs start. The tests ran above.
       - name: Release preflight
+        if: env.SIGNPATH_ORGANIZATION_ID == ''
         run: |
           python verify_release.py --skip-tests
+
+      - name: Release preflight (require signed)
+        if: env.SIGNPATH_ORGANIZATION_ID != ''
+        run: |
+          python verify_release.py --skip-tests --require-signed
 
       - name: Check that an update replaces a running copy and opens it again
         shell: pwsh
@@ -142,36 +229,6 @@ jobs:
           & $exe --quit
           Start-Sleep -Seconds 5
           Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue
-
-      - name: Keep the unsigned setup file for signing
-        id: unsigned
-        if: env.SIGNPATH_ORGANIZATION_ID != ''
-        uses: actions/upload-artifact@v7
-        with:
-          name: DownloadSorter-setup-unsigned
-          path: dist/DownloadSorter-Setup-v*-windows-x64.exe
-          if-no-files-found: error
-
-      - name: Sign the setup file with SignPath
-        if: env.SIGNPATH_ORGANIZATION_ID != ''
-        uses: SignPath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: dist/signed
-
-      - name: Use the signed setup file and refresh its checksum
-        if: env.SIGNPATH_ORGANIZATION_ID != ''
-        shell: pwsh
-        run: |
-          Copy-Item dist/signed/DownloadSorter-Setup-v*-windows-x64.exe dist/ -Force
-          $lines = Get-ChildItem dist/DownloadSorter-Setup-v*-windows-x64.exe, dist/DownloadSorter-v*-windows-x64.zip |
-            ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
-          Set-Content -Path dist/checksums.txt -Value $lines -Encoding ascii
 
       - name: Write the release notes from the changelog
         run: |
