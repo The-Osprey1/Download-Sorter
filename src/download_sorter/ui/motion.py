@@ -569,9 +569,29 @@ def make_vector_icon(name: str, color_hex: str = "#F3F4F6", size: int = 16) -> Q
     elif name == "duplicates":
         p.drawRoundedRect(QRectF(5.5, 2.5, 7.5, 9.0), 1.4, 1.4)
         p.drawRoundedRect(QRectF(3.0, 5.0, 7.5, 9.0), 1.4, 1.4)
+    elif name == "copy":
+        p.drawRoundedRect(QRectF(5.6, 2.6, 7.4, 8.6), 1.4, 1.4)
+        p.setBrush(QColor("#1C1C1E"))
+        p.drawRoundedRect(QRectF(3.0, 5.2, 7.4, 8.6), 1.4, 1.4)
 
     p.end()
     return QIcon(px)
+
+
+def refresh_style(widget: QWidget) -> None:
+    """Re-polish widget after dynamic property mutation for PySide6 QSS rules."""
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+def make_badge(text: str, variant: str = "neutral") -> QLabel:
+    """Create a pill badge styled via QLabel#Badge dynamic variant selector."""
+    lbl = QLabel(text)
+    lbl.setObjectName("Badge")
+    lbl.setProperty("variant", variant)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    refresh_style(lbl)
+    return lbl
 
 
 class AnimatedRibbon(QFrame):

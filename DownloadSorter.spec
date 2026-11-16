@@ -10,6 +10,7 @@ added_files = [
     ('LICENSE', '.'),
     ('FLOWCHART.md', '.'),
     ('DownloadSorter.ico', '.'),
+    ('src/download_sorter/ui/assets/chrome_guide', 'download_sorter/ui/assets/chrome_guide'),
 ]
 
 hidden_imports = [
@@ -33,6 +34,7 @@ hidden_imports = [
     'download_sorter.ui.theme',
     'download_sorter.ui.motion',
     'download_sorter.ui.toasts',
+    'download_sorter.ui.chrome_walkthrough',
     'download_sorter.ui.main_window',
     'download_sorter.ui.tray_app',
     'about',
