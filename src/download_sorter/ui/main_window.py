@@ -72,6 +72,7 @@ from download_sorter.quick_switcher import normalize_hotkey, parse_hotkey
 from download_sorter.service import SorterService
 from download_sorter import update_check, updater
 from download_sorter.ui.architecture_canvas import ArchitectureTab
+from download_sorter.ui.chrome_walkthrough import ChromeExtensionWalkthroughDialog
 from download_sorter.ui.motion import (
     AnimatedBanner,
     AnimatedRibbon,
@@ -85,7 +86,9 @@ from download_sorter.ui.motion import (
     breathe,
     fade_in,
     flash_rows,
+    make_badge as _make_badge,
     make_vector_icon,
+    refresh_style as _refresh_style,
     slide_toggle,
 )
 from download_sorter.ui.theme import STYLESHEET
@@ -355,12 +358,6 @@ class RuleEditorDialog(QDialog):
         )
 
 
-def _refresh_style(widget: QWidget) -> None:
-    """Re-polish widget after dynamic property mutation for PySide6 QSS rules."""
-    widget.style().unpolish(widget)
-    widget.style().polish(widget)
-
-
 def _relayout_up(widget: QWidget) -> None:
     """Recompute the layouts above ``widget`` now.
 
@@ -375,16 +372,6 @@ def _relayout_up(widget: QWidget) -> None:
         if parent.isWindow():
             break
         parent = parent.parentWidget()
-
-
-def _make_badge(text: str, variant: str = "neutral") -> QLabel:
-    """Create a pill badge styled via QLabel#Badge dynamic variant selector."""
-    lbl = QLabel(text)
-    lbl.setObjectName("Badge")
-    lbl.setProperty("variant", variant)
-    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    _refresh_style(lbl)
-    return lbl
 
 
 def _style_table(table: QTableWidget) -> None:
@@ -497,6 +484,15 @@ class WalkthroughDialog(QDialog):
 
         footer.addStretch(1)
 
+        self.btn_chrome_setup = InteractiveRibbonBtn(
+            "Chrome Guide",
+            make_vector_icon("help", "#69E6AD", 14),
+        )
+        self.btn_chrome_setup.setObjectName("GhostButton")
+        self.btn_chrome_setup.setToolTip("Open the 4-step picture guide to set up the Chrome extension")
+        self.btn_chrome_setup.clicked.connect(self._on_open_chrome_guide_clicked)
+        self.btn_chrome_setup.setVisible(False)
+
         self.btn_skip = InteractiveRibbonBtn("Skip")
         self.btn_skip.setObjectName("GhostButton")
         self.btn_skip.clicked.connect(self.accept)
@@ -508,6 +504,7 @@ class WalkthroughDialog(QDialog):
         self.btn_next.setObjectName("PrimaryButton")
         self.btn_next.clicked.connect(self._on_next_clicked)
 
+        footer.addWidget(self.btn_chrome_setup)
         footer.addWidget(self.btn_skip)
         footer.addWidget(self.btn_back)
         footer.addWidget(self.btn_next)
@@ -560,12 +557,19 @@ class WalkthroughDialog(QDialog):
             _refresh_style(dot)
 
         self.btn_back.setEnabled(idx > 0)
+        self.btn_chrome_setup.setVisible(idx == 2)
         if idx == 2:
             self.btn_next.setText("Finish Guide")
             self.btn_next.setIcon(make_vector_icon("check", "#FFFFFF", 15))
         else:
             self.btn_next.setText("Next")
             self.btn_next.setIcon(make_vector_icon("arrow_right", "#FFFFFF", 15))
+
+    def _on_open_chrome_guide_clicked(self) -> None:
+        parent = self.parentWidget()
+        self.accept()
+        if parent is not None and hasattr(parent, "open_chrome_walkthrough"):
+            parent.open_chrome_walkthrough()
 
     def _on_next_clicked(self) -> None:
         idx = self.pages.currentIndex()
@@ -1613,20 +1617,32 @@ class MainWindow(QMainWindow):
 
         self.btn_copy_chrome_path = InteractiveRibbonBtn(
             "Copy Path",
-            make_vector_icon("edit", "#F5F5F7", 14),
+            make_vector_icon("copy", "#F5F5F7", 14),
         )
         self.btn_copy_chrome_path.setObjectName("GhostButton")
         self.btn_copy_chrome_path.setToolTip("Copy the extension folder path for Chrome 'Load unpacked'")
         self.btn_copy_chrome_path.clicked.connect(self._on_copy_chrome_extension_path)
         chrome_row.addWidget(self.btn_copy_chrome_path)
+
+        self.btn_chrome_guide = InteractiveRibbonBtn(
+            "Setup Guide",
+            make_vector_icon("help", "#69E6AD", 15),
+        )
+        self.btn_chrome_guide.setToolTip(
+            "Open the step-by-step picture walkthrough with arrows for installing the Chrome extension"
+        )
+        self.btn_chrome_guide.clicked.connect(self.open_chrome_walkthrough)
+        chrome_row.addWidget(self.btn_chrome_guide)
         chrome_row.addStretch(1)
         chrome_col.addLayout(chrome_row)
 
         self.lbl_chrome_hint = QLabel(
-            f"Keep Chrome's download bubble draggable: enable Developer mode in chrome://extensions → Load unpacked (ID: {CHROME_EXTENSION_ID})."
+            f'Keep Chrome\'s download bubble draggable: <a href="guide" style="color: #64D2FF; text-decoration: none;"><b>Follow the step-by-step picture guide →</b></a> (ID: {CHROME_EXTENSION_ID}).'
         )
         self.lbl_chrome_hint.setObjectName("MutedText")
         self.lbl_chrome_hint.setWordWrap(True)
+        self.lbl_chrome_hint.setOpenExternalLinks(False)
+        self.lbl_chrome_hint.linkActivated.connect(lambda _href: self.open_chrome_walkthrough())
         chrome_col.addWidget(self.lbl_chrome_hint)
         form.addRow("Chrome Extension:", chrome_col)
 
@@ -2154,6 +2170,15 @@ class MainWindow(QMainWindow):
         msg = f"Copied extension path to clipboard: {ext_dir}"
         self.banner.show_message("Copied Chrome extension folder path — paste it in 'Load unpacked'.", kind="info")
         self.lbl_footer.setText(msg)
+
+    def open_chrome_walkthrough(self) -> None:
+        """Open the interactive 4-step picture guide for loading the Chrome extension."""
+        dlg = ChromeExtensionWalkthroughDialog(
+            self.service.paths.data_dir,
+            on_host_updated=self._refresh_chrome_status,
+            parent=self,
+        )
+        dlg.exec()
 
     def _update_live_tester(self) -> None:
         filename = self.edit_test_name.text().strip()
