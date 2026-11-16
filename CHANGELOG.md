@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-16
+
+### Added
+- **Interactive 4-Step Chrome Extension Picture Guide (`ui/chrome_walkthrough.py`, `ui/assets/chrome_guide/`, `ui/main_window.py`).** Added a **Setup Guide** button (`?`) and clickable walkthrough link in **Settings → Chrome Extension** (plus a **Chrome Guide** shortcut on Step 3 of the welcome walkthrough) with arrow-annotated screenshots for Developer mode, **Load unpacked**, both Windows **Select Folder** path methods, one-click `chrome://extensions` and extension-folder copy buttons, **Reveal in File Explorer**, and live Native Messaging host status / repair.
+
+### Changed
+- **Smaller Windows package and release signing readiness (`DownloadSorter.spec`, `build_release.py`, `pe_signing.py`, `verify_release.py`, `packaging/`).** Dropped unused OpenSSL binaries (`libcrypto-3-x64.dll`, `libssl-3-x64.dll`, `qopensslbackend.dll`) that Qt hooks had picked up from runner `PATH` (reducing the Windows distribution archive by ~2.65 MB while keeping Python's own OpenSSL for updates), added a release publisher allowlist and optional whole-folder SignPath signing pipeline with Microsoft VC++ CRT refresh and PowerShell uninstaller script signing, and documented Windows 11 Smart App Control guidance (`README.md`, `BETA_TESTING.md`, `packaging/SIGNING.md`).
+
 ## [3.0.3] - 2026-11-15
 
 ### Added
