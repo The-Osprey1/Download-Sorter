@@ -24,29 +24,39 @@ What the build now does, and what still needs a person:
    catalog-only signature (`SignatureType == "Catalog"`) validates on the build machine's OS
    catalogs but does not travel with the file to users' PCs.
 
+   During the app stage (`build_release.py --stage app`), `replace_vcpp_runtime_dlls()` checks for
+   bundled Microsoft Visual C++ runtime DLLs (`VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`,
+   `MSVCP140.dll` in `_internal/`, `_internal/PySide6/`, and `_internal/shiboken6/`) that lack an
+   embedded signature and replaces them with Microsoft's embedded-signed copies from Visual Studio's
+   redistributable folder (`VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT\`, located via
+   `vswhere`) when a same-or-newer version is present. Microsoft's DLLs are never sent to SignPath.
+
    When `SIGNPATH_ORGANIZATION_ID` is set, `.github/workflows/release.yml` runs a two-stage build:
-   1. `python build_release.py --stage app` assembles `dist/DownloadSorter/`.
-   2. `python pe_signing.py stage dist/DownloadSorter dist/unsigned-app --github-output` inspects every
-      `.exe`, `.dll`, `.pyd`, and `.ps1` with PowerShell's `Get-AuthenticodeSignature` and stages
-      only files lacking a valid embedded Authenticode signature (leaving files that already carry
-      embedded upstream signatures from Microsoft, Python Software Foundation, The Qt Company, etc.
-      untouched).
-   3. The staged `DownloadSorter-app-unsigned` artifact is submitted to SignPath
-      (`SignPath/github-action-submit-signing-request@v3`), which signs all staged `.exe`, `.dll`,
-      `.pyd`, and `.ps1` files using `packaging/signpath-artifact-config.xml`.
-   4. `python pe_signing.py restore dist/signed-app dist/DownloadSorter` writes the signed files back
+   1. `python build_release.py --stage app` assembles `dist/DownloadSorter/` and swaps in
+      embedded-signed Microsoft VC++ runtime DLLs when Visual Studio redistributables are present.
+   2. `python pe_signing.py list --json` logs the full signer breakdown for `dist/DownloadSorter/`.
+   3. `python pe_signing.py stage dist/DownloadSorter dist/unsigned-app --github-output` stages **only**
+      files built from this repository (`OWNED_SIGNABLE_FILES`: `DownloadSorter.exe`,
+      `DownloadSorter-cli.exe`, `uninstall.ps1`, `uninstall_context_menu.ps1`,
+      `uninstall_startup.ps1`). If any third-party/unexpected file lacks an embedded Authenticode
+      signature, `stage` exits with an error listing those files instead of sending them to SignPath.
+   4. The staged `DownloadSorter-app-unsigned` artifact is submitted to SignPath
+      (`SignPath/github-action-submit-signing-request@v3`), which signs all staged `.exe` and `.ps1`
+      files using `packaging/signpath-artifact-config.xml`.
+   5. `python pe_signing.py restore dist/signed-app dist/DownloadSorter` writes the signed files back
       into `dist/DownloadSorter/`.
-   5. `python build_release.py --stage package` builds the ZIP, setup file, and `checksums.txt`.
-   6. The setup file (`DownloadSorter-Setup-v*-windows-x64.exe`) is uploaded, signed by SignPath,
+   6. `python build_release.py --stage package` builds the ZIP, setup file, and `checksums.txt`.
+   7. The setup file (`DownloadSorter-Setup-v*-windows-x64.exe`) is uploaded, signed by SignPath,
       copied back into `dist/`, and `checksums.txt` is refreshed for both the ZIP and the setup file.
-   7. `python verify_release.py --skip-tests --require-signed` verifies that zero `.exe`, `.dll`,
+   8. `python verify_release.py --skip-tests --require-signed` verifies that zero `.exe`, `.dll`,
       `.pyd`, or `.ps1` files under `dist/DownloadSorter/` (and the setup file) lack a valid
       embedded Authenticode signature.
-   8. The live update check (`"Check that an update replaces a running copy and opens it again"`) runs
+   9. The live update check (`"Check that an update replaces a running copy and opens it again"`) runs
       last, verifying the actual signed installer and signed executables.
 
-   When `SIGNPATH_ORGANIZATION_ID` is not set, the workflow runs `python build_release.py` and builds
-   the exact same unsigned output as before.
+   When `SIGNPATH_ORGANIZATION_ID` is not set, the workflow runs `python build_release.py` (which also
+   runs the VC++ redistributable replacement step if `vswhere` is present, warning and continuing
+   without failing if not) and builds the exact same unsigned output as before.
 
 ## Setting up SignPath Foundation
 
@@ -55,9 +65,10 @@ To enable signing with SignPath (free for open-source projects through the SignP
 1. **Create a SignPath project** linked to this GitHub repository and configure Authors, Reviewers,
    and Approvers with MFA per SignPath Foundation requirements.
 2. **Upload the app artifact configuration:** Import `packaging/signpath-artifact-config.xml` into your
-   SignPath project (for example, as `app-binaries`) so both `<pe-file-set>` (`.exe`, `.dll`, `.pyd`)
-   and `<powershell-file-set>` (`.ps1`) are signed. Also configure a single-file PE artifact
-   configuration (or default PE configuration) for the setup installer (`DownloadSorter-Setup-*.exe`).
+   SignPath project (for example, as `app-binaries`) so both `<pe-file-set>` (our `.exe` binaries)
+   and `<powershell-file-set>` (our `.ps1` scripts) are signed. Also configure a single-file PE
+   artifact configuration (or default PE configuration) for the setup installer
+   (`DownloadSorter-Setup-*.exe`).
 3. **Add GitHub repository settings:**
    - Variables (required):
      - `SIGNPATH_ORGANIZATION_ID`
@@ -77,31 +88,26 @@ To enable signing with SignPath (free for open-source projects through the SignP
 
 SignPath Foundation's published terms (`https://signpath.org/terms`) state that projects may include
 standard **System Libraries** (as defined in GPL v3 section 1) in signed packages, but prohibit using a
-SignPath Foundation project certificate to directly sign third-party / upstream binaries that their
-publishers did not sign (because the SignPath Foundation certificate identifies SignPath Foundation as
-the publisher of code built from *this* repository).
+SignPath Foundation project certificate to sign third-party / upstream binaries that their publishers
+did not sign (because the SignPath Foundation certificate identifies SignPath Foundation as the
+publisher of code built from *this* repository).
 
-In the shipped v3.0.3 build, `pe_signing.py list --json` distinguishes embedded upstream Authenticode
-signatures from OS-catalog-only signatures:
-- **Already embedded-signed (`Valid`, `Authenticode`):** 111 binaries signed by Microsoft Corporation,
-  Python Software Foundation, The Qt Company Oy, and Oracle America, Inc.
-- **Catalog-only (`Valid`, `Catalog`):** 6 Visual C++ runtime DLLs (`MSVCP140.dll`, `VCRUNTIME140.dll`,
-  `VCRUNTIME140_1.dll` inside `_internal/PySide6/` and `_internal/shiboken6/`).
-- **Unsigned (`NotSigned`):** `DownloadSorter.exe`, `DownloadSorter-cli.exe`, `uninstall.ps1`,
-  `uninstall_context_menu.ps1`, and `uninstall_startup.ps1`.
-
-- **Open question to resolve before enabling SignPath:** Because catalog-only signatures do not travel
-  with the extracted files, `pe_signing.py` flags those 6 bundled VC++ runtime DLLs (plus any future
-  dependency wheel's unsigned `.dll`/`.pyd`) for signing. Confirm with SignPath Foundation during
-  onboarding whether signing bundled redistributable/dependency DLLs lacking embedded signatures is
-  permitted under the project's policy, or whether they must be excluded/replaced or signed with an
-  organization-owned certificate instead.
+To enforce that policy automatically, `pe_signing.py stage` refuses to submit any file outside
+`OWNED_SIGNABLE_FILES`:
+- Microsoft's VC++ runtime DLLs (`MSVCP140.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`) are
+  replaced during `--stage app` with Microsoft's embedded-signed copies from Visual Studio's
+  `Microsoft.VC143.CRT` redistributable directory when available (never re-signed with our certificate).
+- **Open question to resolve if a future dependency ships unsigned:** If a future Python package
+  ships an unsigned `.dll` or `.pyd` (or if an upstream redistributable copy cannot be replaced),
+  `pe_signing.py stage` stops the workflow with an error listing the file. A maintainer must decide
+  whether to replace/exclude that dependency, obtain an upstream embedded-signed build, or switch to
+  an organization-owned signing certificate.
 
 ## Alternative: Microsoft Artifact Signing (Trusted Signing)
 
-If SignPath Foundation's third-party policy blocks bundled runtime DLLs or a dependency—or if you
-prefer an organization-owned publisher certificate (~$10/month via Azure Microsoft Artifact Signing,
-formerly Trusted Signing)—the two-stage build requires no structural rewrite:
+If you prefer an organization-owned publisher certificate (~$10/month via Azure Microsoft Artifact
+Signing, formerly Trusted Signing)—or need to sign a third-party dependency that SignPath Foundation
+does not permit—the two-stage build requires no structural rewrite:
 
 1. Keep `python build_release.py --stage app`, `pe_signing.py stage`, `python build_release.py --stage package`,
    and `verify_release.py --require-signed` unchanged.

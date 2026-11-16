@@ -89,13 +89,17 @@ jobs:
         run: |
           python build_release.py
 
-      # Signed build (two-stage): build app folder -> sign unsigned binaries/scripts -> package ZIP/setup -> sign setup.
+      # Signed build (two-stage): build app folder -> sign owned binaries/scripts -> package ZIP/setup -> sign setup.
       - name: Build app stage
         if: env.SIGNPATH_ORGANIZATION_ID != ''
         run: |
           python build_release.py --stage app
 
-      - name: Stage unsigned app executables, libraries, and scripts
+      - name: List embedded Authenticode signers in dist/DownloadSorter
+        run: |
+          python pe_signing.py list --json
+
+      - name: Stage owned unsigned executables and scripts
         id: stage_unsigned
         if: env.SIGNPATH_ORGANIZATION_ID != ''
         run: |

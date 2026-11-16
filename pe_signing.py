@@ -11,12 +11,39 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 PE_EXTENSIONS = (".exe", ".dll", ".pyd")
 SCRIPT_EXTENSIONS = (".ps1",)
 SIGNABLE_EXTENSIONS = PE_EXTENSIONS + SCRIPT_EXTENSIONS
+
+# Only files built from this repository may be sent to SignPath.
+OWNED_SIGNABLE_FILES: frozenset[str] = frozenset(
+    {
+        "DownloadSorter.exe",
+        "DownloadSorter-cli.exe",
+        "uninstall.ps1",
+        "uninstall_context_menu.ps1",
+        "uninstall_startup.ps1",
+    }
+)
+
+_OWNED_LOWER = frozenset(name.lower() for name in OWNED_SIGNABLE_FILES)
 _SUBPROCESS_TIMEOUT = 120
+
+
+class ThirdPartyUnsignedError(RuntimeError):
+    """Raised when files we do not build lack a valid embedded Authenticode signature."""
+
+    def __init__(self, files: Sequence[SignatureInfo]) -> None:
+        self.files = tuple(files)
+        lines = [
+            f"Refusing to stage {len(self.files)} third-party/unexpected file(s) lacking an embedded Authenticode signature:"
+        ]
+        for info in self.files:
+            lines.append(f"  - {info.rel_path} ({_format_sig_reason(info)})")
+        super().__init__("\n".join(lines))
 
 
 @dataclass(frozen=True)
@@ -33,6 +60,11 @@ class SignatureInfo:
     def is_valid(self) -> bool:
         """True only for a valid embedded Authenticode signature (catalog-only is False)."""
         return self.status == "Valid" and self.signature_type == "Authenticode"
+
+
+def is_owned_signable_file(rel_path: str) -> bool:
+    """True when ``rel_path`` (relative to ``dist/DownloadSorter``) is one of our built files."""
+    return rel_path.replace("\\", "/").lower() in _OWNED_LOWER
 
 
 def find_signable_files(
@@ -194,13 +226,23 @@ def stage_unsigned_files(
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> tuple[list[SignatureInfo], list[SignatureInfo]]:
-    """Copy only unsigned/catalog-only files from ``dist_app_dir`` into ``stage_dir``, keeping relative paths."""
+    """Copy only project-owned unsigned files from ``dist_app_dir`` into ``stage_dir``.
+
+    Refuses with ``ThirdPartyUnsignedError`` if any file not listed in
+    ``OWNED_SIGNABLE_FILES`` lacks a valid embedded Authenticode signature.
+    """
     src_root = Path(dist_app_dir)
     dst_root = Path(stage_dir)
     if not src_root.is_dir():
         raise FileNotFoundError(f"App distribution directory does not exist: {src_root}")
 
     signed, unsigned = partition_pe_signatures(src_root, runner=runner)
+    unexpected = [info for info in unsigned if not is_owned_signable_file(info.rel_path)]
+    if unexpected:
+        if dst_root.exists():
+            shutil.rmtree(dst_root)
+        raise ThirdPartyUnsignedError(unexpected)
+
     if dst_root.exists():
         shutil.rmtree(dst_root)
     dst_root.mkdir(parents=True, exist_ok=True)
@@ -259,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
     p_list.add_argument("directory", nargs="?", type=Path, default=Path("dist") / "DownloadSorter")
     p_list.add_argument("--json", action="store_true", help="Print full signature and signer details as JSON.")
 
-    p_stage = sub.add_parser("stage", help="Copy unsigned/catalog-only files to a staging folder for signing.")
+    p_stage = sub.add_parser("stage", help="Copy owned unsigned files to a staging folder for signing.")
     p_stage.add_argument("dist_dir", nargs="?", type=Path, default=Path("dist") / "DownloadSorter")
     p_stage.add_argument("stage_dir", nargs="?", type=Path, default=Path("dist") / "unsigned-app")
     p_stage.add_argument("--github-output", action="store_true", help="Write count=<n> to GITHUB_OUTPUT.")
@@ -294,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
                         "status": u.status,
                         "signature_type": u.signature_type,
                         "signer": u.signer,
+                        "owned": is_owned_signable_file(u.rel_path),
                         "path": str(u.path),
                     }
                     for u in unsigned
@@ -312,13 +355,18 @@ def main(argv: list[str] | None = None) -> int:
             if unsigned:
                 print("Files needing signature:")
                 for u in unsigned:
-                    print(f"  {u.rel_path} ({_format_sig_reason(u)})")
+                    tag = "owned" if is_owned_signable_file(u.rel_path) else "third-party"
+                    print(f"  {u.rel_path} ({_format_sig_reason(u)}, {tag})")
         return 0
 
     if args.command == "stage":
-        signed, unsigned = stage_unsigned_files(args.dist_dir, args.stage_dir)
+        try:
+            signed, unsigned = stage_unsigned_files(args.dist_dir, args.stage_dir)
+        except ThirdPartyUnsignedError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            return 1
         print(
-            f"Staged {len(unsigned)} file(s) needing signature to {args.stage_dir} "
+            f"Staged {len(unsigned)} owned file(s) needing signature to {args.stage_dir} "
             f"(kept {len(signed)} embedded-Authenticode file(s) untouched)."
         )
         for u in unsigned:

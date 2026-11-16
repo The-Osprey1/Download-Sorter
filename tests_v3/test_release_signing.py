@@ -1,4 +1,4 @@
-"""Tests for two-stage release packaging, unsigned file detection, and signing workflow checks."""
+"""Tests for two-stage release packaging, VC++ CRT replacement, and signing workflow checks."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _load_root_module(name: str):
 def _fake_runner(sig_by_name: dict[str, tuple[str, str, str]]):
     """Build a fake subprocess runner mimicking PowerShell Get-AuthenticodeSignature JSON.
 
-    Each entry maps basename -> ``(status, signature_type, signer_subject)``.
+    Each entry maps basename (or full string path) -> ``(status, signature_type, signer_subject)``.
     """
 
     def _run(cmd, **kwargs):
@@ -42,8 +42,8 @@ def _fake_runner(sig_by_name: dict[str, tuple[str, str, str]]):
         paths = [line for line in list_file.read_text(encoding="utf-8").splitlines() if line.strip()]
         records = []
         for p_str in paths:
-            name = Path(p_str).name
-            status, sig_type, signer = sig_by_name.get(name, ("NotSigned", "None", ""))
+            entry = sig_by_name.get(p_str) or sig_by_name.get(Path(p_str).name) or ("NotSigned", "None", "")
+            status, sig_type, signer = entry
             records.append(
                 {
                     "path": p_str,
@@ -137,12 +137,11 @@ def test_list_json_includes_signers_and_handles_single_dict(
     assert infos[0].signature_type == "Authenticode"
     assert infos[0].signer == "CN=Test Publisher"
 
-    # Also test `pe_signing.py list --json` CLI payload includes each signed file's signer
     app_dir = tmp_path / "app"
     app_dir.mkdir()
     (app_dir / "a.dll").write_bytes(b"a")
     (app_dir / "b.dll").write_bytes(b"b")
-    (app_dir / "u.ps1").write_text("Write-Host 'hi'", encoding="utf-8")
+    (app_dir / "uninstall.ps1").write_text("Write-Host 'hi'", encoding="utf-8")
 
     monkeypatch.setattr(
         pe_signing.subprocess,
@@ -151,7 +150,7 @@ def test_list_json_includes_signers_and_handles_single_dict(
             {
                 "a.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
                 "b.dll": ("Valid", "Catalog", "CN=Microsoft Windows"),
-                "u.ps1": ("NotSigned", "None", ""),
+                "uninstall.ps1": ("NotSigned", "None", ""),
             }
         ),
     )
@@ -168,7 +167,10 @@ def test_list_json_includes_signers_and_handles_single_dict(
             "signer": "CN=Python Software Foundation",
         }
     ]
-    assert [u["rel_path"] for u in out["unsigned"]] == ["b.dll", "u.ps1"]
+    assert [(u["rel_path"], u["owned"]) for u in out["unsigned"]] == [
+        ("b.dll", False),
+        ("uninstall.ps1", True),
+    ]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Authenticode relies on Windows PowerShell")
@@ -179,9 +181,7 @@ def test_real_windows_authenticode_signature_check(tmp_path: Path) -> None:
     unsigned_exe.write_bytes(b"MZ" + b"\x00" * 128)
     unsigned_ps1 = tmp_path / "uninstall.ps1"
     unsigned_ps1.write_text("Write-Output 'test'", encoding="utf-8")
-    # kernel32.dll is catalog-signed on Windows (Valid + Catalog -> is_valid is False!)
     win_dll = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "kernel32.dll"
-    # Python executable / stdlib DLLs carry embedded Authenticode signatures
     py_exe = Path(sys.executable).resolve()
 
     infos = pe_signing.inspect_pe_signatures(tmp_path, paths=[unsigned_exe, unsigned_ps1, win_dll, py_exe])
@@ -193,71 +193,187 @@ def test_real_windows_authenticode_signature_check(tmp_path: Path) -> None:
     assert infos[3].path == py_exe and infos[3].status == "Valid"
 
 
-def test_stage_and_restore_includes_ps1_and_catalog_dlls_only(
+def test_stage_only_allows_owned_files_and_rejects_third_party(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     pe_signing = _load_root_module("pe_signing")
+
+    assert pe_signing.OWNED_SIGNABLE_FILES == frozenset(
+        {
+            "DownloadSorter.exe",
+            "DownloadSorter-cli.exe",
+            "uninstall.ps1",
+            "uninstall_context_menu.ps1",
+            "uninstall_startup.ps1",
+        }
+    )
 
     app_dir = tmp_path / "DownloadSorter"
     (app_dir / "_internal").mkdir(parents=True)
     pub_dll = app_dir / "_internal" / "python312.dll"
     pub_dll.write_bytes(b"ORIGINAL_EMBEDDED_DLL")
-    cat_dll = app_dir / "_internal" / "MSVCP140.dll"
-    cat_dll.write_bytes(b"CATALOG_ONLY_DLL")
+    ms_dll = app_dir / "_internal" / "MSVCP140.dll"
+    ms_dll.write_bytes(b"EMBEDDED_MS_DLL")
     app_exe = app_dir / "DownloadSorter.exe"
     app_exe.write_bytes(b"UNSIGNED_EXE")
-    sub_pyd = app_dir / "_internal" / "extra.pyd"
-    sub_pyd.write_bytes(b"UNSIGNED_PYD")
+    cli_exe = app_dir / "DownloadSorter-cli.exe"
+    cli_exe.write_bytes(b"UNSIGNED_CLI")
     uninstall_ps1 = app_dir / "uninstall.ps1"
     uninstall_ps1.write_text("Write-Output 'bye'", encoding="utf-8")
+    ctx_ps1 = app_dir / "uninstall_context_menu.ps1"
+    ctx_ps1.write_text("Write-Output 'ctx'", encoding="utf-8")
+    startup_ps1 = app_dir / "uninstall_startup.ps1"
+    startup_ps1.write_text("Write-Output 'startup'", encoding="utf-8")
 
-    runner = _fake_runner(
+    # 1. Happy path: all third-party DLLs carry valid embedded signatures -> only owned files are staged.
+    ok_runner = _fake_runner(
         {
             "python312.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
-            "MSVCP140.dll": ("Valid", "Catalog", "CN=Microsoft Windows"),
-            "DownloadSorter.exe": ("NotSigned", "None", ""),
-            "extra.pyd": ("NotSigned", "None", ""),
-            "uninstall.ps1": ("NotSigned", "None", ""),
+            "MSVCP140.dll": ("Valid", "Authenticode", "CN=Microsoft Corporation"),
         }
     )
 
     stage_dir = tmp_path / "unsigned-app"
-    signed, unsigned = pe_signing.stage_unsigned_files(app_dir, stage_dir, runner=runner)
-    assert len(signed) == 1
-    assert len(unsigned) == 4
-    assert not (stage_dir / "_internal" / "python312.dll").exists()
-    assert (stage_dir / "_internal" / "MSVCP140.dll").read_bytes() == b"CATALOG_ONLY_DLL"
-    assert (stage_dir / "DownloadSorter.exe").read_bytes() == b"UNSIGNED_EXE"
-    assert (stage_dir / "_internal" / "extra.pyd").read_bytes() == b"UNSIGNED_PYD"
-    assert (stage_dir / "uninstall.ps1").read_text(encoding="utf-8") == "Write-Output 'bye'"
+    signed, unsigned = pe_signing.stage_unsigned_files(app_dir, stage_dir, runner=ok_runner)
+    assert len(signed) == 2
+    assert {u.rel_path for u in unsigned} == pe_signing.OWNED_SIGNABLE_FILES
+    assert not (stage_dir / "_internal").exists()
+    assert {p.name for p in stage_dir.iterdir()} == pe_signing.OWNED_SIGNABLE_FILES
 
     # Simulate SignPath returning signed versions of staged files
     signed_dir = tmp_path / "signed-app"
     shutil.copytree(stage_dir, signed_dir)
     (signed_dir / "DownloadSorter.exe").write_bytes(b"SIGNED_EXE")
-    (signed_dir / "_internal" / "extra.pyd").write_bytes(b"SIGNED_PYD")
-    (signed_dir / "_internal" / "MSVCP140.dll").write_bytes(b"SIGNED_RUNTIME_DLL")
+    (signed_dir / "DownloadSorter-cli.exe").write_bytes(b"SIGNED_CLI")
     (signed_dir / "uninstall.ps1").write_text("Write-Output 'bye'\n# SIG # signed", encoding="utf-8")
 
     restored = pe_signing.restore_signed_files(signed_dir, app_dir)
-    assert sorted(restored) == [
-        "DownloadSorter.exe",
-        "_internal/MSVCP140.dll",
-        "_internal/extra.pyd",
-        "uninstall.ps1",
-    ]
+    assert set(restored) == pe_signing.OWNED_SIGNABLE_FILES
     assert app_exe.read_bytes() == b"SIGNED_EXE"
-    assert sub_pyd.read_bytes() == b"SIGNED_PYD"
-    assert cat_dll.read_bytes() == b"SIGNED_RUNTIME_DLL"
+    assert cli_exe.read_bytes() == b"SIGNED_CLI"
     assert "# SIG # signed" in uninstall_ps1.read_text(encoding="utf-8")
-    # Embedded publisher-signed file must remain untouched
     assert pub_dll.read_bytes() == b"ORIGINAL_EMBEDDED_DLL"
+    assert ms_dll.read_bytes() == b"EMBEDDED_MS_DLL"
 
     gh_out = tmp_path / "gh_output.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(gh_out))
     pe_signing._write_github_output(len(unsigned))
-    assert gh_out.read_text(encoding="utf-8") == "count=4\n"
+    assert gh_out.read_text(encoding="utf-8") == "count=5\n"
+
+    # 2. Failure path: if a third-party file is catalog-only or unsigned, stage MUST error and never stage it!
+    bad_runner = _fake_runner(
+        {
+            "python312.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
+            "MSVCP140.dll": ("Valid", "Catalog", "CN=Microsoft Windows"),
+        }
+    )
+    with pytest.raises(pe_signing.ThirdPartyUnsignedError) as exc_info:
+        pe_signing.stage_unsigned_files(app_dir, stage_dir, runner=bad_runner)
+    assert "_internal/MSVCP140.dll" in str(exc_info.value)
+    assert not stage_dir.exists()
+
+    monkeypatch.setattr(pe_signing.subprocess, "run", bad_runner)
+    rc = pe_signing.main(["stage", str(app_dir), str(stage_dir)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "_internal/MSVCP140.dll" in captured.err
+    assert "Catalog" in captured.err
+
+
+def test_replace_vcpp_runtime_dlls_uses_vswhere_and_checks_version(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    build_release = _load_root_module("build_release")
+
+    app_dir = tmp_path / "DownloadSorter"
+    (app_dir / "_internal" / "PySide6").mkdir(parents=True)
+    (app_dir / "_internal" / "shiboken6").mkdir(parents=True)
+
+    cat_vcrt = app_dir / "_internal" / "VCRUNTIME140.dll"
+    cat_msvcp = app_dir / "_internal" / "PySide6" / "MSVCP140.dll"
+    cat_vcrt1 = app_dir / "_internal" / "shiboken6" / "VCRUNTIME140_1.dll"
+    already_embedded = app_dir / "_internal" / "PySide6" / "VCRUNTIME140.dll"
+    for f, tag in [
+        (cat_vcrt, b"OLD_VCRT"),
+        (cat_msvcp, b"OLD_MSVCP"),
+        (cat_vcrt1, b"OLD_VCRT1"),
+        (already_embedded, b"ALREADY_GOOD"),
+    ]:
+        f.write_bytes(tag)
+
+    # Fake Visual Studio installation with older and newer MSVC CRT directories
+    vs_root = tmp_path / "VS2022"
+    old_crt = vs_root / "VC" / "Redist" / "MSVC" / "14.38.33135" / "x64" / "Microsoft.VC143.CRT"
+    new_crt = vs_root / "VC" / "Redist" / "MSVC" / "14.44.35211" / "x64" / "Microsoft.VC143.CRT"
+    old_crt.mkdir(parents=True)
+    new_crt.mkdir(parents=True)
+
+    (new_crt / "vcruntime140.dll").write_bytes(b"SIGNED_NEW_VCRT")
+    (new_crt / "msvcp140.dll").write_bytes(b"SIGNED_OLD_VER_MSVCP")
+    (new_crt / "vcruntime140_1.dll").write_bytes(b"UNSIGNED_REDIST_VCRT1")
+    (old_crt / "vcruntime140_1.dll").write_bytes(b"SIGNED_OLD_VCRT1")
+
+    fake_vswhere = tmp_path / "vswhere.exe"
+    fake_vswhere.write_bytes(b"vsw")
+
+    def _fake_vswhere(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=str(vs_root) + "\n", stderr="")
+
+    found_dirs = build_release.find_vcpp_redist_dirs(vswhere_path=fake_vswhere, runner=_fake_vswhere)
+    assert found_dirs == [new_crt, old_crt]
+
+    sig_map = {
+        str(cat_vcrt): ("Valid", "Catalog", "CN=Microsoft Windows"),
+        str(cat_msvcp): ("Valid", "Catalog", "CN=Microsoft Windows"),
+        str(cat_vcrt1): ("Valid", "Catalog", "CN=Microsoft Windows"),
+        str(already_embedded): ("Valid", "Authenticode", "CN=Microsoft Corporation"),
+        str(new_crt / "vcruntime140.dll"): ("Valid", "Authenticode", "CN=Microsoft Corporation"),
+        str(new_crt / "msvcp140.dll"): ("Valid", "Authenticode", "CN=Microsoft Corporation"),
+        str(new_crt / "vcruntime140_1.dll"): ("NotSigned", "None", ""),
+        str(old_crt / "vcruntime140_1.dll"): ("Valid", "Authenticode", "CN=Microsoft Corporation"),
+    }
+    versions = {
+        cat_vcrt: (14, 40, 33810, 0),
+        cat_msvcp: (14, 44, 35211, 0),  # newer than redist copy below!
+        cat_vcrt1: (14, 40, 33810, 0),
+        new_crt / "vcruntime140.dll": (14, 44, 35211, 0),  # >= 14.40 -> replace
+        new_crt / "msvcp140.dll": (14, 42, 34433, 0),  # < 14.44 -> DO NOT replace
+        old_crt / "vcruntime140_1.dll": (14, 40, 33810, 0),  # == 14.40 -> replace (same or newer)
+    }
+
+    replaced = build_release.replace_vcpp_runtime_dlls(
+        app_dir,
+        vswhere_path=fake_vswhere,
+        vswhere_runner=_fake_vswhere,
+        sig_runner=_fake_runner(sig_map),
+        version_getter=lambda p: versions.get(p),
+    )
+
+    assert set(replaced) == {"_internal/VCRUNTIME140.dll", "_internal/shiboken6/VCRUNTIME140_1.dll"}
+    assert cat_vcrt.read_bytes() == b"SIGNED_NEW_VCRT"
+    assert cat_vcrt1.read_bytes() == b"SIGNED_OLD_VCRT1"
+    # Older candidate for MSVCP140.dll must be skipped with warning; already-embedded file untouched
+    assert cat_msvcp.read_bytes() == b"OLD_MSVCP"
+    assert already_embedded.read_bytes() == b"ALREADY_GOOD"
+    out = capsys.readouterr().out
+    assert "Replaced _internal/VCRUNTIME140.dll" in out
+    assert "[WARNING]" in out and "MSVCP140.dll" in out
+
+    # Missing vswhere must warn and never fail
+    missing_vswhere = tmp_path / "missing_vswhere.exe"
+    assert (
+        build_release.replace_vcpp_runtime_dlls(
+            app_dir,
+            vswhere_path=missing_vswhere,
+            sig_runner=_fake_runner(sig_map),
+            version_getter=lambda p: versions.get(p),
+        )
+        == []
+    )
+    assert "[WARNING]" in capsys.readouterr().out
 
 
 def test_build_release_stage_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,6 +384,7 @@ def test_build_release_stage_split(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(build_release, "DIST_DIR", dist_dir)
     monkeypatch.setattr(build_release, "RELEASE_DIR", release_dir)
     monkeypatch.setattr(build_release.installer_builder, "generate_app_icon", lambda p: p)
+    monkeypatch.setattr(build_release, "replace_vcpp_runtime_dlls", lambda *a, **k: [])
 
     assert build_release.build_standalone(stage="package") == 1
 
@@ -365,7 +482,7 @@ def test_verify_release_reports_and_enforces_embedded_signatures_and_ps1(
     all_signed_runner = _fake_runner(
         {
             "python312.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
-            "MSVCP140.dll": ("Valid", "Authenticode", "CN=SignPath Foundation"),
+            "MSVCP140.dll": ("Valid", "Authenticode", "CN=Microsoft Corporation"),
             "DownloadSorter.exe": ("Valid", "Authenticode", "CN=SignPath Foundation"),
             "DownloadSorter-cli.exe": ("Valid", "Authenticode", "CN=SignPath Foundation"),
             "uninstall.ps1": ("Valid", "Authenticode", "CN=SignPath Foundation"),
@@ -384,11 +501,12 @@ def test_signpath_artifact_config_and_release_workflow_order() -> None:
     assert root.tag.endswith("artifact-configuration")
     assert "<pe-file-set>" in text
     assert "<powershell-file-set>" in text
-    assert "*.exe" in text and "*.dll" in text and "*.pyd" in text and "*.ps1" in text
+    assert "*.exe" in text and "*.ps1" in text
     assert "authenticode-sign" in text
 
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     idx_app = workflow.index("python build_release.py --stage app")
+    idx_list = workflow.index("python pe_signing.py list --json")
     idx_stage = workflow.index("python pe_signing.py stage dist/DownloadSorter dist/unsigned-app")
     idx_sign_app = workflow.index("name: Sign app executables, libraries, and scripts with SignPath")
     idx_restore = workflow.index("python pe_signing.py restore dist/signed-app dist/DownloadSorter")
@@ -397,4 +515,4 @@ def test_signpath_artifact_config_and_release_workflow_order() -> None:
     idx_req_signed = workflow.index("python verify_release.py --skip-tests --require-signed")
     idx_update_check = workflow.index("name: Check that an update replaces a running copy and opens it again")
 
-    assert idx_app < idx_stage < idx_sign_app < idx_restore < idx_pkg < idx_sign_setup < idx_req_signed < idx_update_check
+    assert idx_app < idx_list < idx_stage < idx_sign_app < idx_restore < idx_pkg < idx_sign_setup < idx_req_signed < idx_update_check
