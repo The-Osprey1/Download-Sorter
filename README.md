@@ -91,6 +91,12 @@ To check that your download is exactly what was published:
 
 All the source code is in this repository, and the installer is built from it by GitHub, in the open (see the [release workflow](.github/workflows/release.yml)).
 
+## Smart App Control
+
+Windows 11 includes **Smart App Control**, which is stricter than SmartScreen and has no **Run anyway** button. It checks every program and library file as it loads and blocks any unsigned file that Microsoft does not yet widely recognize.
+
+Until Download Sorter is code-signed, the only way to run it on a Windows 11 PC with Smart App Control enabled is to turn Smart App Control **Off** (Windows Security → **App & browser control** → **Smart App Control settings**). There is no per-app bypass, and Windows does not allow turning Smart App Control back on without resetting Windows.
+
 ## Privacy
 
 - **Your files never leave your PC.** Rules, settings, history and the log all stay in `%LOCALAPPDATA%\download-sorter-v3`.

@@ -36,9 +36,22 @@ def calculate_sha256(file_path: Path) -> str:
     return hasher.hexdigest()
 
 
-def build_standalone(use_inno: bool = False) -> int:
+def _verify_app_executables() -> int:
+    exe_path = RELEASE_DIR / "DownloadSorter.exe"
+    cli_exe_path = RELEASE_DIR / "DownloadSorter-cli.exe"
+    if not exe_path.exists():
+        print(f"[ERROR] Built windowed executable not found at {exe_path}")
+        return 1
+    if not cli_exe_path.exists():
+        print(f"[ERROR] Built CLI executable not found at {cli_exe_path}")
+        return 1
+    return 0
+
+
+def build_app_stage() -> int:
+    """Run PyInstaller and assemble ``dist/DownloadSorter/`` (without ZIP or setup)."""
     print("=" * 60)
-    print(f"  Building Download Sorter v{VERSION} Standalone Release")
+    print(f"  Building Download Sorter v{VERSION} Standalone App Stage")
     print("=" * 60)
 
     # 1. Clean previous build artifacts
@@ -59,6 +72,7 @@ def build_standalone(use_inno: bool = False) -> int:
     # 3. Invoke PyInstaller
     print("[*] Running PyInstaller...")
     import version_resource
+
     version_resource.write(ROOT / version_resource.VERSION_FILE)
     cmd = [sys.executable, "-m", "PyInstaller", str(spec_file), "--noconfirm"]
     res = subprocess.run(cmd, cwd=str(ROOT))
@@ -66,23 +80,17 @@ def build_standalone(use_inno: bool = False) -> int:
         print(f"[ERROR] PyInstaller failed with exit code {res.returncode}")
         return res.returncode
 
-    exe_path = RELEASE_DIR / "DownloadSorter.exe"
-    cli_exe_path = RELEASE_DIR / "DownloadSorter-cli.exe"
-    if not exe_path.exists():
-        print(f"[ERROR] Built windowed executable not found at {exe_path}")
-        return 1
-    if not cli_exe_path.exists():
-        print(f"[ERROR] Built CLI executable not found at {cli_exe_path}")
+    if _verify_app_executables() != 0:
         return 1
 
-    print(f"[OK] Standalone executables compiled:\n     - {exe_path.name}\n     - {cli_exe_path.name}")
+    print("[OK] Standalone executables compiled:\n     - DownloadSorter.exe\n     - DownloadSorter-cli.exe")
 
-    # 3. Create CMD launcher wrapper for easy command line access
+    # 4. Create CMD launcher wrapper for easy command line access
     cmd_launcher = RELEASE_DIR / "DownloadSorter.cmd"
     cmd_launcher.write_text('@echo off\n"%~dp0DownloadSorter-cli.exe" %*\n', encoding="utf-8")
     print(f"[*] Generated CLI launcher wrapper: {cmd_launcher.name}")
 
-    # 4. Copy scripts, configs, and documentation into release directory
+    # 5. Copy scripts, configs, and documentation into release directory
     extra_files = [
         # The uninstaller that "Installed apps" runs, and the two helpers it calls.
         # (setup.bat and the install_*.ps1 scripts set up the 2.x Python version and
@@ -113,14 +121,52 @@ def build_standalone(use_inno: bool = False) -> int:
         shutil.copytree(ext_src, RELEASE_DIR / "chrome_extension", dirs_exist_ok=True)
         print("[*] Bundled: chrome_extension/")
 
-    # 4. Package into ZIP archive
+    print(f"[OK] App stage ready at {RELEASE_DIR}")
+    return 0
+
+
+def write_checksums(
+    dist_dir: Path | None = None,
+    *,
+    zip_path: Path | None = None,
+    setup_path: Path | None = None,
+) -> Path:
+    """Compute SHA-256 checksums for the setup installer and ZIP archive."""
+    resolved_dist = Path(dist_dir) if dist_dir is not None else DIST_DIR
+    resolved_zip = Path(zip_path) if zip_path is not None else (resolved_dist / ZIP_NAME)
+    resolved_setup = Path(setup_path) if setup_path is not None else (resolved_dist / SETUP_NAME)
+    checksum_file = resolved_dist / "checksums.txt"
+
+    lines: list[str] = []
+    if resolved_setup.exists():
+        lines.append(f"{calculate_sha256(resolved_setup)}  {resolved_setup.name}")
+    if resolved_zip.exists():
+        lines.append(f"{calculate_sha256(resolved_zip)}  {resolved_zip.name}")
+    checksum_file.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return checksum_file
+
+
+def build_package_stage(use_inno: bool = False) -> int:
+    """Create the ZIP archive, setup installer, and ``checksums.txt`` from ``dist/DownloadSorter/``."""
+    if not RELEASE_DIR.is_dir():
+        print(f"[ERROR] App stage directory not found at {RELEASE_DIR} (run --stage app first)")
+        return 1
+    if _verify_app_executables() != 0:
+        return 1
+
+    print("=" * 60)
+    print(f"  Packaging Download Sorter v{VERSION} Distribution")
+    print("=" * 60)
+
+    # 1. Package into ZIP archive
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
     zip_path = DIST_DIR / ZIP_NAME
     if zip_path.exists():
         zip_path.unlink()
 
     print(f"[*] Creating ZIP distribution archive: {zip_path.name}...")
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
-        for file in RELEASE_DIR.rglob("*"):
+        for file in sorted(RELEASE_DIR.rglob("*")):
             if file.is_file():
                 arcname = file.relative_to(DIST_DIR)
                 zf.write(file, arcname)
@@ -128,24 +174,25 @@ def build_standalone(use_inno: bool = False) -> int:
     zip_size_mb = round(zip_path.stat().st_size / (1024 * 1024), 2)
     print(f"[OK] ZIP archive created ({zip_size_mb} MB)")
 
-    # 5. Build Setup Executable
+    # 2. Build Setup Executable
     setup_path = DIST_DIR / SETUP_NAME
     if setup_path.exists():
         setup_path.unlink()
 
     print(f"[*] Building single-file setup executable: {setup_path.name}...")
-    installer_builder.build_setup_exe(dist_dir=RELEASE_DIR, version=VERSION, output_exe=setup_path, use_inno=use_inno)
+    installer_builder.build_setup_exe(
+        dist_dir=RELEASE_DIR,
+        version=VERSION,
+        output_exe=setup_path,
+        use_inno=use_inno,
+    )
     setup_size_mb = round(setup_path.stat().st_size / (1024 * 1024), 2)
     print(f"[OK] Setup executable created ({setup_size_mb} MB)")
 
-    # 6. Compute SHA-256 Checksums
-    checksum_file = DIST_DIR / "checksums.txt"
+    # 3. Compute SHA-256 Checksums
+    checksum_file = write_checksums(DIST_DIR, zip_path=zip_path, setup_path=setup_path)
     setup_checksum = calculate_sha256(setup_path) if setup_path.exists() else None
     zip_checksum = calculate_sha256(zip_path)
-    with open(checksum_file, "w", encoding="utf-8") as f:
-        if setup_checksum:
-            f.write(f"{setup_checksum}  {setup_path.name}\n")
-        f.write(f"{zip_checksum}  {zip_path.name}\n")
 
     print("=" * 60)
     print("  Build Succeeded!")
@@ -159,6 +206,20 @@ def build_standalone(use_inno: bool = False) -> int:
     return 0
 
 
+def build_standalone(use_inno: bool = False, stage: str = "all") -> int:
+    if stage not in ("all", "app", "package"):
+        raise ValueError(f"Unknown build stage: {stage!r}")
+    if stage in ("all", "app"):
+        rc = build_app_stage()
+        if rc != 0:
+            return rc
+    if stage in ("all", "package"):
+        rc = build_package_stage(use_inno=use_inno)
+        if rc != 0:
+            return rc
+    return 0
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -168,4 +229,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Build the setup file with Inno Setup (installer.iss) instead of the single-file installer.",
     )
-    sys.exit(build_standalone(use_inno=parser.parse_args().inno))
+    parser.add_argument(
+        "--stage",
+        choices=("all", "app", "package"),
+        default="all",
+        help="Run only 'app' (PyInstaller + dist/DownloadSorter), 'package' (ZIP, setup, checksums), or 'all' (default).",
+    )
+    parsed = parser.parse_args()
+    sys.exit(build_standalone(use_inno=parsed.inno, stage=parsed.stage))

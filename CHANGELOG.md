@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Two-stage release packaging & whole-folder signing preparation (`build_release.py`, `pe_signing.py`, `verify_release.py`, `release.yml`, `packaging/`).** Split `build_release.py` into `--stage app` and `--stage package` (with default behavior unchanged), added `pe_signing.py` to detect and stage only unsigned `.exe`/`.dll`/`.pyd` files via `Get-AuthenticodeSignature` while leaving publisher-signed binaries untouched, added `packaging/signpath-artifact-config.xml`, added `--require-signed` and signature count reporting to `verify_release.py`, moved the live update check after signing in `.github/workflows/release.yml`, and documented Windows 11 Smart App Control and signing setup in `README.md`, `BETA_TESTING.md`, and `packaging/SIGNING.md`.
+
 ## [3.0.3] - 2026-11-15
 
 ### Added

@@ -66,6 +66,7 @@ Tick these off as you go. You don't have to do them all, and anything that surpr
 ## Known issues
 
 - **Windows SmartScreen and some antivirus programs warn about the installer** (Norton, for example, may say `WS.Reputation.1`). Download Sorter isn't code-signed yet, and new apps from small developers have no "reputation" with these programs. You can check that your download is the published one with [checksums](README.md#windows-protected-your-pc). Progress on signing: [issue #9](https://github.com/The-Osprey1/Download-Sorter/issues/9).
+- **Windows 11 Smart App Control blocks unsigned apps completely.** Unlike SmartScreen, Smart App Control has no **Run anyway** button and blocks unsigned executables and library files as they load. Until Download Sorter is signed, the only way to run it when Smart App Control is active is to turn Smart App Control off in Windows Security ([details](README.md#smart-app-control)). Progress on signing: [issue #9](https://github.com/The-Osprey1/Download-Sorter/issues/9).
 - **The tray icon may be hidden** under the **^** arrow next to the clock. Drag it onto the taskbar to keep it visible.
 - **Files that are open in another program wait.** A file another program has open stays in Downloads until it's closed. That's on purpose.
 - **Windows Storage Sense** can be set to delete old files in Downloads, including sorted ones. Turn it off for Downloads if you don't want that.
