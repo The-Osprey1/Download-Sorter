@@ -492,6 +492,128 @@ def test_verify_release_reports_and_enforces_embedded_signatures_and_ps1(
     assert verify.check_artifacts(version, require_signed=True, pe_runner=all_signed_runner) == []
 
 
+def test_download_sorter_spec_drops_stray_openssl_and_keeps_python_ssl() -> None:
+    spec_path = ROOT / "DownloadSorter.spec"
+    spec_text = spec_path.read_text(encoding="utf-8")
+
+    fake_binaries = [
+        ("libcrypto-3-x64.dll", r"C:\Oracle\libcrypto-3-x64.dll", "BINARY"),
+        ("./libssl-3-x64.dll", r"C:\Oracle\libssl-3-x64.dll", "BINARY"),
+        (r"PySide6\plugins\tls\qopensslbackend.dll", r"C:\Qt\qopensslbackend.dll", "BINARY"),
+        ("libcrypto-3.dll", r"C:\Python\libcrypto-3.dll", "BINARY"),
+        ("libssl-3.dll", r"C:\Python\libssl-3.dll", "BINARY"),
+        (r"PySide6\plugins\tls\qschannelbackend.dll", r"C:\Qt\qschannelbackend.dll", "BINARY"),
+        (r"PySide6\Qt6Core.dll", r"C:\Qt\Qt6Core.dll", "BINARY"),
+    ]
+    collected_binaries: list[tuple[str, str, str]] = []
+
+    class _FakeAnalysis:
+        def __init__(self, *args, **kwargs):
+            self.scripts = []
+            self.pure = []
+            self.zipped_data = None
+            self.binaries = list(fake_binaries)
+            self.zipfiles = []
+            self.datas = []
+
+    class _FakePYZ:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class _FakeEXE:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    def _fake_collect(*args, **kwargs):
+        collected_binaries.extend(args[2])
+        return object()
+
+    ns = {
+        "__file__": str(spec_path),
+        "Analysis": _FakeAnalysis,
+        "PYZ": _FakePYZ,
+        "EXE": _FakeEXE,
+        "COLLECT": _fake_collect,
+    }
+    exec(compile(spec_text, str(spec_path), "exec"), ns)
+
+    kept_names = [entry[0] for entry in collected_binaries]
+    assert kept_names == [
+        "libcrypto-3.dll",
+        "libssl-3.dll",
+        r"PySide6\plugins\tls\qschannelbackend.dll",
+        r"PySide6\Qt6Core.dll",
+    ]
+
+
+def test_allowed_signers_and_verify_release_rejects_unexpected_publisher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pe_signing = _load_root_module("pe_signing")
+    verify = _load_root_module("verify_release")
+    version = verify.collect_versions()["about.py"]
+    assert version is not None
+
+    qt_subject = (
+        "CN=The QT Company Oy, O=The QT Company Oy, L=Espoo, S=Uusimaa, C=FI, "
+        "SERIALNUMBER=2637805-2, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.3=FI"
+    )
+    oracle_subject = 'CN="Oracle America, Inc.", O="Oracle America, Inc.", L=Redwood City, S=California, C=US'
+
+    assert pe_signing.extract_subject_cn_o(oracle_subject) == ("Oracle America, Inc.", "Oracle America, Inc.")
+    assert pe_signing.is_allowed_signer(qt_subject) is True
+    assert pe_signing.is_allowed_signer("CN=Python Software Foundation, O=Python Software Foundation, C=US") is True
+    assert pe_signing.is_allowed_signer("CN=Microsoft Corporation, O=Microsoft Corporation, C=US") is True
+    assert (
+        pe_signing.is_allowed_signer(
+            "CN=Microsoft Windows Software Compatibility Publisher, O=Microsoft Corporation, C=US"
+        )
+        is True
+    )
+    assert pe_signing.is_allowed_signer("CN=Open Source Developer, O=SignPath Foundation, C=US") is True
+    assert pe_signing.is_allowed_signer(oracle_subject) is False
+    assert pe_signing.is_allowed_signer("CN=Evil Microsoft Corporation Reseller, O=Unknown, C=US") is False
+    assert pe_signing.is_allowed_signer("CN=Untrusted, L=Microsoft Corporation, C=US") is False
+    assert pe_signing.is_allowed_signer("") is False
+
+    dist = tmp_path / "dist"
+    app_dir = dist / "DownloadSorter"
+    (app_dir / "_internal").mkdir(parents=True)
+    (app_dir / "DownloadSorter.exe").write_bytes(b"gui")
+    (app_dir / "DownloadSorter-cli.exe").write_bytes(b"cli")
+    (app_dir / "_internal" / "python312.dll").write_bytes(b"py")
+    (app_dir / "_internal" / "libcrypto-3-x64.dll").write_bytes(b"stray-oracle")
+
+    zip_file = dist / f"DownloadSorter-v{version}-windows-x64.zip"
+    zip_file.write_bytes(b"zip")
+    setup_file = dist / f"DownloadSorter-Setup-v{version}-windows-x64.exe"
+    setup_file.write_bytes(b"setup")
+    (dist / "checksums.txt").write_text(
+        f"{verify._sha256(setup_file)}  {setup_file.name}\n"
+        f"{verify._sha256(zip_file)}  {zip_file.name}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(verify, "DIST", dist)
+    monkeypatch.setattr(verify, "_smoke", lambda *a, **k: [])
+
+    stray_runner = _fake_runner(
+        {
+            "python312.dll": ("Valid", "Authenticode", "CN=Python Software Foundation"),
+            "libcrypto-3-x64.dll": ("Valid", "Authenticode", oracle_subject),
+            "DownloadSorter.exe": ("NotSigned", "None", ""),
+            "DownloadSorter-cli.exe": ("NotSigned", "None", ""),
+            setup_file.name: ("NotSigned", "None", ""),
+        }
+    )
+
+    errors = verify.check_artifacts(version, require_signed=False, pe_runner=stray_runner)
+    assert len(errors) == 1
+    assert "dist/DownloadSorter/_internal/libcrypto-3-x64.dll" in errors[0]
+    assert "Oracle America, Inc." in errors[0]
+
+
 def test_signpath_artifact_config_and_release_workflow_order() -> None:
     xml_path = ROOT / "packaging" / "signpath-artifact-config.xml"
     assert xml_path.is_file()

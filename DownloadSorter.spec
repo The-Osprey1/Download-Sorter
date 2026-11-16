@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 block_cipher = None
 root = Path('.').resolve()
@@ -65,6 +65,22 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+
+# QtNetwork only handles local IPC; HTTPS updates use Python's urllib/OpenSSL (libcrypto-3.dll, libssl-3.dll),
+# so drop Qt's OpenSSL TLS backend and runner-PATH OpenSSL DLLs while keeping qschannelbackend.dll.
+_EXCLUDED_BINARIES = frozenset(
+    {
+        "libcrypto-3-x64.dll",
+        "libssl-3-x64.dll",
+        "pyside6/plugins/tls/qopensslbackend.dll",
+    }
+)
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if PurePosixPath(entry[0].replace("\\", "/")).as_posix().lower().removeprefix("_internal/")
+    not in _EXCLUDED_BINARIES
+]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
