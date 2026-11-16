@@ -80,9 +80,16 @@ To enable signing with SignPath (free for open-source projects through the SignP
      - `SIGNPATH_SETUP_ARTIFACT_CONFIGURATION_SLUG`
    - Secret:
      - `SIGNPATH_API_TOKEN`
-4. **Add SignPath's required Code Signing Policy notice** to the project's public documentation/homepage
-   (acknowledging free code signing provided by SignPath.io and the certificate by SignPath Foundation,
-   along with team roles and privacy disclosures).
+4. **Code Signing Policy notice:** `README.md` already has a **Code signing policy** section with the
+   team roles, what gets signed, how releases are built, and the privacy disclosure. Once SignPath
+   Foundation approves the project, swap its first paragraph for the attribution line kept in the
+   HTML comment just below it ("Free code signing provided by SignPath.io, certificate by SignPath
+   Foundation"). Don't add that line before approval.
+
+Until steps 1–3 are done, every release is unsigned. The release workflow then prints a
+"Release is not code-signed" warning on the run's summary page, and `release_notes.py` opens the
+release notes with a notice that the version is not code-signed and that Smart App Control will
+block it. The notice disappears by itself once signing runs (the workflow passes `--signed`).
 
 ### Open question: third-party files without embedded upstream signatures
 

@@ -43,6 +43,16 @@ jobs:
       SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
 
     steps:
+      # Without the SignPath settings every signing step below is skipped and the release is
+      # unsigned, which Smart App Control blocks. Say so where it can't be missed.
+      - name: Warn that this build will not be code-signed
+        if: env.SIGNPATH_ORGANIZATION_ID == ''
+        shell: pwsh
+        run: |
+          $msg = "SignPath is not set up (repository variable SIGNPATH_ORGANIZATION_ID is empty), so this build is NOT code-signed. Windows Smart App Control will block it. See packaging/SIGNING.md."
+          Write-Output "::warning title=Release is not code-signed::$msg"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## :warning: Not code-signed`n`n$msg"
+
       - name: Checkout code
         uses: actions/checkout@v7
 
@@ -230,9 +240,13 @@ jobs:
           Start-Sleep -Seconds 5
           Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($dir, [System.StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue
 
+      # The notes warn that the version is unsigned unless signing ran in this build.
       - name: Write the release notes from the changelog
+        shell: pwsh
         run: |
-          python release_notes.py --output dist/release_notes.md
+          $notesArgs = @("--output", "dist/release_notes.md")
+          if ($env:SIGNPATH_ORGANIZATION_ID) { $notesArgs += "--signed" }
+          python release_notes.py @notesArgs
 
       - name: Keep the built files
         uses: actions/upload-artifact@v7
