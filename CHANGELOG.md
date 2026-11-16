@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Release notes say when a version isn't code-signed (`release_notes.py`, `.github/workflows/release.yml`).** Until code signing is set up, each release's notes open with a warning that Windows 11 Smart App Control will block it, with a link to what you can do. 3.1.0 went out unsigned without saying so. The README also has a new **Code signing policy** section for the free open-source signing Download Sorter is applying for.
+
 ## [3.1.0] - 2026-11-16
 
 ### Added

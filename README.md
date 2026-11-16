@@ -99,6 +99,23 @@ Until Download Sorter is code-signed, the only way to run it on a Windows 11 PC 
 
 Since the April 2026 cumulative update (KB5083769), Smart App Control can be switched on and off in **Windows Security → App & browser control** on current builds. Microsoft has confirmed that the October 2026 update (KB5127648) greys out that switch for some people, with no fix date yet, so turning it off may be hard to undo for now.
 
+Releases that aren't signed say so at the top of their release notes. Progress on signing is in the [Code signing policy](#code-signing-policy) below.
+
+## Code signing policy
+
+**Releases are not code-signed yet.** Download Sorter is a free, open-source hobby project and is setting up free code signing for open-source projects from [SignPath Foundation](https://signpath.org).
+
+<!-- Once SignPath Foundation approves the project, replace the paragraph above with:
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+-->
+
+- **What gets signed:** `DownloadSorter.exe`, `DownloadSorter-cli.exe`, the three uninstall scripts (`uninstall.ps1`, `uninstall_context_menu.ps1`, `uninstall_startup.ps1`) and the setup file. Files from other publishers that come with the app (Python, Qt, Microsoft) keep their publishers' own signatures and are never signed by this project.
+- **How releases are built:** every release is built by GitHub from the source code in this repository, using the public [release workflow](.github/workflows/release.yml). Nothing built on a personal computer is signed.
+- **Team roles:**
+  - Committers and reviewers: [Devyn Fidel](https://github.com/The-Osprey1)
+  - Approvers: [Devyn Fidel](https://github.com/The-Osprey1)
+- **Privacy:** Download Sorter does not send any information to other networked systems except as described in [Privacy](#privacy): once a day it asks GitHub which version is newest (this can be switched off), and it downloads an update only when you click **Download and install**.
+
 ## Privacy
 
 - **Your files never leave your PC.** Rules, settings, history and the log all stay in `%LOCALAPPDATA%\download-sorter-v3`.

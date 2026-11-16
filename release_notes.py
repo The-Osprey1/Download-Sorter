@@ -5,12 +5,15 @@ Used by .github/workflows/release.yml:
     python release_notes.py                                # print notes for about.__version__
     python release_notes.py 2.1.0                          # notes for a given version
     python release_notes.py --output dist/release_notes.md # write them as UTF-8
+    python release_notes.py --signed                       # the release was code-signed
 
 Writing the file directly avoids Windows' console encoding, which can't
 print every character a changelog may contain.
 
 The notes start with short install steps for people who just want the app,
-followed by that version's section of the changelog.
+followed by that version's section of the changelog. Unless ``--signed`` is
+given, they open with a warning that the version is not code-signed, so an
+unsigned release can never go out looking like a signed one.
 """
 
 from __future__ import annotations
@@ -23,12 +26,28 @@ import about
 
 ROOT = Path(__file__).resolve().parent
 
+UNSIGNED_NOTICE = """\
+> **This version is not code-signed.** Windows 11 **Smart App Control** blocks apps that aren't \
+signed, and it has no "Run anyway" button: with Smart App Control on, Download Sorter won't install \
+or open. [Why, and what you can do]({repo}#smart-app-control)
+
+"""
+
+RUN_UNSIGNED = (
+    'Run it. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway** '
+    "(the app isn't code-signed yet). [How to check your download]({repo}#windows-protected-your-pc)"
+)
+
+RUN_SIGNED = (
+    'Run it. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**. '
+    "[How to check your download]({repo}#windows-protected-your-pc)"
+)
+
 INSTALL_STEPS = """\
 ## Install
 
 1. Download `DownloadSorter-Setup-v{version}-windows-x64.exe` below.
-2. Run it. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway** \
-(the app isn't code-signed yet). [How to check your download]({repo}#windows-protected-your-pc)
+2. {run_step}
 3. Follow the welcome steps. Nothing is moved until you finish or skip them.
 
 Already using Download Sorter 3? Run the new installer; your rules and settings are kept. Coming from 2.x? Read "Upgrading from 2.x" below first.
@@ -50,13 +69,18 @@ def changelog_section(text: str, version: str) -> str:
     return body
 
 
-def build_notes(version: str, changelog: str) -> str:
-    install = INSTALL_STEPS.format(version=version, repo=about.REPO_URL)
-    return install + "## What's new\n\n" + changelog_section(changelog, version) + "\n"
+def build_notes(version: str, changelog: str, *, signed: bool = False) -> str:
+    repo = about.REPO_URL
+    run_step = (RUN_SIGNED if signed else RUN_UNSIGNED).format(repo=repo)
+    notice = "" if signed else UNSIGNED_NOTICE.format(repo=repo)
+    install = INSTALL_STEPS.format(version=version, run_step=run_step)
+    return notice + install + "## What's new\n\n" + changelog_section(changelog, version) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    signed = "--signed" in args
+    args = [arg for arg in args if arg != "--signed"]
     output = None
     if "--output" in args:
         at = args.index("--output")
@@ -68,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     version = (args[0] if args else about.__version__).lstrip("vV")
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     try:
-        notes = build_notes(version, text)
+        notes = build_notes(version, text, signed=signed)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
