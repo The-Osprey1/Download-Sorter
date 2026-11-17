@@ -91,7 +91,7 @@ jobs:
 
       - name: Run Test Suite
         run: |
-          pytest tests_v3 -v
+          python -m pytest tests_v3 -v
 
       # Unsigned build (when SIGNPATH_ORGANIZATION_ID is not configured): identical to single-stage build.
       - name: Build Standalone Executable & Package
