@@ -37,8 +37,16 @@ def v3_qapp():
     if app is None:
         app = QApplication([])
     yield app
-    app.closeAllWindows()
+    for w in list(app.topLevelWidgets()):
+        try:
+            w.close()
+            w.deleteLater()
+        except RuntimeError:
+            pass
     app.processEvents()
+    gc.collect()
+    app.processEvents()
+    app.quit()
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +55,7 @@ def _cleanup_qt_widgets(v3_qapp):
     for w in list(v3_qapp.topLevelWidgets()):
         try:
             w.close()
+            w.deleteLater()
         except RuntimeError:
             pass
     v3_qapp.processEvents()
