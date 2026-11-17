@@ -255,6 +255,13 @@ class Rule:
     domains: list[str] = field(default_factory=list)
     extensions: list[str] = field(default_factory=list)
     content_keywords: list[str] = field(default_factory=list)
+    exclude_keywords: list[str] = field(default_factory=list)
+    regex_pattern: str = ""
+    match_mode: str = "any"  # "any" or "all"
+    min_size_mb: float = 0.0
+    max_size_mb: float = 0.0
+    min_age_days: int = 0
+    rename_template: str = ""
     auto_unzip: bool = False
     enabled: bool = True
 
@@ -266,6 +273,13 @@ class Rule:
         self.domains = [d.lower() for d in _normalize_str_list(self.domains)]
         self.extensions = _normalize_ext_list(self.extensions)
         self.content_keywords = _normalize_str_list(self.content_keywords)
+        self.exclude_keywords = _normalize_str_list(self.exclude_keywords)
+        self.regex_pattern = str(self.regex_pattern or "").strip()
+        self.match_mode = "all" if str(self.match_mode or "").strip().lower() == "all" else "any"
+        self.min_size_mb = max(0.0, float(self.min_size_mb or 0.0))
+        self.max_size_mb = max(0.0, float(self.max_size_mb or 0.0))
+        self.min_age_days = max(0, int(self.min_age_days or 0))
+        self.rename_template = str(self.rename_template or "").strip()
         self.auto_unzip = bool(self.auto_unzip)
         self.enabled = bool(self.enabled)
 
@@ -282,6 +296,13 @@ class Rule:
             domains=list(data.get("domains") if "domains" in data else data.get("sites", [])),
             extensions=list(data.get("extensions", [])),
             content_keywords=list(data.get("content_keywords", [])),
+            exclude_keywords=list(data.get("exclude_keywords", [])),
+            regex_pattern=str(data.get("regex_pattern", "")),
+            match_mode=str(data.get("match_mode", "any")),
+            min_size_mb=float(data.get("min_size_mb", 0.0) or 0.0),
+            max_size_mb=float(data.get("max_size_mb", 0.0) or 0.0),
+            min_age_days=int(data.get("min_age_days", 0) or 0),
+            rename_template=str(data.get("rename_template", "")),
             auto_unzip=bool(data.get("auto_unzip", False)),
             enabled=bool(data.get("enabled", True)),
         )

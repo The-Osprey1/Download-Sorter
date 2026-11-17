@@ -85,6 +85,7 @@ from download_sorter.ui.motion import (
     WalkthroughDiagramCanvas,
     attach_press_feedback,
     breathe,
+    install_global_button_feedback,
     fade_in,
     flash_rows,
     make_badge as _make_badge,
@@ -321,6 +322,38 @@ class RuleEditorDialog(QDialog):
         self.edit_exts.setPlaceholderText("Optional file types, e.g. .pdf, .docx (blank = any)")
         self.edit_content_keywords = QLineEdit(", ".join(rule.content_keywords) if rule else "")
         self.edit_content_keywords.setPlaceholderText("Optional PDF text, e.g. Invoice, Packing Slip")
+        self.edit_exclude_keywords = QLineEdit(", ".join(rule.exclude_keywords) if rule else "")
+        self.edit_exclude_keywords.setPlaceholderText("Optional words to exclude, e.g. draft, sample")
+        self.edit_regex = QLineEdit(rule.regex_pattern if rule else "")
+        self.edit_regex.setPlaceholderText(r"Optional regex, e.g. ^INV-\d{4} or (?P<client>\w+)_")
+        self.combo_match_mode = QComboBox()
+        self.combo_match_mode.addItem("Match ANY condition (OR)", "any")
+        self.combo_match_mode.addItem("Match ALL conditions (AND)", "all")
+        if rule and rule.match_mode == "all":
+            self.combo_match_mode.setCurrentIndex(1)
+
+        bounds_row = QHBoxLayout()
+        bounds_row.setSpacing(6)
+        self.spin_min_mb = QDoubleSpinBox()
+        self.spin_min_mb.setRange(0.0, 100000.0)
+        self.spin_min_mb.setDecimals(1)
+        self.spin_min_mb.setSuffix(" MB min")
+        self.spin_min_mb.setValue(rule.min_size_mb if rule else 0.0)
+        self.spin_max_mb = QDoubleSpinBox()
+        self.spin_max_mb.setRange(0.0, 100000.0)
+        self.spin_max_mb.setDecimals(1)
+        self.spin_max_mb.setSuffix(" MB max")
+        self.spin_max_mb.setValue(rule.max_size_mb if rule else 0.0)
+        self.spin_min_age = QSpinBox()
+        self.spin_min_age.setRange(0, 3650)
+        self.spin_min_age.setSuffix(" d old")
+        self.spin_min_age.setValue(rule.min_age_days if rule else 0)
+        bounds_row.addWidget(self.spin_min_mb)
+        bounds_row.addWidget(self.spin_max_mb)
+        bounds_row.addWidget(self.spin_min_age)
+
+        self.edit_rename = QLineEdit(rule.rename_template if rule else "")
+        self.edit_rename.setPlaceholderText("Optional rename, e.g. {year}-{month}_{stem_slug}.{ext}")
         self.chk_auto_unzip = QCheckBox("Automatically extract .zip archives matched by this rule")
         self.chk_auto_unzip.setChecked(rule.auto_unzip if rule else False)
         self.chk_enabled = QCheckBox("Rule is active")
@@ -331,10 +364,63 @@ class RuleEditorDialog(QDialog):
         form.addRow("Matches Words in Filename:", self.edit_keywords)
         form.addRow("Matches Website:", self.edit_domains)
         form.addRow("Only These File Types:", self.edit_exts)
-        form.addRow("Matches Inside PDF:", self.edit_content_keywords)
-        form.addRow("", self.chk_auto_unzip)
         form.addRow("", self.chk_enabled)
         layout.addLayout(form)
+
+        from download_sorter.ui.emblems import TokenChipBar
+
+        has_advanced = bool(
+            rule
+            and (
+                rule.exclude_keywords
+                or rule.regex_pattern
+                or rule.match_mode == "all"
+                or rule.min_size_mb > 0
+                or rule.max_size_mb > 0
+                or rule.min_age_days > 0
+                or rule.rename_template
+                or rule.content_keywords
+                or rule.auto_unzip
+            )
+        )
+        btn_adv = QPushButton(
+            "▾ Advanced Conditions (Exclude, Regex, Size/Age, Rename)"
+            if has_advanced
+            else "▸ Advanced Conditions (Exclude, Regex, Size/Age, Rename)"
+        )
+        btn_adv.setObjectName("GhostButton")
+        btn_adv.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(btn_adv)
+
+        adv_box = QFrame()
+        adv_box.setObjectName("SurfaceCard")
+        adv_form = QFormLayout(adv_box)
+        adv_form.setContentsMargins(12, 10, 12, 10)
+        adv_form.addRow("Exclude Words:", self.edit_exclude_keywords)
+        adv_form.addRow("Regex Pattern:", self.edit_regex)
+        adv_form.addRow("Matches Inside PDF:", self.edit_content_keywords)
+        adv_form.addRow("Condition Logic:", self.combo_match_mode)
+        adv_form.addRow("Size / Age (0 = off):", bounds_row)
+        rename_col = QVBoxLayout()
+        rename_col.setSpacing(4)
+        rename_col.addWidget(self.edit_rename)
+        rename_col.addWidget(TokenChipBar(self.edit_rename))
+        adv_form.addRow("Rename Template:", rename_col)
+        adv_form.addRow("", self.chk_auto_unzip)
+        adv_box.setVisible(has_advanced)
+        layout.addWidget(adv_box)
+
+        def _toggle_adv() -> None:
+            now_vis = not adv_box.isVisible()
+            adv_box.setVisible(now_vis)
+            btn_adv.setText(
+                "▾ Advanced Conditions (Exclude, Regex, Size/Age, Rename)"
+                if now_vis
+                else "▸ Advanced Conditions (Exclude, Regex, Size/Age, Rename)"
+            )
+            self.adjustSize()
+
+        btn_adv.clicked.connect(_toggle_adv)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -362,6 +448,13 @@ class RuleEditorDialog(QDialog):
             domains=split_csv(self.edit_domains.text()),
             extensions=split_csv(self.edit_exts.text()),
             content_keywords=split_csv(self.edit_content_keywords.text()),
+            exclude_keywords=split_csv(self.edit_exclude_keywords.text()),
+            regex_pattern=self.edit_regex.text().strip(),
+            match_mode=str(self.combo_match_mode.currentData() or "any"),
+            min_size_mb=float(self.spin_min_mb.value()),
+            max_size_mb=float(self.spin_max_mb.value()),
+            min_age_days=int(self.spin_min_age.value()),
+            rename_template=self.edit_rename.text().strip(),
             auto_unzip=self.chk_auto_unzip.isChecked(),
             enabled=self.chk_enabled.isChecked(),
         )
@@ -372,17 +465,25 @@ class DetoxDialog(QDialog):
 
     def __init__(self, service: SorterService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        from download_sorter.ui.emblems import DetoxEmblemWidget
+
         self.service = service
         self.setWindowTitle("Downloads Detox — Age-Based Housekeeping")
-        self.setMinimumSize(620, 420)
+        self.setMinimumSize(620, 440)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(10)
 
+        hdr = QHBoxLayout()
+        hdr.setSpacing(12)
+        emblem = DetoxEmblemWidget(size=48, active=True)
         self.lbl_summary = QLabel("Scanning for installers older than 30 days and empty folders...")
         self.lbl_summary.setObjectName("MutedText")
-        root.addWidget(self.lbl_summary)
+        self.lbl_summary.setWordWrap(True)
+        hdr.addWidget(emblem)
+        hdr.addWidget(self.lbl_summary, 1)
+        root.addLayout(hdr)
 
         self.tbl_installers = QTableWidget(0, 3)
         self.tbl_installers.setHorizontalHeaderLabels(["Installer", "Age (Days)", "Size"])
@@ -1111,6 +1212,7 @@ class MainWindow(QMainWindow):
 
         self.moves_received.connect(self._on_background_moves_received)
         self.refresh_all()
+        install_global_button_feedback(self, self.lbl_footer)
 
     # ------------------------------------------------------------------
     # Single-Row Apple Toolbar
@@ -1203,6 +1305,7 @@ class MainWindow(QMainWindow):
             make_vector_icon("bolt", "#FFFFFF", 14),
         )
         self.btn_sort_now.setObjectName("PrimaryButton")
+        self.btn_sort_now.setToolTip("Sort all settled top-level files in Downloads right now")
         self.btn_sort_now.clicked.connect(self._on_sort_now)
         row.addWidget(self.btn_sort_now)
 
@@ -1460,15 +1563,25 @@ class MainWindow(QMainWindow):
         toolbar.setSpacing(6)
         btn_new = InteractiveRibbonBtn("New Rule", make_vector_icon("plus", "#FFFFFF", 14))
         btn_new.setObjectName("PrimaryButton")
+        btn_new.setToolTip("Create a new custom sorting rule")
         btn_new.clicked.connect(self._add_rule)
         toolbar.addWidget(btn_new)
+        _rule_tips = {
+            "Edit": "Edit the selected sorting rule",
+            "Delete": "Delete the selected sorting rule",
+            "Move Up": "Increase priority (move selected rule higher)",
+            "Move Down": "Decrease priority (move selected rule lower)",
+            "Smart Order": "Order rules from most specific (domain/content/keywords) to broadest",
+        }
         for label, icon_name, cb in (
             ("Edit", "edit", self._edit_rule),
             ("Delete", "delete", self._delete_rule),
             ("Move Up", "up", lambda: self._move_rule(-1)),
             ("Move Down", "down", lambda: self._move_rule(1)),
+            ("Smart Order", "bolt", self._sort_rules_by_specificity),
         ):
             btn = InteractiveRibbonBtn(label, make_vector_icon(icon_name, "#F5F5F7", 14))
+            btn.setToolTip(_rule_tips[label])
             btn.clicked.connect(cb)
             toolbar.addWidget(btn)
         toolbar.addStretch(1)
@@ -2733,6 +2846,16 @@ class MainWindow(QMainWindow):
         self._commit_config(cfg)
         self.tbl_rules.selectRow(new_row)
         flash_rows(self.tbl_rules, [new_row], "#0A84FF")
+
+    def _sort_rules_by_specificity(self) -> None:
+        from download_sorter.router import sort_rules_by_specificity
+
+        cfg = copy.deepcopy(self.service.config)
+        if len(cfg.rules) < 2:
+            return
+        cfg.rules = sort_rules_by_specificity(cfg.rules)
+        self._commit_config(cfg)
+        self.banner.show_message("Sorted rules by specificity (narrowest rules first).", kind="info")
 
     def _add_rule(self) -> None:
         dlg = RuleEditorDialog(parent=self)

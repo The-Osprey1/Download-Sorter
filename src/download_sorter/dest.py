@@ -21,6 +21,27 @@ DEFAULT_FALLBACK = "Other"
 _VAR_PART_RE = re.compile(r"^(\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[^%]*%)$")
 _BAD_CHARS = set('<>:"|?*')
 _UNSAFE_TOKEN_CHARS_RE = re.compile(r'[^A-Za-z0-9._-]+')
+_EXIF_DATE_RE = re.compile(rb"(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})")
+
+
+def read_exif_date(path: Path | None) -> datetime | None:
+    """Read photo capture date (EXIF DateTimeOriginal) from a JPEG, falling back to mtime."""
+    if path is None or not path.is_file():
+        return None
+    if path.suffix.lower() in (".jpg", ".jpeg", ".tif", ".tiff"):
+        try:
+            with path.open("rb") as fh:
+                head = fh.read(65536)
+            m = _EXIF_DATE_RE.search(head)
+            if m:
+                y, mo, d, hh, mm, ss = (int(g) for g in m.groups())
+                return datetime(y, mo, d, hh, mm, ss)
+        except (OSError, ValueError):
+            pass
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime)
+    except OSError:
+        return None
 
 
 def resolve_destination_tokens(
@@ -29,18 +50,22 @@ def resolve_destination_tokens(
     host: str = "",
     ext: str = "",
     when: datetime | None = None,
+    exif_date: datetime | None = None,
 ) -> str:
-    """Expand safe dynamic tokens (``{year}``, ``{month}``, ``{day}``, ``{host}``, ``{ext}``)."""
+    """Expand safe dynamic tokens (``{year}``, ``{month}``, ``{day}``, ``{host}``, ``{ext}``, ``{exif_year}``, ``{exif_month}``)."""
     text = str(raw or "")
     if "{" not in text:
         return text
     now = when or datetime.now()
+    photo_dt = exif_date or now
     clean_host = _UNSAFE_TOKEN_CHARS_RE.sub("-", (host or "").strip().lower()).strip(".-") or "unknown-site"
     clean_ext = _UNSAFE_TOKEN_CHARS_RE.sub("", (ext or "").strip().lower().lstrip(".")) or "other"
     replacements = {
         "{year}": f"{now.year:04d}",
         "{month}": f"{now.month:02d}",
         "{day}": f"{now.day:02d}",
+        "{exif_year}": f"{photo_dt.year:04d}",
+        "{exif_month}": f"{photo_dt.month:02d}",
         "{host}": clean_host,
         "{ext}": clean_ext,
     }
@@ -48,6 +73,59 @@ def resolve_destination_tokens(
         if token in text:
             text = text.replace(token, value)
     return text
+
+
+def apply_rename_template(
+    template: str,
+    filename: str,
+    *,
+    host: str = "",
+    when: datetime | None = None,
+    exif_date: datetime | None = None,
+    regex_groups: dict[str, str] | None = None,
+) -> str:
+    """Apply a safe filename-only rename template (no path separators allowed)."""
+    tmpl = str(template or "").strip()
+    if not tmpl:
+        return filename
+    p = Path(filename)
+    stem = p.stem
+    ext = p.suffix.lstrip(".")
+    now = when or datetime.now()
+    photo_dt = exif_date or now
+    slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "file"
+    clean_host = _UNSAFE_TOKEN_CHARS_RE.sub("-", (host or "").strip().lower()).strip(".-") or "unknown-site"
+
+    tokens = {
+        "{stem}": stem,
+        "{stem_lower}": stem.lower(),
+        "{stem_slug}": slug,
+        "{ext}": ext.lower(),
+        "{year}": f"{now.year:04d}",
+        "{month}": f"{now.month:02d}",
+        "{day}": f"{now.day:02d}",
+        "{exif_year}": f"{photo_dt.year:04d}",
+        "{exif_month}": f"{photo_dt.month:02d}",
+        "{host}": clean_host,
+    }
+    if regex_groups:
+        for k, v in regex_groups.items():
+            safe_val = _UNSAFE_TOKEN_CHARS_RE.sub("_", str(v or "")).strip("_")
+            if k:
+                tokens[f"{{{k}}}"] = safe_val
+
+    out = tmpl
+    for tok, val in tokens.items():
+        if tok in out:
+            out = out.replace(tok, val)
+    # Strip any path separators or Windows-illegal characters
+    out = out.replace("/", "_").replace("\\", "_")
+    out = "".join(ch for ch in out if ch not in _BAD_CHARS).strip(". ")
+    if not out:
+        return filename
+    if p.suffix and "." not in out:
+        out = f"{out}{p.suffix}"
+    return out
 
 
 def _expand(text: str) -> str:

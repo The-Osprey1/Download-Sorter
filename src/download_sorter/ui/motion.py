@@ -639,9 +639,13 @@ class InteractiveRibbonBtn(QPushButton):
             self.setIcon(icon)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._hover_prog = 0.0
+        self._press_prog = 0.0
         self._anim = QPropertyAnimation(self, b"hoverProg", self)
         self._anim.setDuration(140)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._press_anim = QPropertyAnimation(self, b"pressProg", self)
+        self._press_anim.setDuration(260)
+        self._press_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def get_hover(self) -> float:
         return self._hover_prog
@@ -652,12 +656,24 @@ class InteractiveRibbonBtn(QPushButton):
 
     hoverProg = Property(float, get_hover, set_hover)
 
+    def get_press(self) -> float:
+        return self._press_prog
+
+    def set_press(self, val: float) -> None:
+        self._press_prog = float(val)
+        self.update()
+
+    pressProg = Property(float, get_press, set_press)
+
     def enterEvent(self, event) -> None:
         if animations_enabled() and self.isEnabled():
             self._anim.stop()
             self._anim.setStartValue(self._hover_prog)
             self._anim.setEndValue(1.0)
             self._anim.start()
+        elif self.isEnabled():
+            self._hover_prog = 1.0
+            self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
@@ -668,16 +684,33 @@ class InteractiveRibbonBtn(QPushButton):
             self._anim.start()
         else:
             self._hover_prog = 0.0
+            self.update()
         super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if self.isEnabled() and animations_enabled():
+            self._press_anim.stop()
+            self._press_anim.setStartValue(1.0)
+            self._press_anim.setEndValue(0.0)
+            self._press_anim.start()
+        super().mousePressEvent(event)
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
-        if self._hover_prog > 0.01 and self.isEnabled():
+        if not self.isEnabled():
+            return
+        if self._hover_prog > 0.01 or self._press_prog > 0.01:
             p = QPainter(self)
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(255, 255, 255, int(20 * self._hover_prog)))
-            p.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 8, 8)
+            rect = self.rect().adjusted(1, 1, -1, -1)
+            if self._hover_prog > 0.01:
+                p.setPen(QPen(QColor(90, 200, 250, int(110 * self._hover_prog)), 1.0))
+                p.setBrush(QColor(255, 255, 255, int(28 * self._hover_prog)))
+                p.drawRoundedRect(rect, 8, 8)
+            if self._press_prog > 0.01:
+                p.setPen(QPen(QColor(48, 209, 88, int(190 * self._press_prog)), 1.5))
+                p.setBrush(QColor(10, 132, 255, int(65 * self._press_prog)))
+                p.drawRoundedRect(rect, 8, 8)
             p.end()
 
 
@@ -2196,3 +2229,46 @@ def spring_pop_in(widget: QWidget, duration_ms: int = 260, offset_y: int = 10) -
     group.finished.connect(_cleanup)
     _keep(widget, "_motion_spring_pop_in", group)
     group.start()
+
+
+class _GlobalButtonFeedbackFilter(QObject):
+    """Provides immediate hover description + click flash feedback across all QPushButtons."""
+
+    def __init__(self, root: QWidget, status_label: QLabel | None = None) -> None:
+        super().__init__(root)
+        self._root = root
+        self._status_label = status_label
+        self._saved_status = ""
+        self._showing_tip = False
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if isinstance(watched, QPushButton):
+            et = event.type()
+            if et == QEvent.Type.Enter:
+                tip = watched.toolTip().strip() or watched.text().replace("&&", "&").strip()
+                if tip and self._status_label is not None:
+                    if not self._showing_tip:
+                        self._saved_status = self._status_label.text()
+                    self._showing_tip = True
+                    self._status_label.setText(tip)
+            elif et == QEvent.Type.Leave:
+                if self._showing_tip and self._status_label is not None:
+                    self._showing_tip = False
+                    self._status_label.setText(self._saved_status)
+            elif et == QEvent.Type.MouseButtonRelease and watched.isEnabled():
+                label = watched.text().replace("&&", "&").strip() or watched.toolTip().strip()
+                if label and self._status_label is not None:
+                    self._showing_tip = False
+                    self._saved_status = f"✓ {label}"
+                    self._status_label.setText(self._saved_status)
+                if not isinstance(watched, InteractiveRibbonBtn) and animations_enabled():
+                    flash_routed_widget(watched, color_hex="#5AC8FA", duration_ms=340, radius=7)
+        return super().eventFilter(watched, event)
+
+
+def install_global_button_feedback(root: QWidget, status_label: QLabel | None = None) -> None:
+    """Attach instant hover descriptions & click visual feedback to every button in ``root``."""
+    filt = _GlobalButtonFeedbackFilter(root, status_label)
+    for btn in root.findChildren(QPushButton):
+        btn.installEventFilter(filt)
+    setattr(root, "_ds_global_btn_feedback", filt)

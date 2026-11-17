@@ -61,6 +61,12 @@ from download_sorter.architecture import (
     _clean_strs,
     apply_architecture_to_config,
     architecture_from_config,
+    delete_architecture_snapshot,
+    list_architecture_snapshots,
+    load_architecture_snapshot,
+    merge_architectures,
+    save_architecture_snapshot,
+    scan_folder_architecture,
 )
 from download_sorter.service import SorterService
 from download_sorter.ui.motion import (
@@ -1814,7 +1820,7 @@ class ArchitectureTab(QWidget):
     action_progress = Signal(int, int, str)
     action_finished = Signal(str, str)  # (summary_msg, kind)
 
-    TOOLBAR_COMPACT_WIDTH = 980
+    TOOLBAR_COMPACT_WIDTH = 1180
 
     def __init__(self, service: SorterService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1873,6 +1879,26 @@ class ArchitectureTab(QWidget):
         bar_row1.addWidget(self.btn_auto_layout)
 
         bar_row1.addStretch(1)
+
+        self.btn_scan_folders = CollapsibleRibbonBtn(
+            "Scan Folders",
+            make_vector_icon("search", "#5AC8FA", 14),
+        )
+        self.btn_scan_folders.setToolTip(
+            "Scan your existing Downloads subfolders to automatically build or merge the root map"
+        )
+        self.btn_scan_folders.clicked.connect(self._on_scan_folders)
+        bar_row1.addWidget(self.btn_scan_folders)
+
+        self.btn_snapshots = CollapsibleRibbonBtn(
+            "Snapshots",
+            make_vector_icon("folder", "#FBBF24", 14),
+        )
+        self.btn_snapshots.setToolTip(
+            "Save, restore, or export snapshots of your current Folder Architecture"
+        )
+        self.btn_snapshots.clicked.connect(self._open_snapshots_dialog)
+        bar_row1.addWidget(self.btn_snapshots)
 
         self.btn_auto_create = CollapsibleRibbonBtn(
             "Auto-Create Basic",
@@ -2114,11 +2140,15 @@ class ArchitectureTab(QWidget):
         compact = self.width() < self.TOOLBAR_COMPACT_WIDTH
         changed = (
             self.btn_auto_layout.is_collapsed() != compact
+            or self.btn_scan_folders.is_collapsed() != compact
+            or self.btn_snapshots.is_collapsed() != compact
             or self.btn_auto_create.is_collapsed() != compact
             or self.btn_arch_undo.is_collapsed() != compact
             or self.btn_arch_defaults.is_collapsed() != compact
         )
         self.btn_auto_layout.set_collapsed(compact)
+        self.btn_scan_folders.set_collapsed(compact)
+        self.btn_snapshots.set_collapsed(compact)
         self.btn_auto_create.set_collapsed(compact)
         self.btn_arch_undo.set_collapsed(compact)
         self.btn_arch_defaults.set_collapsed(compact)
@@ -2435,6 +2465,199 @@ class ArchitectureTab(QWidget):
         self.architecture_applied.emit(
             "Auto-created Basic Starter architecture — customize folders or click Apply & Shift Files."
         )
+
+    def _on_scan_folders(self) -> None:
+        watch_dir = self.service.watch_root
+
+        def _work() -> dict[str, Any]:
+            return scan_folder_architecture(watch_dir)
+
+        def _done(result: dict[str, Any]) -> None:
+            scanned: FolderArchitecture = result["architecture"]
+            folder_count = int(result.get("folder_count") or 0)
+            file_count = int(result.get("file_count") or 0)
+            if folder_count == 0:
+                QMessageBox.information(
+                    self,
+                    "Scan Existing Folders",
+                    f"No subfolders were found inside:\n{watch_dir}",
+                )
+                return
+
+            from download_sorter.ui.emblems import FolderScanRadarWidget
+
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Scan Existing Folders — Root Map Preview")
+            dlg.setMinimumSize(540, 410)
+            v = QVBoxLayout(dlg)
+            v.setContentsMargins(16, 16, 16, 16)
+            v.setSpacing(10)
+
+            hdr = QHBoxLayout()
+            hdr.setSpacing(12)
+            radar = FolderScanRadarWidget(size=52, scanning=True)
+            lbl = QLabel(
+                f"Discovered {folder_count} folder(s) across {result.get('max_tier', 1)} tier(s) "
+                f"(profiled {file_count} file(s) for extensions, distinctive keywords & sites)."
+            )
+            lbl.setWordWrap(True)
+            hdr.addWidget(radar)
+            hdr.addWidget(lbl, 1)
+            v.addLayout(hdr)
+
+            preview_list = QListWidget()
+            for node in sorted(scanned.nodes, key=lambda n: (n.tier, n.name.lower())):
+                indent = "  " * (node.tier - 1)
+                tags: list[str] = []
+                if node.extensions:
+                    tags.append(", ".join(node.extensions[:4]))
+                if node.keywords:
+                    tags.append("kw: " + ", ".join(node.keywords[:3]))
+                if node.domains:
+                    tags.append("site: " + ", ".join(node.domains[:2]))
+                detail = f"  ({'; '.join(tags)})" if tags else ""
+                preview_list.addItem(f"{indent}[T{node.tier}] {node.name}{detail}")
+            v.addWidget(preview_list, 1)
+
+            btns = QHBoxLayout()
+            choice = {"mode": ""}
+            btn_merge = QPushButton("Merge Missing")
+            btn_merge.setToolTip("Keep your current root map and add any missing folders from disk")
+            btn_replace = QPushButton("Replace Map")
+            btn_replace.setObjectName("PrimaryButton")
+            btn_replace.setToolTip("Replace the current canvas with the scanned folder map")
+            btn_cancel = QPushButton("Cancel")
+
+            def _pick(mode: str) -> None:
+                choice["mode"] = mode
+                dlg.accept()
+
+            btn_merge.clicked.connect(lambda: _pick("merge"))
+            btn_replace.clicked.connect(lambda: _pick("replace"))
+            btn_cancel.clicked.connect(dlg.reject)
+            btns.addStretch(1)
+            btns.addWidget(btn_cancel)
+            btns.addWidget(btn_merge)
+            btns.addWidget(btn_replace)
+            v.addLayout(btns)
+
+            if dlg.exec() != QDialog.DialogCode.Accepted or not choice["mode"]:
+                return
+
+            prev_rects = self.canvas.snapshot_rects()
+            self._push_undo_snapshot()
+            self._active_preset = "scanned"
+            self._update_blueprint_pills()
+            if choice["mode"] == "merge":
+                self._arch = merge_architectures(self._arch, scanned)
+            else:
+                self._arch = scanned
+            self._dirty = True
+            self._redraw_canvas(animate=True, prev_rects=prev_rects)
+            if self._arch.nodes:
+                self.canvas.select_node(self._arch.nodes[0].id)
+            self.architecture_applied.emit(
+                f"Loaded {len(self._arch.nodes)} folder(s) from disk ({choice['mode']}) — click Apply & Shift Files to sync rules."
+            )
+
+        self._run_background(
+            "Scanning existing folder architecture...",
+            _work,
+            _done,
+        )
+
+    def _open_snapshots_dialog(self) -> None:
+        import time
+        from download_sorter.ui.emblems import SnapshotEmblemWidget
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Folder Architecture Snapshots")
+        dlg.setMinimumSize(540, 420)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(12)
+        emblem = SnapshotEmblemWidget(size=48)
+        hdr_text = QLabel(
+            "Save a named snapshot of your current Folder Architecture so you can experiment freely and restore any layout in 1 click."
+        )
+        hdr_text.setWordWrap(True)
+        hdr_text.setObjectName("MutedText")
+        hdr.addWidget(emblem)
+        hdr.addWidget(hdr_text, 1)
+        v.addLayout(hdr)
+
+        save_row = QHBoxLayout()
+        edit_name = QLineEdit()
+        edit_name.setPlaceholderText("Snapshot name (e.g. Before School Cleanup)")
+        btn_save_snap = QPushButton("Save Snapshot")
+        btn_save_snap.setObjectName("PrimaryButton")
+        save_row.addWidget(edit_name, 1)
+        save_row.addWidget(btn_save_snap)
+        v.addLayout(save_row)
+
+        snap_list = QListWidget()
+        v.addWidget(snap_list, 1)
+
+        def _reload_list() -> None:
+            snap_list.clear()
+            for item in list_architecture_snapshots(self.service.paths.data_dir):
+                ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(item.get("created_at") or 0)))
+                li = QListWidgetItem(
+                    f"{item.get('name')}  —  {item.get('node_count', 0)} folders, "
+                    f"{item.get('tier_count', 2)} tiers  ({ts})"
+                )
+                li.setData(Qt.ItemDataRole.UserRole, item.get("id"))
+                snap_list.addItem(li)
+
+        def _on_save_snap() -> None:
+            save_architecture_snapshot(self._arch, edit_name.text().strip(), self.service.paths.data_dir)
+            edit_name.clear()
+            _reload_list()
+
+        def _on_restore() -> None:
+            cur = snap_list.currentItem()
+            if cur is None:
+                return
+            sid = str(cur.data(Qt.ItemDataRole.UserRole) or "")
+            restored = load_architecture_snapshot(sid, self.service.paths.data_dir)
+            if restored is None:
+                return
+            prev_rects = self.canvas.snapshot_rects()
+            self._push_undo_snapshot()
+            self._arch = restored
+            self._dirty = True
+            self._redraw_canvas(animate=True, prev_rects=prev_rects)
+            self.architecture_applied.emit("Restored Folder Architecture snapshot — click Apply & Shift Files to sync.")
+            dlg.accept()
+
+        def _on_delete() -> None:
+            cur = snap_list.currentItem()
+            if cur is None:
+                return
+            sid = str(cur.data(Qt.ItemDataRole.UserRole) or "")
+            if delete_architecture_snapshot(sid, self.service.paths.data_dir):
+                _reload_list()
+
+        btn_save_snap.clicked.connect(_on_save_snap)
+        _reload_list()
+
+        btn_row = QHBoxLayout()
+        btn_restore = QPushButton("Restore Selected")
+        btn_restore.setObjectName("PrimaryButton")
+        btn_restore.clicked.connect(_on_restore)
+        btn_del = QPushButton("Delete")
+        btn_del.clicked.connect(_on_delete)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dlg.reject)
+        btn_row.addWidget(btn_del)
+        btn_row.addStretch(1)
+        btn_row.addWidget(btn_close)
+        btn_row.addWidget(btn_restore)
+        v.addLayout(btn_row)
+        dlg.exec()
 
     def _on_add_tier(self) -> None:
         if self._arch.tier_count >= FolderArchitecture.MAX_TIERS:

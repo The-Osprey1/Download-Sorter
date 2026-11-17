@@ -462,6 +462,16 @@ QLabel[securitySpec="true"] {
     font-size: 11px;
     background: transparent;
 }
+
+/* === TOOLTIPS === */
+QToolTip {
+    background-color: #1C1C1E;
+    color: #F5F5F7;
+    border: 1px solid #3D3D41;
+    border-radius: 7px;
+    padding: 6px 10px;
+    font-size: 12px;
+}
 """
 
 

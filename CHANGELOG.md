@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-11-17
+
+### Added
+- **Auto-Scan Folder Architecture & Snapshots (`architecture.py`, `ui/architecture_canvas.py`).** Added **Scan Folders** (`scan_folder_architecture()`, `merge_architectures()`) to walk your existing `Downloads` tree, infer extensions, distinctive keywords, `Zone.Identifier` domains, and visual kinds, with a **Merge Missing** / **Replace Map** preview dialog. Added **Snapshots** (`save_architecture_snapshot()`, `list_architecture_snapshots()`, `load_architecture_snapshot()`, `delete_architecture_snapshot()`) to save and restore Folder Architecture layouts.
+- **Upgraded Sorting & Borrowed Power-User Rule Features (`router.py`, `dest.py`, `config.py`, `ui/main_window.py`).** Added pure-Python magic-byte type sniffing (`sniff_magic_extension()`), CamelCase + unordered token + fuzzy keyword matching, `rule_specificity_score()` / `sort_rules_by_specificity()` (**Smart Order**), EXIF `{exif_year}` / `{exif_month}` photo date tokens, **Exclude Words** (`exclude_keywords`), **Regex Pattern & Named Capture Groups** (`regex_pattern`), **`ALL` vs `ANY` Condition Logic** (`match_mode`), **File Size & Age Bounds** (`min_size_mb`, `max_size_mb`, `min_age_days`), and **Safe Rename Templates** (`rename_template` + `TokenChipBar`).
+- **Cohesive `QPainter` Emblems & Instant Hover/Click Feedback (`ui/emblems.py`, `ui/motion.py`, `ui/theme.py`, `ui/main_window.py`).** Added `FolderScanRadarWidget`, `SnapshotEmblemWidget`, `DetoxEmblemWidget`, styled dark-mode `QToolTip`s, upgraded `InteractiveRibbonBtn` hover rims + press pulses, and `install_global_button_feedback()` for immediate footer hover tips and `✓` click feedback on every button.
+
 ## [3.2.0] - 2026-11-16
 
 ### Added

@@ -3,15 +3,77 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 import re
+import time
 from urllib.parse import urlparse
+import zipfile
 import zlib
 
 from download_sorter.config import Config, Rule
-from download_sorter.dest import resolve_destination_tokens, to_relative_dest
+from download_sorter.dest import apply_rename_template, read_exif_date, resolve_destination_tokens, to_relative_dest
 
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
+_CAMEL_SPLIT_RE = re.compile(r"([a-z0-9])([A-Z])")
+_GENERIC_SNIFF_EXTS = {"", ".bin", ".tmp", ".dat", ".jfif", ".download"}
+
+
+def sniff_magic_extension(path: Path | None) -> str:
+    """Detect common file extensions from magic bytes when a filename lacks a real extension."""
+    if path is None or not path.is_file():
+        return ""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(512)
+    except OSError:
+        return ""
+    if not head:
+        return ""
+    if head.startswith(b"%PDF-"):
+        return ".pdf"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return ".gif"
+    if head.startswith(b"RIFF") and len(head) >= 12:
+        fourcc = head[8:12]
+        if fourcc == b"WEBP":
+            return ".webp"
+        if fourcc == b"WAVE":
+            return ".wav"
+        if fourcc == b"AVI ":
+            return ".avi"
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        return ".mp4"
+    if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
+        return ".mp3"
+    if head.startswith(b"fLaC"):
+        return ".flac"
+    if head.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return ".7z"
+    if head.startswith(b"Rar!\x1a\x07"):
+        return ".rar"
+    if head.startswith(b"MZ"):
+        return ".exe"
+    if head.startswith(b"PK\x03\x04"):
+        try:
+            with zipfile.ZipFile(path, "r") as zf:
+                names = set(zf.namelist()[:64])
+                if any(n.lower().endswith(".model") and "3d/" in n.lower() for n in names):
+                    return ".3mf"
+                if any(n.startswith("word/") for n in names):
+                    return ".docx"
+                if any(n.startswith("xl/") for n in names):
+                    return ".xlsx"
+                if any(n.startswith("ppt/") for n in names):
+                    return ".pptx"
+        except (zipfile.BadZipFile, OSError):
+            pass
+        return ".zip"
+    return ""
 _PDF_STREAM_RE = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.DOTALL)
 _PDF_TEXT_LIT_RE = re.compile(rb"\(([^()\\]{2,200})\)")
 
@@ -56,6 +118,8 @@ class FileCandidate:
     tab_url: str = ""
     tab_title: str = ""
     content_preview: str = ""
+    size_bytes: int | None = None
+    age_days: float | None = None
 
     @property
     def extension(self) -> str:
@@ -138,8 +202,9 @@ def candidate_from_path(path: Path) -> FileCandidate:
 
 
 def _normalize_tokens(text: str) -> str:
-    """Normalize separators (underscore, hyphen, punctuation) into single lowercase spaces."""
-    return " ".join(_NON_WORD_RE.sub(" ", text.lower()).split())
+    """Split CamelCase and separators into single lowercase space-separated tokens."""
+    camel_split = _CAMEL_SPLIT_RE.sub(r"\1 \2", text)
+    return " ".join(_NON_WORD_RE.sub(" ", camel_split.lower()).split())
 
 
 def _keyword_matches(filename: str, keyword: str) -> bool:
@@ -147,6 +212,8 @@ def _keyword_matches(filename: str, keyword: str) -> bool:
     if not norm_kw:
         return False
     norm_name = _normalize_tokens(Path(filename).stem)
+    if not norm_name:
+        return False
     # Match whole phrase boundaries so e.g. 'cv' does not match inside 'opencv' or 'csv'.
     padded_name = f" {norm_name} "
     padded_kw = f" {norm_kw} "
@@ -155,7 +222,45 @@ def _keyword_matches(filename: str, keyword: str) -> bool:
     # Also support compacted token matching (e.g. 'ime3311' vs 'ime 3311').
     if len(norm_kw) >= 4 and norm_kw.replace(" ", "") in norm_name.replace(" ", ""):
         return True
+    # Support unordered multi-word token matching (e.g. "tax return" -> "2026_Return_Tax").
+    kw_tokens = norm_kw.split()
+    name_tokens = norm_name.split()
+    name_set = set(name_tokens)
+    if len(kw_tokens) > 1 and all(t in name_set for t in kw_tokens):
+        return True
+    # High-threshold fuzzy match for longer single-word keywords (>= 5 chars) to tolerate minor typos.
+    if len(kw_tokens) == 1 and len(norm_kw) >= 5:
+        for tok in name_tokens:
+            if len(tok) >= 5 and SequenceMatcher(None, norm_kw, tok).ratio() >= 0.88:
+                return True
     return False
+
+
+def rule_specificity_score(rule: Rule) -> int:
+    """Score a rule by how specific its conditions are (higher = narrower/more specific)."""
+    score = 0
+    if rule.domains:
+        score += 40 + len(rule.domains)
+    if rule.content_keywords:
+        score += 35 + len(rule.content_keywords)
+    if rule.regex_pattern:
+        score += 30
+    if rule.keywords:
+        score += 25 + len(rule.keywords)
+    if rule.exclude_keywords:
+        score += 8 + len(rule.exclude_keywords)
+    if rule.min_size_mb > 0 or rule.max_size_mb > 0 or rule.min_age_days > 0:
+        score += 12
+    if rule.match_mode == "all":
+        score += 10
+    if rule.extensions:
+        score += 10 + len(rule.extensions)
+    return score
+
+
+def sort_rules_by_specificity(rules: list[Rule]) -> list[Rule]:
+    """Return rules ordered from most specific to broadest, preserving relative ties."""
+    return sorted(rules, key=rule_specificity_score, reverse=True)
 
 
 def _domain_matches(host: str, domains: list[str]) -> str | None:
@@ -168,45 +273,111 @@ def _domain_matches(host: str, domains: list[str]) -> str | None:
     return None
 
 
-def _evaluate_rule(rule: Rule, candidate: FileCandidate) -> tuple[bool, str]:
+def _candidate_stats(candidate: FileCandidate) -> tuple[int | None, float | None]:
+    size = candidate.size_bytes
+    age = candidate.age_days
+    if (size is None or age is None) and candidate.path is not None and candidate.path.is_file():
+        try:
+            st = candidate.path.stat()
+            if size is None:
+                size = st.st_size
+            if age is None:
+                age = max(0.0, (time.time() - st.st_mtime) / 86400.0)
+        except OSError:
+            pass
+    return size, age
+
+
+def _evaluate_rule(
+    rule: Rule,
+    candidate: FileCandidate,
+    *,
+    effective_ext: str | None = None,
+    captured_groups: dict[str, str] | None = None,
+) -> tuple[bool, str]:
     if not rule.enabled:
         return False, "Rule is disabled"
 
-    ext = candidate.extension
+    ext = effective_ext if effective_ext is not None else candidate.extension
     if rule.extensions and ext not in rule.extensions:
         return False, f"Extension '{ext or '(none)'}' not in {rule.extensions}"
 
-    if not rule.keywords and not rule.domains and not rule.content_keywords:
-        return True, f"Extension '{ext}' matched rule with no keyword/domain filter"
+    # Exclusion guard (Hazel/DropIt negation)
+    for ex_kw in rule.exclude_keywords:
+        if _keyword_matches(candidate.stem, ex_kw):
+            return False, f"Excluded by negative keyword '{ex_kw}'"
 
-    matched_domain = _domain_matches(candidate.host, rule.domains)
-    if matched_domain:
-        return True, f"Download domain '{candidate.host}' matched '{matched_domain}'"
+    # File size & age bounds
+    size_bytes, age_days = _candidate_stats(candidate)
+    if rule.min_size_mb > 0:
+        if size_bytes is None or size_bytes < rule.min_size_mb * 1024 * 1024:
+            return False, f"File smaller than {rule.min_size_mb:g} MB"
+    if rule.max_size_mb > 0:
+        if size_bytes is None or size_bytes > rule.max_size_mb * 1024 * 1024:
+            return False, f"File larger than {rule.max_size_mb:g} MB"
+    if rule.min_age_days > 0:
+        if age_days is None or age_days < rule.min_age_days:
+            return False, f"File newer than {rule.min_age_days} day(s)"
 
-    matched_tab_domain = _domain_matches(candidate.tab_host, rule.domains)
-    if matched_tab_domain:
-        return True, f"Active tab domain '{candidate.tab_host}' matched '{matched_tab_domain}'"
+    has_positive = bool(rule.keywords or rule.domains or rule.content_keywords or rule.regex_pattern)
+    if not has_positive:
+        return True, f"Matched extension/size/age filter ('{ext or 'any'}')"
 
-    for kw in rule.keywords:
-        if _keyword_matches(candidate.stem, kw):
-            return True, f"Filename matched keyword '{kw}'"
+    reasons: list[str] = []
+    misses: list[str] = []
 
-    if rule.content_keywords and ext == ".pdf":
-        preview = candidate.content_preview or extract_pdf_text_preview(candidate.path)
-        norm_preview = f" {_normalize_tokens(preview)} " if preview else ""
-        for ckw in rule.content_keywords:
-            norm_ckw = _normalize_tokens(ckw)
-            if norm_ckw and f" {norm_ckw} " in norm_preview:
-                return True, f"PDF content matched '{ckw}'"
-
-    parts: list[str] = []
     if rule.domains:
-        parts.append(f"domain {candidate.host or '(none)'} did not match {rule.domains}")
+        matched_domain = _domain_matches(candidate.host, rule.domains)
+        matched_tab_domain = _domain_matches(candidate.tab_host, rule.domains) if not matched_domain else None
+        if matched_domain:
+            reasons.append(f"Download domain '{candidate.host}' matched '{matched_domain}'")
+        elif matched_tab_domain:
+            reasons.append(f"Active tab domain '{candidate.tab_host}' matched '{matched_tab_domain}'")
+        else:
+            misses.append(f"domain {candidate.host or '(none)'} did not match {rule.domains}")
+
     if rule.keywords:
-        parts.append("no keyword matched")
+        kw_hit = next((kw for kw in rule.keywords if _keyword_matches(candidate.stem, kw)), None)
+        if kw_hit:
+            reasons.append(f"Filename matched keyword '{kw_hit}'")
+        else:
+            misses.append("no keyword matched")
+
+    if rule.regex_pattern:
+        try:
+            rm = re.search(rule.regex_pattern, candidate.stem, flags=re.IGNORECASE)
+        except re.error:
+            rm = None
+        if rm:
+            if captured_groups is not None:
+                captured_groups.update({k: v for k, v in rm.groupdict().items() if v})
+            reasons.append(f"Filename matched regex '{rule.regex_pattern}'")
+        else:
+            misses.append(f"regex '{rule.regex_pattern}' did not match")
+
     if rule.content_keywords:
-        parts.append("no PDF content keyword matched")
-    return False, "; ".join(parts)
+        if ext == ".pdf":
+            preview = candidate.content_preview or extract_pdf_text_preview(candidate.path)
+            norm_preview = f" {_normalize_tokens(preview)} " if preview else ""
+            ckw_hit = next(
+                (ckw for ckw in rule.content_keywords if _normalize_tokens(ckw) and f" {_normalize_tokens(ckw)} " in norm_preview),
+                None,
+            )
+            if ckw_hit:
+                reasons.append(f"PDF content matched '{ckw_hit}'")
+            else:
+                misses.append("no PDF content keyword matched")
+        else:
+            misses.append("PDF content filter requires .pdf")
+
+    if rule.match_mode == "all":
+        if misses:
+            return False, "; ".join(misses)
+        return True, "; ".join(reasons)
+
+    if reasons:
+        return True, reasons[0]
+    return False, "; ".join(misses)
 
 
 def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
@@ -214,6 +385,10 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
     trace: list[RouteStep] = []
     name_lower = candidate.filename.lower()
     ext = candidate.extension
+    if ext in _GENERIC_SNIFF_EXTS and candidate.path is not None:
+        sniffed = sniff_magic_extension(candidate.path)
+        if sniffed:
+            ext = sniffed
 
     # Step 1: Ignore Guard
     if candidate.filename.startswith("."):
@@ -228,14 +403,31 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
     trace.append(RouteStep("Ignore Guard", "Check active/system files", False, "Passed ignore checks"))
 
     effective_host = candidate.host or candidate.tab_host
+    exif_dt = read_exif_date(candidate.path) if candidate.path is not None else None
 
     # Step 2: Explicit Ordered User Rules (First Match Wins)
     for idx, rule in enumerate(config.rules, start=1):
-        ok, detail = _evaluate_rule(rule, candidate)
+        captured: dict[str, str] = {}
+        ok, detail = _evaluate_rule(rule, candidate, effective_ext=ext, captured_groups=captured)
         trace.append(RouteStep("User Rules", f"#{idx} {rule.name}", ok, detail))
         if ok:
-            expanded_dest = resolve_destination_tokens(rule.destination, host=effective_host, ext=ext)
-            dest_rel = Path(to_relative_dest(expanded_dest)) / candidate.filename
+            raw_dest = rule.destination
+            for gk, gv in captured.items():
+                raw_dest = raw_dest.replace(f"{{{gk}}}", gv)
+            expanded_dest = resolve_destination_tokens(
+                raw_dest,
+                host=effective_host,
+                ext=ext,
+                exif_date=exif_dt,
+            )
+            target_name = apply_rename_template(
+                rule.rename_template,
+                candidate.filename,
+                host=effective_host,
+                exif_date=exif_dt,
+                regex_groups=captured,
+            )
+            dest_rel = Path(to_relative_dest(expanded_dest)) / target_name
             return RouteDecision(
                 action="move",
                 relative_dest=dest_rel,
@@ -250,7 +442,12 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
     if category:
         sub = config.type_subfolders.get(ext, "") if config.use_type_subfolders else ""
         raw_cat = str(Path(category) / sub) if sub else category
-        expanded_cat = resolve_destination_tokens(raw_cat, host=effective_host, ext=ext)
+        expanded_cat = resolve_destination_tokens(
+            raw_cat,
+            host=effective_host,
+            ext=ext,
+            exif_date=exif_dt,
+        )
         folder = Path(to_relative_dest(expanded_cat))
         dest_rel = folder / candidate.filename
         detail = f"Extension '{ext}' -> '{folder}'"
@@ -277,7 +474,12 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
             trace=trace,
         )
 
-    expanded_default = resolve_destination_tokens(config.default_folder, host=effective_host, ext=ext)
+    expanded_default = resolve_destination_tokens(
+        config.default_folder,
+        host=effective_host,
+        ext=ext,
+        exif_date=exif_dt,
+    )
     dest_rel = Path(to_relative_dest(expanded_default)) / candidate.filename
     trace.append(RouteStep("Fallback", "Default folder", True, f"Routed to '{config.default_folder}'"))
     return RouteDecision(

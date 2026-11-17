@@ -1385,3 +1385,252 @@ def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> 
         cfg.category_map = new_cat_map
     cfg.type_subfolders = new_type_subs
     return cfg
+
+
+_SCAN_SKIP_DIRS = {"_duplicates", "_extracted", "__pycache__", ".git", ".venv"}
+_SCAN_STOPWORDS = {
+    "copy",
+    "final",
+    "new",
+    "download",
+    "downloads",
+    "img",
+    "dsc",
+    "file",
+    "doc",
+    "document",
+    "untitled",
+    "version",
+    "rev",
+    "draft",
+    "scan",
+    "screenshot",
+    "screen",
+    "shot",
+}
+
+
+def scan_folder_architecture(
+    watch_root: Path,
+    *,
+    max_depth: int = 5,
+    max_files_per_dir: int = 300,
+) -> dict[str, Any]:
+    """Scan ``watch_root`` on disk and build an interactive ``FolderArchitecture`` root map."""
+    from collections import Counter
+    import os
+
+    from download_sorter.router import _normalize_tokens, extract_host, read_zone_url
+
+    root = watch_root.resolve()
+    max_tiers = max(1, min(FolderArchitecture.MAX_TIERS, int(max_depth)))
+    if not root.is_dir():
+        return {"architecture": FolderArchitecture(tier_count=2, nodes=[]), "folder_count": 0, "file_count": 0}
+
+    dir_records: list[dict[str, Any]] = []
+    global_token_counts: Counter[str] = Counter()
+    total_files = 0
+    max_tier_seen = 1
+
+    # Walk top-down up to max_tiers
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        cur = Path(dirpath)
+        rel = cur.relative_to(root)
+        depth = len(rel.parts)
+        dirnames[:] = sorted(
+            [d for d in dirnames if not d.startswith(".") and d.lower() not in _SCAN_SKIP_DIRS],
+            key=str.lower,
+        )
+        if depth >= max_tiers:
+            dirnames[:] = []
+        if depth == 0:
+            continue
+
+        max_tier_seen = max(max_tier_seen, depth)
+        ext_counts: Counter[str] = Counter()
+        token_counts: Counter[str] = Counter()
+        domain_counts: Counter[str] = Counter()
+
+        sampled_files = [f for f in filenames if not f.startswith(".")][:max_files_per_dir]
+        total_files += len(sampled_files)
+        for idx, fname in enumerate(sampled_files):
+            fp = cur / fname
+            ext = fp.suffix.lower()
+            if ext:
+                ext_counts[ext] += 1
+            norm = _normalize_tokens(fp.stem)
+            seen_in_file: set[str] = set()
+            for tok in norm.split():
+                if len(tok) >= 3 and not tok.isdigit() and tok not in _SCAN_STOPWORDS and tok not in seen_in_file:
+                    seen_in_file.add(tok)
+                    token_counts[tok] += 1
+                    global_token_counts[tok] += 1
+            if idx < 40:
+                host = extract_host(read_zone_url(fp))
+                if host:
+                    domain_counts[host] += 1
+
+        dir_records.append(
+            {
+                "rel_parts": rel.parts,
+                "name": cur.name,
+                "tier": depth,
+                "file_count": len(sampled_files),
+                "ext_counts": ext_counts,
+                "token_counts": token_counts,
+                "domain_counts": domain_counts,
+            }
+        )
+
+    nodes: list[ArchNode] = []
+    path_to_id: dict[tuple[str, ...], str] = {}
+
+    # Sort by tier so parents are always created before children
+    dir_records.sort(key=lambda r: (r["tier"], tuple(p.lower() for p in r["rel_parts"])))
+    for rec in dir_records:
+        parts: tuple[str, ...] = rec["rel_parts"]
+        parent_id = path_to_id.get(parts[:-1]) if len(parts) > 1 else None
+        fc = max(1, int(rec["file_count"]))
+
+        inferred_exts = [
+            ext
+            for ext, cnt in rec["ext_counts"].most_common(8)
+            if cnt >= 2 or (cnt / fc) >= 0.25 or len(rec["ext_counts"]) == 1
+        ]
+        # Distinctive keywords: >=2 occurrences in this folder and >=50% purity across whole tree
+        inferred_kws = [
+            tok
+            for tok, cnt in rec["token_counts"].most_common(12)
+            if cnt >= 2 and (cnt / max(1, global_token_counts[tok])) >= 0.5
+        ][:5]
+        inferred_domains = [host for host, _cnt in rec["domain_counts"].most_common(3)]
+
+        node_id = uuid.uuid4().hex[:8]
+        path_to_id[parts] = node_id
+        nodes.append(
+            ArchNode(
+                id=node_id,
+                name=rec["name"],
+                tier=rec["tier"],
+                parent_id=parent_id,
+                kind=_guess_kind(rec["name"], inferred_exts),
+                extensions=inferred_exts,
+                keywords=inferred_kws,
+                domains=inferred_domains,
+                enabled=True,
+                is_custom=True,
+            )
+        )
+
+    arch = FolderArchitecture(tier_count=max(2, max_tier_seen), nodes=nodes)
+    return {
+        "architecture": arch,
+        "folder_count": len(nodes),
+        "file_count": total_files,
+        "max_tier": max_tier_seen,
+    }
+
+
+def merge_architectures(
+    existing: FolderArchitecture,
+    scanned: FolderArchitecture,
+) -> FolderArchitecture:
+    """Merge ``scanned`` folders into ``existing`` without overwriting existing nodes."""
+    merged = existing.clone()
+    merged.tier_count = max(merged.tier_count, scanned.tier_count)
+
+    # Map existing (parent_id, name.lower()) -> node_id
+    existing_key_to_id: dict[tuple[str | None, str], str] = {
+        (n.parent_id, n.name.lower()): n.id for n in merged.nodes
+    }
+    scanned_to_merged_id: dict[str, str] = {}
+
+    for node in sorted(scanned.nodes, key=lambda n: (n.tier, n.name.lower())):
+        mapped_parent = scanned_to_merged_id.get(node.parent_id or "") if node.parent_id else None
+        key = (mapped_parent, node.name.lower())
+        if key in existing_key_to_id:
+            scanned_to_merged_id[node.id] = existing_key_to_id[key]
+            continue
+        new_node = ArchNode.from_dict(node.to_dict())
+        new_node.id = uuid.uuid4().hex[:8]
+        new_node.parent_id = mapped_parent
+        merged.nodes.append(new_node)
+        existing_key_to_id[key] = new_node.id
+        scanned_to_merged_id[node.id] = new_node.id
+
+    return merged
+
+
+def _snapshots_file(data_dir: Path) -> Path:
+    return data_dir / "architecture_snapshots.json"
+
+
+def list_architecture_snapshots(data_dir: Path) -> list[dict[str, Any]]:
+    """Return saved Folder Architecture snapshots (newest first)."""
+    import json
+
+    path = _snapshots_file(data_dir)
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, list):
+            return sorted(
+                [item for item in raw if isinstance(item, dict)],
+                key=lambda item: float(item.get("created_at") or 0.0),
+                reverse=True,
+            )
+    except (OSError, json.JSONDecodeError):
+        pass
+    return []
+
+
+def save_architecture_snapshot(
+    arch: FolderArchitecture,
+    name: str,
+    data_dir: Path,
+    *,
+    note: str = "",
+) -> dict[str, Any]:
+    """Save a named snapshot of ``arch`` to ``architecture_snapshots.json``."""
+    import json
+    import time
+
+    clean_name = str(name or "").strip() or f"Snapshot {time.strftime('%Y-%m-%d %H:%M')}"
+    snapshots = list_architecture_snapshots(data_dir)
+    entry = {
+        "id": uuid.uuid4().hex[:8],
+        "name": clean_name,
+        "note": str(note or "").strip(),
+        "created_at": time.time(),
+        "tier_count": arch.tier_count,
+        "node_count": len(arch.nodes),
+        "architecture": arch.to_dict(),
+    }
+    snapshots.insert(0, entry)
+    path = _snapshots_file(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(snapshots[:30], indent=2), encoding="utf-8")
+    return entry
+
+
+def load_architecture_snapshot(snapshot_id: str, data_dir: Path) -> FolderArchitecture | None:
+    """Restore a ``FolderArchitecture`` from a saved snapshot ID."""
+    for item in list_architecture_snapshots(data_dir):
+        if item.get("id") == snapshot_id and isinstance(item.get("architecture"), dict):
+            return FolderArchitecture.from_dict(item["architecture"])
+    return None
+
+
+def delete_architecture_snapshot(snapshot_id: str, data_dir: Path) -> bool:
+    """Delete a saved snapshot by ID."""
+    import json
+
+    snapshots = list_architecture_snapshots(data_dir)
+    kept = [s for s in snapshots if s.get("id") != snapshot_id]
+    if len(kept) == len(snapshots):
+        return False
+    path = _snapshots_file(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(kept, indent=2), encoding="utf-8")
+    return True
