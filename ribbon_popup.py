@@ -1880,6 +1880,81 @@ def notify_suggestion(suggestion_id: str) -> None:
     _spawn(_ribbon_command("--suggest", str(suggestion_id)))
 
 
+class ReplaceRibbonPopup(SummaryRibbonPopup):
+    """Asks "Replace older copy?" when a download's name matched a different file.
+
+    Replace sends the old file to the Recycle Bin and gives the new one its name.
+    Keep both, closing it or letting it time out leaves both files alone.
+    """
+
+    TIMEOUT_MS = 20000
+
+    def __init__(self, offer_id: str, enable_animation: bool = True) -> None:
+        import replace_offer
+
+        self.offer_id = offer_id
+        self.offer = replace_offer.pending_offer(offer_id) or {}
+        title, message = replace_offer.describe(self.offer) if self.offer else (
+            "Nothing to replace", "This was already answered.")
+        super().__init__(
+            title=title,
+            message=message,
+            accent=ACTION_COLOR,
+            timeout_ms=self.TIMEOUT_MS if self.offer else 2000,
+            enable_animation=enable_animation,
+        )
+        self.action_labels: list[tk.Label] = []
+        if not self.offer:
+            return
+        for text, handler in (("Replace", self.replace), ("Keep both", self.keep_both)):
+            label = tk.Label(
+                self.top_row, text=text, font=(FONT_FAMILY, 9, "bold"),
+                fg=ACTION_COLOR, bg=BG_COLOR, cursor="hand2", padx=int(6 * self.scale),
+            )
+            label.pack(side="right")
+            label.bind("<Button-1>", lambda _e, h=handler: (h(), "break")[1])
+            label.bind("<Enter>", self.on_enter)
+            label.bind("<Leave>", self.on_leave)
+            self.action_labels.append(label)
+
+    def _set_hover_state(self, hovered: bool) -> None:
+        super()._set_hover_state(hovered)
+        bg = HOVER_BG if hovered else BG_COLOR
+        for label in getattr(self, "action_labels", []):
+            label.config(bg=bg)
+
+    def replace(self) -> None:
+        import replace_offer
+
+        try:
+            final = replace_offer.accept(self.offer_id)
+        except Exception as exc:
+            logging.warning("Could not replace the older copy: %s", exc)
+            final = None
+        self.close()
+        if final:
+            notify_summary(
+                "Replaced",
+                f"{Path(final).name} is the new copy. The old one is in the Recycle Bin.",
+            )
+        else:
+            notify_summary("Kept both", "Couldn't replace it (a file changed or is open). Both copies kept.")
+
+    def keep_both(self) -> None:
+        import replace_offer
+
+        try:
+            replace_offer.decline(self.offer_id)
+        except Exception as exc:
+            logging.debug("Could not clear the replace offer: %s", exc)
+        self.close()
+
+
+def notify_replace(offer_id: str) -> None:
+    """Ask whether a new same-name download should replace the older file."""
+    _spawn(_ribbon_command("--replace", str(offer_id)))
+
+
 def notify_summary(
     title: str,
     message: str,
@@ -1933,6 +2008,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ribbon-summary", "--summary", dest="summary", action="store_true", help="Display summary toast.")
     parser.add_argument("--batch", action="store_true", help="Show the ribbon that counts a big batch of files.")
     parser.add_argument("--suggest", type=str, default="", help="Ask whether to add a learned rule (its id).")
+    parser.add_argument("--replace", type=str, default="", help="Ask whether to replace an older same-name file (offer id).")
     parser.add_argument("--title", type=str, default="Download Sorter", help="Summary notification title.")
     parser.add_argument("--message", type=str, default="", help="Summary notification message.")
     parser.add_argument("--accent", type=str, default="#69E6AD", help="Accent hex color.")
@@ -1942,7 +2018,9 @@ def main(argv: list[str] | None = None) -> int:
     enable_anim = not args.no_anim
 
     try:
-        if args.suggest:
+        if args.replace:
+            popup = ReplaceRibbonPopup(args.replace, enable_animation=enable_anim)
+        elif args.suggest:
             popup = SuggestionRibbonPopup(args.suggest, enable_animation=enable_anim)
         elif args.batch:
             popup = BatchRibbonPopup(enable_animation=enable_anim)

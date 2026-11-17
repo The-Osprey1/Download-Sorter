@@ -58,7 +58,7 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
   You can change where things go on the **Rules** page, and test a file name with **Try a filename** before saving.
 - **Files you move yourself stay where you put them.** If you drag a sorted file into your own folder inside Downloads, Download Sorter leaves it there.
-- **Extra options in Settings**, all off until you turn them on: pictures in a folder per month, rule words found at the top of PDFs, tidier names or the date in front (Undo restores the old name), and old installers and zips to the Recycle Bin once a day. Settings also warns you if Windows Storage Sense is set to delete old files in Downloads, which would include your sorted files.
+- **Extra options in Settings**, all off until you turn them on: pictures in a folder per month, rule words found at the top of PDFs, tidier names or the date in front (Undo restores the old name), and old installers and zips to the Recycle Bin once a day. Asking whether a newer download with the same name should replace the older copy (sending the old one to the Recycle Bin) is on by default and can be turned off here too. Settings also warns you if Windows Storage Sense is set to delete old files in Downloads, which would include your sorted files.
 - **It learns from your moves, and asks first.** After you've moved 3 similar files into one folder, a ribbon asks “Put files like this in Banking?”. **Yes** adds a rule you can see and change on the Rules page; **No** means it won't ask again. It never moves a file on a guess. You can turn learning off in Settings.
 
 ## How Download Sorter decides where a file goes
@@ -96,7 +96,7 @@ flowchart TD
     Q -- "No" --> M["Move to folder (tidy name / date if on)"]
 
     E2 & Q2 & M --> J[("Write to undo history<br/>(written before the move, so a crash<br/>can't lose track of a file)")]
-    J --> Exec["Execute safe atomic move / extract<br/>(Collisions become 'name (2).pdf')"]
+    J --> Exec["Execute safe atomic move / extract<br/>(Collisions become 'name (2).pdf' and ask:<br/>Replace older copy? Keep both | Replace)"]
     Exec --> N(["Show it: ribbon, Home page.<br/>Many files at once: one ribbon that counts<br/>(1-click Undo puts files back)"])
     H2 --> N
 ```
@@ -113,7 +113,7 @@ flowchart TD
    - the **file type**: 121 extensions mapped to the main folders;
    - otherwise **Other**.
 4. **3MF hold.** A 3MF file you just downloaded may be open in your slicer, so it stays in Downloads for up to 7 days. The ribbon offers **File now** and **Keep here**.
-5. **Duplicates.** If a file with the same name is already in the destination folder and the two are identical (checked byte by byte), the new copy goes to `_Duplicates` instead of becoming `report (2).pdf`.
+5. **Duplicates & same-name replacements.** If a file with the same name is already in the destination folder and the two are identical (checked byte by byte), the new copy goes to `_Duplicates` instead of becoming `report (2).pdf`. If the contents are *different* (including when your browser saved `report (1).pdf` because `report.pdf` existed), both are kept (`report (2).pdf`) and a ribbon asks **“Replace older copy?”** — **Replace** sends the old copy to the Recycle Bin and gives the new one the original name (Undo renames it back); **Keep both** or letting it time out changes nothing.
 6. **Zips** are only unpacked if you turned that on in the welcome steps or in Settings.
 7. **Move and record.** If you turned on tidy names or dates, the file gets its new name here. Each move is written to the undo history *before* it happens and marked done after. If the PC crashes halfway, the next start finishes or reverses it. **Undo** puts files back exactly where they were.
 8. **Tell you.** A ribbon slides in for each file. When lots of files arrive together, the first 3 get their own ribbon, then one ribbon counts the rest ("Filed 37 files · Images 25 · Documents 12") with **Open** and **Undo**.

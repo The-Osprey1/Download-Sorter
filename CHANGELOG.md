@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+* **Offer to replace an older file with the same name (new `replace_offer.py`, `sorter.py`, `ribbon_popup.py`, `onboarding.py`)**: when a download has the same name as a *different* file already in its folder (including a browser's `report (1).pdf` for an existing `report.pdf`), both are kept and a ribbon asks **"Replace older copy?"**. **Replace** sends the old file to the Recycle Bin and gives the new one the original name (Undo renames it back). **Keep both**, closing or letting it time out changes nothing. Exact duplicates still go to `_Duplicates`. On by default; turn it off in Settings.
+
 ## [2.3.0] - 2026-11-09
 
 ### Added

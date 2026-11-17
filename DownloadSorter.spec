@@ -52,6 +52,7 @@ hidden_imports = [
     'pypdf',
     'onboarding',
     'learning',
+    'replace_offer',
     'folder_scan',
     'ui_icons',
     'ui_motion',
