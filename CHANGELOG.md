@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Apply & Shift Files replaced your Custom Rules (`architecture.py`).** Applying the Folder Architecture rebuilt the rule list from the folder map, so every rule you made, added from a starter pack or carried over from 2.x was renamed after its folder and lost its regex, rename template, exclude words, size and age limits, PDF content words, ALL/ANY setting and auto-unzip. Your own rules are now kept exactly as they are, in their order, ahead of the rules the folder map makes. Words or websites you add on a folder card become a rule for just those words.
+- **An empty folder card caught every file (`architecture.py`).** A Tier 3 folder with no file types, words or websites became a rule with no conditions, so every download went into it. An empty folder now stays a plain folder.
+- **Keywords matched inside other words (`router.py`).** A keyword of four or more letters matched anywhere in a name: "resume" filed `presumed_dead.epub`, "school" filed `preschool_menu.pdf`, "bank" filed `Bankruptcy_notice.pdf`. A keyword now has to line up with whole words. `Resume2026`, `IME3311` and `lecture_notes` still match "resume", "ime 3311" and "lecturenotes", and the typo allowance needs the first letter to agree.
+- **Blank Search, Detox and Scan Folders buttons (`ui/motion.py`).** Their icons were never drawn, so in a normal-sized window they showed as empty grey boxes.
+- **Rule suggestions were never shown (`ui/main_window.py`).** Download Sorter counted files you moved by hand into the same folder but never offered the rule. **Custom Rules** now shows "You moved 3 files from chase.com to 'Finance/Bank'. Make that a rule?" with **Make a Rule...** (opens the rule filled in, for you to check) and **Not Now**. A rule you accept goes last, after your own. In a window under 700 px tall the bar folds into a **Suggestion** button.
+- **Reading a PDF's text could use hundreds of MB of memory (`router.py`).** A small compressed stream inside a PDF was inflated in full before the first 64 KB were read. Only those 64 KB are inflated now.
+
 ## [3.4.0] - 2026-11-17
 
 ### Added
