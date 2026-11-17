@@ -16,6 +16,7 @@ from download_sorter.dest import apply_rename_template, read_exif_date, resolve_
 
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
 _CAMEL_SPLIT_RE = re.compile(r"([a-z0-9])([A-Z])")
+_LETTER_DIGIT_RE = re.compile(r"(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])")
 _GENERIC_SNIFF_EXTS = {"", ".bin", ".tmp", ".dat", ".jfif", ".download"}
 
 
@@ -76,6 +77,7 @@ def sniff_magic_extension(path: Path | None) -> str:
     return ""
 _PDF_STREAM_RE = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.DOTALL)
 _PDF_TEXT_LIT_RE = re.compile(rb"\(([^()\\]{2,200})\)")
+_PDF_STREAM_MAX_OUT = 65536
 
 
 def extract_pdf_text_preview(path: Path | None, *, max_bytes: int = 262_144) -> str:
@@ -97,10 +99,12 @@ def extract_pdf_text_preview(path: Path | None, *, max_bytes: int = 262_144) -> 
     for m in _PDF_STREAM_RE.finditer(raw):
         stream_bytes = m.group(1)
         try:
-            decompressed = zlib.decompress(stream_bytes)
+            # Only the first 64 KB of each stream is read for text, so never inflate
+            # more than that: a small crafted stream can expand to hundreds of MB.
+            decompressed = zlib.decompressobj().decompress(stream_bytes, _PDF_STREAM_MAX_OUT)
         except zlib.error:
             continue
-        for lit in _PDF_TEXT_LIT_RE.finditer(decompressed[:65536]):
+        for lit in _PDF_TEXT_LIT_RE.finditer(decompressed):
             chunks.append(lit.group(1).decode("latin-1", errors="ignore"))
         if len(chunks) >= 200:
             break
@@ -202,9 +206,31 @@ def candidate_from_path(path: Path) -> FileCandidate:
 
 
 def _normalize_tokens(text: str) -> str:
-    """Split CamelCase and separators into single lowercase space-separated tokens."""
+    """Split CamelCase, letter/digit runs and separators into lowercase space-separated tokens.
+
+    ``Resume2026`` becomes ``resume 2026`` and ``IME3311`` becomes ``ime 3311``, so a
+    keyword still matches a word that has a number stuck to it.
+    """
     camel_split = _CAMEL_SPLIT_RE.sub(r"\1 \2", text)
-    return " ".join(_NON_WORD_RE.sub(" ", camel_split.lower()).split())
+    split = _LETTER_DIGIT_RE.sub(" ", camel_split.lower())
+    return " ".join(_NON_WORD_RE.sub(" ", split).split())
+
+
+def _joins_consecutive_tokens(compact_kw: str, tokens: list[str]) -> bool:
+    """True when ``compact_kw`` is exactly some run of whole tokens written together.
+
+    ``lecturenotes`` matches ``lecture_notes``, but ``bank`` never matches inside
+    ``bankruptcy``: a keyword has to line up with word edges on both sides.
+    """
+    for start in range(len(tokens)):
+        joined = ""
+        for tok in tokens[start:]:
+            joined += tok
+            if joined == compact_kw:
+                return True
+            if len(joined) >= len(compact_kw) or not compact_kw.startswith(joined):
+                break
+    return False
 
 
 def _keyword_matches(filename: str, keyword: str) -> bool:
@@ -219,19 +245,27 @@ def _keyword_matches(filename: str, keyword: str) -> bool:
     padded_kw = f" {norm_kw} "
     if padded_kw in padded_name:
         return True
-    # Also support compacted token matching (e.g. 'ime3311' vs 'ime 3311').
-    if len(norm_kw) >= 4 and norm_kw.replace(" ", "") in norm_name.replace(" ", ""):
-        return True
-    # Support unordered multi-word token matching (e.g. "tax return" -> "2026_Return_Tax").
     kw_tokens = norm_kw.split()
     name_tokens = norm_name.split()
+    # Also support compacted token matching ('lecturenotes' vs 'lecture_notes'), but
+    # only along word edges: a plain substring check made 'resume' match 'presumed'.
+    compact_kw = norm_kw.replace(" ", "")
+    if len(compact_kw) >= 4 and _joins_consecutive_tokens(compact_kw, name_tokens):
+        return True
+    # Support unordered multi-word token matching (e.g. "tax return" -> "2026_Return_Tax").
     name_set = set(name_tokens)
     if len(kw_tokens) > 1 and all(t in name_set for t in kw_tokens):
         return True
     # High-threshold fuzzy match for longer single-word keywords (>= 5 chars) to tolerate minor typos.
+    # The first letter has to agree: a typo there is rare, and without it 'lecture'
+    # matched 'electure' and similar words that merely contain the keyword.
     if len(kw_tokens) == 1 and len(norm_kw) >= 5:
         for tok in name_tokens:
-            if len(tok) >= 5 and SequenceMatcher(None, norm_kw, tok).ratio() >= 0.88:
+            if (
+                len(tok) >= 5
+                and tok[0] == norm_kw[0]
+                and SequenceMatcher(None, norm_kw, tok).ratio() >= 0.88
+            ):
                 return True
     return False
 

@@ -67,6 +67,7 @@ from download_sorter.config import (
     portable_path,
     readable_path,
 )
+from download_sorter.learning import dismiss_suggestion, get_rule_suggestions
 from download_sorter.paths import AppPaths
 from download_sorter.quick_switcher import normalize_hotkey, parse_hotkey
 from download_sorter.service import SorterService
@@ -1585,7 +1586,40 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(cb)
             toolbar.addWidget(btn)
         toolbar.addStretch(1)
+        # In a short window the suggestion bar below folds into this button, so the
+        # tab keeps fitting 900 x 560; it offers the same two choices from a menu.
+        self.btn_rule_suggestion_compact = InteractiveRibbonBtn("Suggestion", make_vector_icon("sparkle", "#64D2FF", 14))
+        self.btn_rule_suggestion_compact.clicked.connect(self._show_rule_suggestion_menu)
+        self.btn_rule_suggestion_compact.setVisible(False)
+        toolbar.addWidget(self.btn_rule_suggestion_compact)
         rules_layout.addLayout(toolbar)
+
+        # Learned suggestion: shown when the same kind of file has been moved into the
+        # same folder by hand a few times (see learning.py). Hidden when there is none.
+        self._current_suggestion: dict[str, Any] | None = None
+        self.frm_rule_suggestion = QFrame()
+        self.frm_rule_suggestion.setObjectName("RuleSuggestion")
+        self.frm_rule_suggestion.setStyleSheet(
+            "#RuleSuggestion { background: rgba(10, 132, 255, 0.10);"
+            " border: 1px solid rgba(10, 132, 255, 0.35); border-radius: 8px; }"
+        )
+        sugg_row = QHBoxLayout(self.frm_rule_suggestion)
+        sugg_row.setContentsMargins(12, 6, 8, 6)
+        sugg_row.setSpacing(8)
+        self.lbl_rule_suggestion = ElidedLabel("")
+        self.lbl_rule_suggestion.setStyleSheet("color: #F5F5F7; background: transparent; border: none;")
+        sugg_row.addWidget(self.lbl_rule_suggestion, 1)
+        self.btn_accept_suggestion = InteractiveRibbonBtn("Make a Rule...", make_vector_icon("plus", "#FFFFFF", 14))
+        self.btn_accept_suggestion.setObjectName("PrimaryButton")
+        self.btn_accept_suggestion.setToolTip("Open a new rule filled in from what you did; check it, then save")
+        self.btn_accept_suggestion.clicked.connect(self._accept_rule_suggestion)
+        sugg_row.addWidget(self.btn_accept_suggestion)
+        self.btn_dismiss_suggestion = InteractiveRibbonBtn("Not Now")
+        self.btn_dismiss_suggestion.setToolTip("Don't suggest this rule again")
+        self.btn_dismiss_suggestion.clicked.connect(self._dismiss_rule_suggestion)
+        sugg_row.addWidget(self.btn_dismiss_suggestion)
+        self.frm_rule_suggestion.setVisible(False)
+        rules_layout.addWidget(self.frm_rule_suggestion)
 
         self.tbl_rules = QTableWidget(0, 6)
         self.tbl_rules.setHorizontalHeaderLabels(
@@ -2485,6 +2519,85 @@ class MainWindow(QMainWindow):
             self.tbl_rules.setItem(idx, 3, QTableWidgetItem(", ".join(rule.keywords)))
             self.tbl_rules.setItem(idx, 4, QTableWidgetItem(", ".join(rule.domains)))
             self.tbl_rules.setItem(idx, 5, QTableWidgetItem(", ".join(rule.extensions)))
+        self._refresh_rule_suggestion()
+
+    def _refresh_rule_suggestion(self) -> None:
+        try:
+            suggestions = get_rule_suggestions(self.service.config, self.service.paths.data_dir)
+        except Exception:
+            logging.debug("Could not read learned rule suggestions", exc_info=True)
+            suggestions = []
+        self._current_suggestion = suggestions[0] if suggestions else None
+        if self._current_suggestion is not None:
+            more = len(suggestions) - 1
+            text = f"{self._current_suggestion['summary']}. Make that a rule?"
+            if more > 0:
+                text += f"  ({more} more suggestion{'s' if more != 1 else ''})"
+            self.lbl_rule_suggestion.setText(text)
+            self.btn_rule_suggestion_compact.setToolTip(text)
+        self._place_rule_suggestion()
+
+    def _place_rule_suggestion(self) -> None:
+        """Show the suggestion as a full bar, or as a toolbar button in a short window."""
+        has = self._current_suggestion is not None
+        roomy = self.height() >= self.TESTER_TRACE_MIN_HEIGHT
+        show_bar, show_btn = has and roomy, has and not roomy
+        changed = False
+        if self.frm_rule_suggestion.isHidden() == show_bar:
+            self.frm_rule_suggestion.setVisible(show_bar)
+            changed = True
+        if self.btn_rule_suggestion_compact.isHidden() == show_btn:
+            self.btn_rule_suggestion_compact.setVisible(show_btn)
+            changed = True
+        if changed:
+            _relayout_up(self.frm_rule_suggestion)
+
+    def _show_rule_suggestion_menu(self) -> None:
+        if self._current_suggestion is None:
+            return
+        menu = QMenu(self)
+        title = menu.addAction(str(self._current_suggestion["summary"]))
+        title.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("Make a Rule...", self._accept_rule_suggestion)
+        menu.addAction("Not Now", self._dismiss_rule_suggestion)
+        btn = self.btn_rule_suggestion_compact
+        menu.exec(btn.mapToGlobal(QPoint(0, btn.height())))
+
+    def _accept_rule_suggestion(self) -> None:
+        sugg = self._current_suggestion
+        if sugg is None:
+            return
+        host = str(sugg.get("host") or "")
+        ext = str(sugg.get("ext") or "")
+        draft = Rule(
+            id="",
+            name=f"Files from {host}" if host else f"{ext.lstrip('.').upper()} files",
+            destination=str(sugg["destination"]),
+            domains=[host] if host else [],
+            extensions=[ext] if ext and not host else [],
+        )
+        dlg = RuleEditorDialog(draft, parent=self)
+        dlg.setWindowTitle("Make a Rule From What You Did")
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        cfg = copy.deepcopy(self.service.config)
+        # Added last, after your own rules, so a learned rule never jumps ahead of them.
+        cfg.rules.append(dlg.build_rule())
+        self._commit_config(cfg)
+        last = len(self.service.config.rules) - 1
+        self.tbl_rules.selectRow(last)
+        flash_rows(self.tbl_rules, [last], "#0A84FF")
+
+    def _dismiss_rule_suggestion(self) -> None:
+        sugg = self._current_suggestion
+        if sugg is None:
+            return
+        try:
+            dismiss_suggestion(str(sugg["key"]), self.service.paths.data_dir)
+        except OSError as exc:
+            self.banner.show_message(f"Could not save that choice: {exc}", kind="warning")
+        self._refresh_rule_suggestion()
 
     def _refresh_settings_fields(self) -> None:
         cfg = self.service.config
@@ -3334,6 +3447,8 @@ class MainWindow(QMainWindow):
             if self.list_test_trace.isHidden() == show_trace:
                 self.list_test_trace.setVisible(show_trace)
                 _relayout_up(self.list_test_trace)
+        if hasattr(self, "frm_rule_suggestion"):
+            self._place_rule_suggestion()
         if hasattr(self, "instructions_widget"):
             slide_anim = getattr(self.instructions_widget, "_motion_slide", None)
             if slide_anim is None or slide_anim.state() != QAbstractAnimation.State.Running:

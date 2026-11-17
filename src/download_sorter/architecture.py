@@ -1294,6 +1294,58 @@ def architecture_from_config(cfg: Config) -> FolderArchitecture:
     return arch
 
 
+_GENERATED_RULE_PREFIX = "arch-"
+
+
+def _merge_user_and_generated_rules(user_rules: list[Rule], generated: list[Rule]) -> list[Rule]:
+    """Keep the user's own rules, in their order, ahead of the folder map's rules.
+
+    Rules made on the Custom Rules tab (or carried over from 2.x, or added from a
+    starter set) carry settings the folder map cannot show: regex, rename template,
+    exclude words, size and age limits, PDF content words, ALL/ANY and auto-unzip.
+    They are kept exactly as they are. Rules this function generated last time
+    (``arch-`` ids) are dropped and generated again from the map.
+
+    A folder card that a user rule already feeds holds that rule's words and sites,
+    so its generated rule would only repeat it. It is left out, unless words or
+    sites were added on the card, in which case a rule for just those is added.
+    """
+    kept = [copy.deepcopy(r) for r in user_rules if not str(r.id).startswith(_GENERATED_RULE_PREFIX)]
+    by_dest: dict[str, list[Rule]] = {}
+    for rule in kept:
+        by_dest.setdefault(rule.destination.lower(), []).append(rule)
+
+    extra: list[Rule] = []
+    for gen in generated:
+        same_dest = by_dest.get(gen.destination.lower())
+        if not same_dest:
+            extra.append(gen)
+            continue
+        if gen.keywords or gen.domains:
+            known_kw = {k.lower() for r in same_dest for k in r.keywords}
+            known_dom = {d.lower() for r in same_dest for d in r.domains}
+            new_kw = [k for k in gen.keywords if k.lower() not in known_kw]
+            new_dom = [d for d in gen.domains if d.lower() not in known_dom]
+            if new_kw or new_dom:
+                gen.keywords = new_kw
+                gen.domains = new_dom
+                extra.append(gen)
+            continue
+        # Extension-only folder: covered when a user rule there already files
+        # every file of those types (no words, sites or other conditions).
+        plain_exts = {
+            e
+            for r in same_dest
+            if not (r.keywords or r.domains or r.regex_pattern or r.content_keywords)
+            for e in r.extensions
+        }
+        new_ext = [e for e in gen.extensions if e not in plain_exts]
+        if new_ext:
+            gen.extensions = new_ext
+            extra.append(gen)
+    return kept + extra
+
+
 def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> Config:
     """Compile a ``FolderArchitecture`` into a complete, deterministic ``Config``."""
     from download_sorter.config import DEFAULT_TYPE_SUBFOLDERS, Rule
@@ -1339,6 +1391,10 @@ def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> 
         parent = arch.get_node(node.parent_id)
 
         has_matcher = bool(node.keywords or node.domains)
+        if not has_matcher and not node.extensions:
+            # An empty folder has nothing to match on. As a rule it would have no
+            # conditions at all and catch every file, so it stays a plain folder.
+            continue
         if has_matcher or node.tier >= 3:
             # Explicit top-to-bottom rule (deepest tier first so Tier 3 beats Tier 2)
             generated_rules.append(
@@ -1379,7 +1435,7 @@ def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> 
             -len(r.destination.split("\\")),
         )
     )
-    cfg.rules = generated_rules
+    cfg.rules = _merge_user_and_generated_rules(base_cfg.rules, generated_rules)
 
     if new_cat_map:
         cfg.category_map = new_cat_map

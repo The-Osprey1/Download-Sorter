@@ -554,7 +554,10 @@ def make_vector_icon(name: str, color_hex: str = "#F3F4F6", size: int = 16) -> Q
     elif name == "plus":
         p.drawLine(QPointF(8.0, 3.0), QPointF(8.0, 13.0))
         p.drawLine(QPointF(3.0, 8.0), QPointF(13.0, 8.0))
-    elif name == "delete":
+    elif name == "search":
+        p.drawEllipse(QPointF(7.0, 7.0), 4.2, 4.2)
+        p.drawLine(QPointF(10.1, 10.1), QPointF(13.6, 13.6))
+    elif name in ("delete", "trash"):
         p.drawLine(QPointF(3.5, 4.5), QPointF(12.5, 4.5))
         p.drawLine(QPointF(6.0, 4.5), QPointF(6.5, 2.8))
         p.drawLine(QPointF(6.5, 2.8), QPointF(9.5, 2.8))
