@@ -171,9 +171,9 @@ def test_rules_tab_offers_a_learned_rule_and_can_add_or_dismiss_it(
     win = mw.MainWindow(SorterService(app_paths))
     win._refresh_rules()
     assert not win.frm_rule_suggestion.isHidden()
-    assert "chase.com" in win.lbl_rule_suggestion.text() or ".flac" in win.lbl_rule_suggestion.text()
-
     first = dict(win._current_suggestion or {})
+    assert (first["host"], first["ext"]) in {("chase.com", ""), ("", ".flac")}
+    assert win.lbl_rule_suggestion.text().startswith(f"{first['summary']}. Make that a rule?")
     monkeypatch.setattr(mw.RuleEditorDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
     n_before = len(win.service.config.rules)
     win._accept_rule_suggestion()
@@ -214,7 +214,8 @@ def test_a_suggestion_folds_into_a_button_so_the_window_still_fits_900x560(
     assert win.height() <= 560
     assert win.frm_rule_suggestion.isHidden()
     assert not win.btn_rule_suggestion_compact.isHidden()
-    assert "chase.com" in win.btn_rule_suggestion_compact.toolTip()
+    assert (win._current_suggestion or {}).get("host") == "chase.com"
+    assert win.btn_rule_suggestion_compact.toolTip() == win.lbl_rule_suggestion.text()
 
     win.resize(1100, 760)
     v3_qapp.processEvents()
