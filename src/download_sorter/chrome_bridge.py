@@ -15,12 +15,13 @@ from typing import Any
 import uuid
 
 from download_sorter.about import __version__
-from download_sorter.config import load_config
+from download_sorter.config import Rule, load_config, save_config
 from download_sorter.db import STATUS_COMPLETED, StateDB
-from download_sorter.dest import _clean_parts, is_under_watch_root
+from download_sorter.dest import _clean_parts, is_under_watch_root, to_relative_dest
+from download_sorter.fs_ops import execute_move
 from download_sorter.ipc import send_ipc_command
 from download_sorter.paths import AppPaths
-from download_sorter.router import FileCandidate, evaluate
+from download_sorter.router import FileCandidate, RouteDecision, evaluate, extract_host
 
 NATIVE_HOST_NAME = "com.devynfidel.download_sorter"
 EXTENSION_ID = "agcbbbnkmhodmgdjlaanbgjoahmhckgf"
@@ -40,6 +41,38 @@ _REGISTRY_HOST_KEYS: tuple[str, ...] = (
 )
 _EXT_ID_RE = re.compile(r"^[a-p]{32}$")
 _MAX_MESSAGE_BYTES = 1024 * 1024
+_GENERIC_EXTS = {"", ".bin", ".download", ".jfif", ".tmp", ".dat"}
+_MIME_TO_EXT: dict[str, str] = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+    "application/zip": ".zip",
+    "application/x-zip-compressed": ".zip",
+    "application/x-7z-compressed": ".7z",
+    "application/json": ".json",
+    "text/csv": ".csv",
+    "text/plain": ".txt",
+    "model/stl": ".stl",
+    "model/3mf": ".3mf",
+    "application/vnd.ms-package.3dmanufacturing-3dmodel+xml": ".3mf",
+    "video/mp4": ".mp4",
+    "audio/mpeg": ".mp3",
+}
+
+
+def _repair_filename_with_mime(filename: str, mime: str) -> str:
+    """Repair missing or generic extensions (e.g. .jfif, .bin, no ext) from Chrome MIME type."""
+    clean_mime = (mime or "").split(";")[0].strip().lower()
+    inferred = _MIME_TO_EXT.get(clean_mime)
+    if not inferred:
+        return filename
+    p = Path(filename)
+    if p.suffix.lower() in _GENERIC_EXTS:
+        return f"{p.stem}{inferred}" if p.suffix else f"{filename}{inferred}"
+    return filename
 
 
 def find_extension_dir() -> Path | None:
@@ -212,18 +245,18 @@ def route_chrome_download(req: dict[str, Any], paths: AppPaths | None = None) ->
     if not filename:
         return {"ok": True, "decision": "default", "reason": "No filename provided"}
 
-    if cfg.hold_3mf_enabled and cfg.hold_3mf_days > 0 and Path(filename).suffix.lower() == ".3mf":
-        return {
-            "ok": True,
-            "decision": "default",
-            "matched_rule": "3MF Hold",
-            "match_type": "hold",
-            "reason": f"3MF grace hold ({cfg.hold_3mf_days}d window)",
-            "version": __version__,
-        }
+    repaired = _repair_filename_with_mime(filename, str(req.get("mime") or ""))
+    filename_changed = repaired != filename
+    filename = repaired
 
     source_url = str(req.get("finalUrl") or req.get("url") or req.get("referrer") or "").strip()
-    decision = evaluate(FileCandidate(filename=filename, source_url=source_url), cfg)
+    tab_url = str(req.get("tabUrl") or req.get("tab_url") or "").strip()
+    tab_title = str(req.get("tabTitle") or req.get("tab_title") or "").strip()
+    source_host = extract_host(source_url) or extract_host(tab_url)
+    decision = evaluate(
+        FileCandidate(filename=filename, source_url=source_url, tab_url=tab_url, tab_title=tab_title),
+        cfg,
+    )
     if decision.action != "move" or decision.relative_dest is None:
         return {
             "ok": True,
@@ -231,6 +264,7 @@ def route_chrome_download(req: dict[str, Any], paths: AppPaths | None = None) ->
             "matched_rule": decision.matched_rule,
             "match_type": decision.match_type,
             "reason": decision.reason,
+            "source_host": source_host,
             "version": __version__,
         }
 
@@ -247,6 +281,8 @@ def route_chrome_download(req: dict[str, Any], paths: AppPaths | None = None) ->
         "matched_rule": decision.matched_rule,
         "match_type": decision.match_type,
         "reason": decision.reason,
+        "source_host": source_host,
+        "repaired_filename": filename if filename_changed else "",
         "conflict_action": "uniquify",
         "watch_root": str(watch_dir),
         "version": __version__,
@@ -350,6 +386,295 @@ def _open_desktop_app(paths: AppPaths) -> dict[str, Any]:
         return {"ok": False, "error": str(exc)}
 
 
+def toggle_pause_from_chrome(
+    req: dict[str, Any],
+    paths: AppPaths | None = None,
+    *,
+    try_ipc: bool = True,
+) -> dict[str, Any]:
+    """Toggle (or explicitly set) Auto-Sort pause state and sync with the running desktop app."""
+    app_paths = paths or AppPaths.default()
+    cfg = load_config(app_paths)
+    new_paused = bool(req["paused"]) if "paused" in req else not bool(cfg.paused)
+    cfg.paused = new_paused
+    save_config(cfg, app_paths)
+
+    if try_ipc:
+        send_ipc_command("set_paused", payload={"paused": new_paused}, timeout_ms=350, reply_timeout_ms=900)
+
+    return {"ok": True, "paused": new_paused, "version": __version__}
+
+
+def list_chrome_folders(paths: AppPaths | None = None) -> dict[str, Any]:
+    """Return sorted relative destination folders for the Chrome extension context menu/popup."""
+    app_paths = paths or AppPaths.default()
+    cfg = load_config(app_paths)
+    watch_dir = cfg.resolved_watch_folder(app_paths)
+    seen: dict[str, str] = {}
+
+    def _add(raw_folder: str) -> None:
+        cleaned = to_relative_dest(raw_folder, fallback="")
+        if not cleaned or "{" in cleaned:
+            return
+        posix = cleaned.replace("\\", "/")
+        key = posix.lower()
+        if key not in seen:
+            seen[key] = posix
+
+    for rule in cfg.rules:
+        if rule.enabled and rule.destination:
+            _add(rule.destination)
+    for cat in cfg.category_map.values():
+        if cat:
+            _add(cat)
+    if watch_dir.is_dir():
+        try:
+            for entry in sorted(watch_dir.iterdir(), key=lambda p: p.name.lower()):
+                if entry.is_dir() and not entry.name.startswith((".", "_")):
+                    _add(entry.name)
+        except OSError:
+            pass
+
+    folders = sorted(seen.values(), key=lambda s: (s.count("/"), s.lower()))
+    return {"ok": True, "folders": folders[:20], "version": __version__}
+
+
+def create_chrome_rule(
+    req: dict[str, Any],
+    paths: AppPaths | None = None,
+    *,
+    try_ipc: bool = True,
+) -> dict[str, Any]:
+    """Create (or reuse) a domain routing rule from the Chrome extension."""
+    app_paths = paths or AppPaths.default()
+    raw_domain = str(req.get("domain") or req.get("url") or "").strip()
+    domain = extract_host(raw_domain)
+    if not domain:
+        return {"ok": False, "error": "Invalid or missing domain"}
+
+    raw_dest = str(req.get("destination") or "").strip()
+    destination = to_relative_dest(raw_dest, fallback="")
+    if not destination:
+        return {"ok": False, "error": "Invalid or missing destination folder"}
+
+    extensions: list[str] = []
+    for raw_ext in req.get("extensions") or []:
+        ext = str(raw_ext or "").strip().lower()
+        if ext and not ext.startswith("."):
+            ext = "." + ext
+        if ext and ext not in extensions:
+            extensions.append(ext)
+
+    cfg = load_config(app_paths)
+    for existing in cfg.rules:
+        if (
+            existing.enabled
+            and domain in [extract_host(d) for d in existing.domains]
+            and to_relative_dest(existing.destination, fallback="").lower() == destination.lower()
+            and existing.extensions == extensions
+        ):
+            return {
+                "ok": True,
+                "created": False,
+                "rule": {
+                    "id": existing.id,
+                    "name": existing.name,
+                    "destination": existing.destination,
+                    "domains": existing.domains,
+                },
+                "rules_count": sum(1 for r in cfg.rules if r.enabled),
+            }
+
+    rule_name = str(req.get("name") or "").strip() or f"{domain} → {destination.replace(chr(92), '/')}"
+    new_rule = Rule(
+        id=f"chrome-{uuid.uuid4().hex[:8]}",
+        name=rule_name,
+        destination=destination,
+        domains=[domain],
+        extensions=extensions,
+        enabled=True,
+    )
+    cfg.rules.insert(0, new_rule)
+    save_config(cfg, app_paths)
+
+    if try_ipc:
+        send_ipc_command("reload_config", timeout_ms=350, reply_timeout_ms=900)
+
+    return {
+        "ok": True,
+        "created": True,
+        "rule": {
+            "id": new_rule.id,
+            "name": new_rule.name,
+            "destination": new_rule.destination,
+            "domains": new_rule.domains,
+        },
+        "rules_count": sum(1 for r in cfg.rules if r.enabled),
+    }
+
+
+def undo_last_from_chrome(
+    paths: AppPaths | None = None,
+    *,
+    try_ipc: bool = True,
+) -> dict[str, Any]:
+    """Undo the most recent sort/Chrome-routed batch via IPC or offline SorterService."""
+    app_paths = paths or AppPaths.default()
+    if try_ipc:
+        resp = send_ipc_command("undo", timeout_ms=450, reply_timeout_ms=4000)
+        if resp is not None:
+            return resp
+    from download_sorter.service import SorterService
+
+    svc = SorterService(app_paths)
+    try:
+        res = svc.undo_last_batch()
+        return {"ok": True, **res, "via": "direct"}
+    finally:
+        svc.stop(timeout=0.5)
+
+
+def check_chrome_duplicate(req: dict[str, Any], paths: AppPaths | None = None) -> dict[str, Any]:
+    """Check whether a download URL+size or filename already exists in StateDB history."""
+    app_paths = paths or AppPaths.default()
+    filename = _clean_basename(str(req.get("filename") or ""))
+    source_url = str(req.get("finalUrl") or req.get("url") or "").strip()
+    file_size = int(req.get("fileSize") or 0)
+
+    db = StateDB(app_paths.db_file)
+    try:
+        moves = db.list_active_moves(limit=250)
+    finally:
+        db.close()
+
+    for m in moves:
+        dest = Path(str(m.get("dest_path") or ""))
+        if not dest.is_file():
+            continue
+        same_url = bool(source_url and m.get("source_url") == source_url)
+        same_size = file_size <= 0 or int(m.get("size_bytes") or 0) == file_size
+        if same_url and same_size:
+            return {
+                "ok": True,
+                "duplicate": True,
+                "existing_path": str(dest),
+                "reason": f"Already downloaded to {dest.parent.name}",
+            }
+        if filename and str(m.get("filename") or "").lower() == filename.lower() and file_size > 0 and int(m.get("size_bytes") or 0) == file_size:
+            return {
+                "ok": True,
+                "duplicate": True,
+                "existing_path": str(dest),
+                "reason": f"Identical file already in {dest.parent.name}",
+            }
+    return {"ok": True, "duplicate": False, "existing_path": "", "reason": ""}
+
+
+def reroute_chrome_file(
+    req: dict[str, Any],
+    paths: AppPaths | None = None,
+    *,
+    try_ipc: bool = True,
+) -> dict[str, Any]:
+    """Move an already-downloaded file inside Downloads to a different subfolder."""
+    app_paths = paths or AppPaths.default()
+    cfg = load_config(app_paths)
+    watch_dir = cfg.resolved_watch_folder(app_paths)
+
+    raw_src = str(req.get("full_path") or "").strip()
+    if not raw_src and req.get("relative_dest"):
+        src_path = (watch_dir / Path(str(req["relative_dest"]))).resolve()
+    elif raw_src:
+        src_path = Path(raw_src).resolve()
+    else:
+        return {"ok": False, "error": "Missing source path"}
+
+    if not is_under_watch_root(src_path, watch_dir) or not src_path.is_file():
+        return {"ok": False, "error": "Source file not found inside Downloads"}
+
+    new_folder = to_relative_dest(str(req.get("new_folder") or ""), fallback="")
+    if not new_folder:
+        return {"ok": False, "error": "Invalid destination folder"}
+
+    rel_dest = Path(new_folder) / src_path.name
+    decision = RouteDecision(
+        action="move",
+        relative_dest=rel_dest,
+        reason=f"Re-routed from Chrome popup to '{new_folder}'",
+        matched_rule="Chrome Re-route",
+        match_type="chrome_reroute",
+    )
+    db = StateDB(app_paths.db_file)
+    batch_id = f"reroute-{uuid.uuid4().hex[:8]}"
+    try:
+        rec = execute_move(
+            src_path,
+            decision,
+            batch_id=batch_id,
+            db=db,
+            watch_root=watch_dir,
+            settle_seconds=0.0,
+            source_url=str(req.get("source_url") or ""),
+        )
+        db.checkpoint()
+    finally:
+        db.close()
+
+    if rec is None:
+        return {"ok": False, "error": "File is locked or already at destination"}
+
+    try:
+        from download_sorter.learning import record_manual_route
+
+        record_manual_route(
+            destination=new_folder,
+            data_dir=app_paths.data_dir,
+            source_url=str(req.get("source_url") or ""),
+            ext=src_path.suffix,
+        )
+    except Exception:
+        pass
+
+    if try_ipc:
+        send_ipc_command("reload_config", timeout_ms=250, reply_timeout_ms=600)
+
+    folder_display = new_folder.replace("\\", "/")
+    return {
+        "ok": True,
+        "batch_id": batch_id,
+        "dest_path": str(rec.get("dest_path") or ""),
+        "folder_display": folder_display,
+        "relative_dest": f"{folder_display}/{src_path.name}",
+    }
+
+
+def test_chrome_tab(req: dict[str, Any], paths: AppPaths | None = None) -> dict[str, Any]:
+    """Dry-run evaluate what rule would match downloads from the current active tab."""
+    app_paths = paths or AppPaths.default()
+    cfg = load_config(app_paths)
+    tab_url = str(req.get("tabUrl") or req.get("tab_url") or "").strip()
+    tab_title = str(req.get("tabTitle") or req.get("tab_title") or "").strip()
+    sample_name = _clean_basename(str(req.get("filename") or "sample.pdf")) or "sample.pdf"
+    host = extract_host(tab_url)
+    decision = evaluate(
+        FileCandidate(filename=sample_name, source_url=tab_url, tab_url=tab_url, tab_title=tab_title),
+        cfg,
+    )
+    folder = ""
+    if decision.relative_dest is not None:
+        rel_posix = _to_chrome_relative(decision.relative_dest)
+        folder = rel_posix.rsplit("/", 1)[0] if "/" in rel_posix else "Downloads"
+    return {
+        "ok": True,
+        "host": host,
+        "action": decision.action,
+        "folder": folder or "Downloads",
+        "matched_rule": decision.matched_rule,
+        "match_type": decision.match_type,
+        "reason": decision.reason,
+    }
+
+
 def handle_native_request(req: dict[str, Any], paths: AppPaths | None = None) -> dict[str, Any]:
     """Dispatch one Native Messaging JSON request cleanly."""
     app_paths = paths or AppPaths.default()
@@ -372,6 +697,20 @@ def handle_native_request(req: dict[str, Any], paths: AppPaths | None = None) ->
         return route_chrome_download(req, app_paths)
     if action == "completed":
         return record_chrome_completed(req, app_paths)
+    if action == "toggle_pause":
+        return toggle_pause_from_chrome(req, app_paths)
+    if action == "list_folders":
+        return list_chrome_folders(app_paths)
+    if action == "create_rule":
+        return create_chrome_rule(req, app_paths)
+    if action == "undo_last":
+        return undo_last_from_chrome(app_paths)
+    if action == "check_duplicate":
+        return check_chrome_duplicate(req, app_paths)
+    if action == "reroute_file":
+        return reroute_chrome_file(req, app_paths)
+    if action == "test_tab":
+        return test_chrome_tab(req, app_paths)
     if action == "open_app":
         return _open_desktop_app(app_paths)
     return {"ok": False, "error": f"Unknown native host action '{action}'"}

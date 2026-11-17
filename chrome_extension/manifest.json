@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Download Sorter Connector",
-  "version": "1.0.0",
-  "description": "Routes Chrome downloads directly into your Download Sorter subfolders so Chrome's download bubble stays draggable and never says Removed.",
+  "version": "1.1.0",
+  "description": "Routes Chrome downloads directly into your Download Sorter subfolders with active-tab awareness, context-menu sorting, and quick controls.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqQeM6aRO/Si/EW9YsCpcCFRwF0VhwvzUWXcJQqeU+0W8+uuFwIXM/IgTbOt8s+JpYb4yOdNVjdkKS6hCNr+KZs0RG0mNPhvRn2OHtDFPLXPzhbVQovDMvRlfeoA69QFJGhf5+hO42jVH5wbKDwMxDmtaj7p2OryAYBrPY/fLdXEy0Ffs1b3gI1OjG4Mbw9QHIPdfXO1BLGM5zFp/ceasr7j+pW2sTYpH3YdP8ci+56bSS/qNTaGeIzng6lS78e1WBnJksKNEl94JHTNwZUpVRa6Od9HsmSQD1zoNne3Nb1dWJ9RujCl8MONoRgd+Dvhicxkx8ALfcPpXGTR5RMbMJQIDAQAB",
   "permissions": [
     "downloads",
     "nativeMessaging",
-    "storage"
+    "storage",
+    "tabs",
+    "contextMenus"
   ],
   "background": {
     "service_worker": "background.js"

@@ -21,7 +21,10 @@ from download_sorter.fs_ops import (
     ProgressCallback,
     delete_files_safely,
     execute_move,
+    extract_zip_safely,
     is_slicer_running,
+    prune_empty_folders,
+    scan_detox_candidates,
     scan_duplicate_files,
     undo_batch,
     undo_move,
@@ -322,6 +325,34 @@ class SorterService:
         """Return quarantined duplicate files inside ``watch_root / '_Duplicates'``."""
         watch_dir = (root or self.watch_root).resolve()
         return scan_duplicate_files(watch_dir)
+
+    def scan_detox_now(self, old_days: int = 30, root: Path | None = None) -> dict[str, Any]:
+        """Scan ``watch_root`` for old installers and empty directories."""
+        watch_dir = (root or self.watch_root).resolve()
+        return scan_detox_candidates(watch_dir, old_installer_days=old_days)
+
+    def delete_detox_installers(
+        self,
+        paths: list[Path | str],
+        *,
+        use_recycle_bin: bool = True,
+    ) -> dict[str, Any]:
+        """Move selected old installers to Recycle Bin (strictly inside ``watch_root``)."""
+        watch_dir = self.watch_root.resolve()
+        res = delete_files_safely(
+            paths,
+            watch_root=watch_dir,
+            confine_dir=watch_dir,
+            use_recycle_bin=use_recycle_bin,
+        )
+        if res["deleted"]:
+            self.db.mark_orphaned_by_dest(res["deleted"])
+            self.db.checkpoint()
+        return res
+
+    def prune_detox_folders(self, folder_paths: list[str]) -> dict[str, Any]:
+        """Remove empty directories inside ``watch_root``."""
+        return prune_empty_folders(folder_paths, self.watch_root.resolve())
 
     def delete_duplicate_files(
         self,
@@ -894,6 +925,25 @@ class SorterService:
             else:
                 self._clear_busy(path)
                 moved.append(rec)
+                dest_file = Path(rec["dest_path"])
+                if dest_file.suffix.lower() == ".zip":
+                    matched_rule = (
+                        next(
+                            (r for r in cfg.rules if r.enabled and r.name == decision.matched_rule and r.auto_unzip),
+                            None,
+                        )
+                        if decision.match_type == "rule"
+                        else None
+                    )
+                    if cfg.auto_unzip_all or matched_rule is not None:
+                        extract_zip_safely(
+                            dest_file,
+                            dest_file.parent,
+                            root,
+                            db=self.db,
+                            batch_id=batch_id,
+                            keep_original=bool(cfg.zip_keep_original),
+                        )
                 if self.config.quick_switcher_enabled:
                     try:
                         from download_sorter.quick_switcher import record_recent_file

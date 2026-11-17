@@ -83,6 +83,7 @@ from download_sorter.ui.motion import (
     SortingProgressHUD,
     SortyMascotWidget,
     WalkthroughDiagramCanvas,
+    attach_press_feedback,
     breathe,
     fade_in,
     flash_rows,
@@ -311,13 +312,17 @@ class RuleEditorDialog(QDialog):
         self.edit_name = QLineEdit(rule.name if rule else "")
         self.edit_name.setPlaceholderText("e.g. Tax Receipts, Client PDFs, Class Notes")
         self.edit_dest = QLineEdit(rule.destination if rule else r"Documents\Custom")
-        self.edit_dest.setPlaceholderText(r"e.g. Documents\Taxes")
+        self.edit_dest.setPlaceholderText(r"e.g. Documents\Taxes\{year} or Web\{host}")
         self.edit_keywords = QLineEdit(", ".join(rule.keywords) if rule else "")
         self.edit_keywords.setPlaceholderText("e.g. syllabus, lab_report, invoice (comma-separated)")
         self.edit_domains = QLineEdit(", ".join(rule.domains) if rule else "")
         self.edit_domains.setPlaceholderText("Optional website, e.g. canvas.edu, makerworld.com")
         self.edit_exts = QLineEdit(", ".join(rule.extensions) if rule else "")
         self.edit_exts.setPlaceholderText("Optional file types, e.g. .pdf, .docx (blank = any)")
+        self.edit_content_keywords = QLineEdit(", ".join(rule.content_keywords) if rule else "")
+        self.edit_content_keywords.setPlaceholderText("Optional PDF text, e.g. Invoice, Packing Slip")
+        self.chk_auto_unzip = QCheckBox("Automatically extract .zip archives matched by this rule")
+        self.chk_auto_unzip.setChecked(rule.auto_unzip if rule else False)
         self.chk_enabled = QCheckBox("Rule is active")
         self.chk_enabled.setChecked(rule.enabled if rule else True)
 
@@ -326,6 +331,8 @@ class RuleEditorDialog(QDialog):
         form.addRow("Matches Words in Filename:", self.edit_keywords)
         form.addRow("Matches Website:", self.edit_domains)
         form.addRow("Only These File Types:", self.edit_exts)
+        form.addRow("Matches Inside PDF:", self.edit_content_keywords)
+        form.addRow("", self.chk_auto_unzip)
         form.addRow("", self.chk_enabled)
         layout.addLayout(form)
 
@@ -354,8 +361,97 @@ class RuleEditorDialog(QDialog):
             keywords=split_csv(self.edit_keywords.text()),
             domains=split_csv(self.edit_domains.text()),
             extensions=split_csv(self.edit_exts.text()),
+            content_keywords=split_csv(self.edit_content_keywords.text()),
+            auto_unzip=self.chk_auto_unzip.isChecked(),
             enabled=self.chk_enabled.isChecked(),
         )
+
+
+class DetoxDialog(QDialog):
+    """Downloads Detox dialog for reviewing old installers (>30d) and empty folders."""
+
+    def __init__(self, service: SorterService, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.service = service
+        self.setWindowTitle("Downloads Detox — Age-Based Housekeeping")
+        self.setMinimumSize(620, 420)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(10)
+
+        self.lbl_summary = QLabel("Scanning for installers older than 30 days and empty folders...")
+        self.lbl_summary.setObjectName("MutedText")
+        root.addWidget(self.lbl_summary)
+
+        self.tbl_installers = QTableWidget(0, 3)
+        self.tbl_installers.setHorizontalHeaderLabels(["Installer", "Age (Days)", "Size"])
+        self.tbl_installers.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tbl_installers.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        root.addWidget(self.tbl_installers, 1)
+
+        btn_row = QHBoxLayout()
+        self.btn_recycle = QPushButton("Recycle Selected Installers")
+        self.btn_recycle.setObjectName("DangerButton")
+        self.btn_recycle.clicked.connect(self._on_recycle_installers)
+        self.btn_prune = QPushButton("Prune Empty Folders")
+        self.btn_prune.clicked.connect(self._on_prune_folders)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        btn_row.addWidget(self.btn_recycle)
+        btn_row.addWidget(self.btn_prune)
+        btn_row.addStretch(1)
+        btn_row.addWidget(btn_close)
+        root.addLayout(btn_row)
+
+        self._empty_folders: list[str] = []
+        self._reload()
+
+    def _reload(self) -> None:
+        scan = self.service.scan_detox_now(old_days=30)
+        installers = scan.get("old_installers") or []
+        self._empty_folders = list(scan.get("empty_folders") or [])
+        total_mb = (int(scan.get("total_bytes") or 0)) / (1024 * 1024)
+        self.lbl_summary.setText(
+            f"Found {len(installers)} old installer(s) ({total_mb:.1f} MB) and "
+            f"{len(self._empty_folders)} empty folder(s)."
+        )
+        self.btn_prune.setEnabled(bool(self._empty_folders))
+        self.tbl_installers.setRowCount(len(installers))
+        for idx, item in enumerate(installers):
+            name_it = QTableWidgetItem(str(item["name"]))
+            name_it.setData(Qt.ItemDataRole.UserRole, str(item["path"]))
+            name_it.setToolTip(str(item["path"]))
+            age_it = QTableWidgetItem(f"{item['age_days']}d")
+            sz_it = QTableWidgetItem(f"{int(item['size_bytes']) / (1024 * 1024):.1f} MB")
+            self.tbl_installers.setItem(idx, 0, name_it)
+            self.tbl_installers.setItem(idx, 1, age_it)
+            self.tbl_installers.setItem(idx, 2, sz_it)
+
+    def _on_recycle_installers(self) -> None:
+        rows = {idx.row() for idx in self.tbl_installers.selectionModel().selectedRows()}
+        if not rows:
+            rows = set(range(self.tbl_installers.rowCount()))
+        paths = [
+            str(self.tbl_installers.item(r, 0).data(Qt.ItemDataRole.UserRole))
+            for r in sorted(rows)
+            if self.tbl_installers.item(r, 0) is not None
+        ]
+        if not paths:
+            return
+        self.service.delete_detox_installers(paths, use_recycle_bin=True)
+        self._reload()
+
+    def _on_prune_folders(self) -> None:
+        if self._empty_folders:
+            self.service.prune_detox_folders(self._empty_folders)
+            self._reload()
+
+
+def _refresh_style(widget: QWidget) -> None:
+    """Re-polish widget after dynamic property mutation for PySide6 QSS rules."""
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
 
 
 def _relayout_up(widget: QWidget) -> None:
@@ -1109,6 +1205,10 @@ class MainWindow(QMainWindow):
         self.btn_sort_now.setObjectName("PrimaryButton")
         self.btn_sort_now.clicked.connect(self._on_sort_now)
         row.addWidget(self.btn_sort_now)
+
+        attach_press_feedback(self.btn_undo_last, "#5AC8FA")
+        attach_press_feedback(self.btn_open_downloads, "#0A84FF")
+        attach_press_feedback(self.btn_sort_now, "#0A84FF")
         return bar
 
     # ------------------------------------------------------------------
@@ -1237,6 +1337,24 @@ class MainWindow(QMainWindow):
             "Re-sort files already inside Tier 1 & Tier 2 folders into their proper subfolders."
         )
         self.btn_sort_tiers.clicked.connect(self._on_sort_tiers_now)
+
+        self.btn_detox = CollapsibleRibbonBtn(
+            "Detox",
+            make_vector_icon("trash", "#8E8E93", 14),
+        )
+        self.btn_detox.setToolTip("Review old installers (>30 days) and empty folders inside Downloads")
+        self.btn_detox.set_collapsed(True)
+        self.btn_detox.clicked.connect(self._open_detox_dialog)
+
+        self.btn_quick_search = CollapsibleRibbonBtn(
+            "Search",
+            make_vector_icon("search", "#5AC8FA", 14),
+        )
+        self.btn_quick_search.setToolTip("Quick Search sorted files and history (Ctrl+Shift+Space)")
+        self.btn_quick_search.set_collapsed(True)
+        self.btn_quick_search.clicked.connect(self._open_quick_search)
+        QShortcut(QKeySequence("Ctrl+Shift+Space"), self, activated=self._open_quick_search)
+
         preview_actions = QWidget()
         preview_actions_row = QHBoxLayout(preview_actions)
         preview_actions_row.setContentsMargins(0, 0, 0, 0)
@@ -1279,9 +1397,16 @@ class MainWindow(QMainWindow):
             "No files moved yet — click 'Clean Up Now' above or drop a file in Downloads."
         )
         self.lbl_activity_empty.setObjectName("MutedText")
+        act_right = QWidget()
+        act_right_row = QHBoxLayout(act_right)
+        act_right_row.setContentsMargins(0, 0, 0, 0)
+        act_right_row.setSpacing(6)
+        act_right_row.addWidget(self.lbl_activity_empty)
+        act_right_row.addWidget(self.btn_detox)
+        act_right_row.addWidget(self.btn_quick_search)
         act_card, act_layout = _make_surface_card(
             "Recent Activity",
-            right_widget=self.lbl_activity_empty,
+            right_widget=act_right,
         )
 
         self.tbl_activity = QTableWidget(0, 5)
@@ -1397,140 +1522,257 @@ class MainWindow(QMainWindow):
     # Tab 3: Settings (Apple Preferences Card)
     # ------------------------------------------------------------------
     def _build_settings_tab(self) -> QWidget:
+        from download_sorter.ui.settings_widgets import (
+            DependentSubGroup,
+            MacToggle,
+            SettingCard,
+            SettingRow,
+        )
+        from download_sorter.ui.theme import PALETTE, set_widget_prop
+
         page = QScrollArea()
         page.setObjectName("SettingsScroll")
         page.setWidgetResizable(True)
         page.setFrameShape(QFrame.Shape.NoFrame)
         page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        page.setStyleSheet("QScrollArea#SettingsScroll, QScrollArea#SettingsScroll > QWidget > QWidget { background: transparent; }")
-        tab = QWidget()
-        page.setWidget(tab)
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(0, 4, 6, 0)
-        layout.setSpacing(14)
+        page.setStyleSheet(
+            "QScrollArea#SettingsScroll, QScrollArea#SettingsScroll > QWidget > QWidget { background: transparent; }"
+        )
+
+        viewport = QWidget()
+        viewport.setObjectName("SettingsViewport")
+        page.setWidget(viewport)
+
+        outer_layout = QHBoxLayout(viewport)
+        outer_layout.setContentsMargins(6, 4, 10, 14)
+
+        content_col = QWidget()
+        content_col.setMaximumWidth(820)
+        layout = QVBoxLayout(content_col)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        # Top header bar with Save Settings CTA
+        header_bar = QHBoxLayout()
+        header_bar.setContentsMargins(2, 0, 2, 2)
+        header_title = QLabel("Settings")
+        header_title.setObjectName("CardTitle")
+        header_sub = QLabel("Organized into simple groups — changes apply when you click Save Settings.")
+        header_sub.setObjectName("MutedText")
+        header_text = QVBoxLayout()
+        header_text.setSpacing(1)
+        header_text.addWidget(header_title)
+        header_text.addWidget(header_sub)
+        header_bar.addLayout(header_text, 1)
 
         btn_save = InteractiveRibbonBtn("Save Settings", make_vector_icon("check", "#FFFFFF", 14))
         btn_save.setObjectName("PrimaryButton")
         btn_save.clicked.connect(self._save_settings_form)
+        attach_press_feedback(btn_save, "#0A84FF")
+        header_bar.addWidget(btn_save)
+        layout.addLayout(header_bar)
 
-        cfg_card, cfg_layout = _make_surface_card(
-            "Preferences",
-            "Configure background watching, folder organization, and Windows integration.",
-            right_widget=btn_save,
+        # ------------------------------------------------------------------
+        # Card 1: Core Routing & Watch Folder
+        # ------------------------------------------------------------------
+        card_core = SettingCard(
+            "Core Routing & Watch Folder",
+            "Control background watching, folder style, and unrecognized files.",
         )
 
-        form = QFormLayout()
-        form.setVerticalSpacing(12)
-        form.setHorizontalSpacing(18)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        self.chk_auto_sort = QCheckBox(
-            "Automatically sort new files in Downloads in the background"
+        self.chk_auto_sort = MacToggle()
+        card_core.add_row(
+            SettingRow(
+                "Automatic Sorting",
+                "Automatically sort new files in Downloads in the background.",
+                controls=self.chk_auto_sort,
+            )
         )
-        form.addRow("Automatic Sorting:", self.chk_auto_sort)
 
-        folder_row = QHBoxLayout()
-        folder_row.setSpacing(8)
         self.edit_watch_folder = QLineEdit()
+        self.edit_watch_folder.setMinimumWidth(220)
         btn_browse = InteractiveRibbonBtn("Browse...")
         btn_browse.clicked.connect(self._browse_watch_folder)
-        folder_row.addWidget(self.edit_watch_folder, 1)
-        folder_row.addWidget(btn_browse)
-        form.addRow("Folder to Organize:", folder_row)
-
-        self.chk_type_subfolders = QCheckBox(
-            "Sort into file-type subfolders (e.g. Documents\\PDF, Images\\PNG)"
+        card_core.add_row(
+            SettingRow(
+                "Folder to Organize",
+                "Primary folder monitored by Download Sorter.",
+                controls=[self.edit_watch_folder, btn_browse],
+            )
         )
-        form.addRow("Subfolder Style:", self.chk_type_subfolders)
+
+        self.chk_type_subfolders = MacToggle()
+        card_core.add_row(
+            SettingRow(
+                "File-Type Subfolders",
+                "Sort into subfolders (e.g. Documents\\PDF, Images\\PNG) when no custom rule matches.",
+                controls=self.chk_type_subfolders,
+            )
+        )
 
         self.combo_fallback = QComboBox()
         self.combo_fallback.addItem("Put them in an 'Other' folder", "other")
         self.combo_fallback.addItem("Leave them in Downloads", "leave")
-        form.addRow("Unrecognized File Types:", self.combo_fallback)
+        card_core.add_row(
+            SettingRow(
+                "Unrecognized File Types",
+                "What to do when a file doesn't match any rule or extension category.",
+                controls=self.combo_fallback,
+            )
+        )
 
-        hold_row = QHBoxLayout()
-        hold_row.setSpacing(8)
-        self.chk_hold_3mf = QCheckBox("Keep new .3MF files in Downloads for")
+        self.spin_settle = QDoubleSpinBox()
+        self.spin_settle.setRange(0.0, 60.0)
+        self.spin_settle.setSingleStep(0.5)
+        self.spin_settle.setSuffix(" s")
+        card_core.add_row(
+            SettingRow(
+                "Safety Delay",
+                "Wait a few seconds after a download finishes before moving it.",
+                controls=self.spin_settle,
+            )
+        )
+        layout.addWidget(card_core)
+
+        # ------------------------------------------------------------------
+        # Card 2: Archives & 3D Print Workflows
+        # ------------------------------------------------------------------
+        card_archives = SettingCard(
+            "Archives & 3D Print Workflows",
+            "Automatic ZIP extraction with zip-bomb protection and 3D slicer staging.",
+        )
+
+        self.chk_auto_unzip_all = MacToggle()
+        card_archives.add_row(
+            SettingRow(
+                "Automatically extract .zip archives",
+                "Unpacks sorted .zip files into a subfolder named after the archive.",
+                controls=self.chk_auto_unzip_all,
+                badge_text="Verified vs Zip Bombs",
+                badge_variant="green",
+            )
+        )
+
+        zip_sub = DependentSubGroup(self.chk_auto_unzip_all, collapse_when_off=False)
+        sec_banner = QFrame()
+        set_widget_prop(sec_banner, "securityBanner", True)
+        sec_row = QHBoxLayout(sec_banner)
+        sec_row.setContentsMargins(10, 6, 10, 6)
+        sec_row.setSpacing(8)
+        lbl_shield = QLabel("Pre-extraction guard:")
+        lbl_shield.setStyleSheet(
+            f"font-size: 11px; font-weight: 600; color: {PALETTE['accent_green']}; background: transparent;"
+        )
+        lbl_specs = QLabel(
+            "Streams bytes in 64 KB blocks • Max 100:1 ratio • Max 500 MB • Blocks zip-slip & symlinks"
+        )
+        lbl_specs.setWordWrap(True)
+        set_widget_prop(lbl_specs, "securitySpec", True)
+        sec_row.addWidget(lbl_shield)
+        sec_row.addWidget(lbl_specs, 1)
+
+        sec_wrap = QWidget()
+        sec_wrap_l = QVBoxLayout(sec_wrap)
+        sec_wrap_l.setContentsMargins(14, 4, 14, 2)
+        sec_wrap_l.addWidget(sec_banner)
+        zip_sub.add_row(sec_wrap)
+
+        self.chk_zip_keep_original = MacToggle()
+        zip_sub.add_row(
+            SettingRow(
+                "Keep original .zip alongside extracted folder",
+                "When off, the original .zip is safely archived to Archives\\_Extracted.",
+                controls=self.chk_zip_keep_original,
+                compact=True,
+            )
+        )
+        card_archives.add_row(zip_sub, with_divider=False)
+
+        self.chk_hold_3mf = MacToggle()
+        card_archives.add_row(
+            SettingRow(
+                "3D Printing (.3MF) Hold",
+                "Keep new .3MF files in Downloads while you slice, before moving to 3D Models.",
+                controls=self.chk_hold_3mf,
+                badge_text="3D Print",
+                badge_variant="cyan",
+            )
+        )
+
+        hold_sub = DependentSubGroup(self.chk_hold_3mf, collapse_when_off=False)
         self.spin_hold_days = QSpinBox()
         self.spin_hold_days.setRange(1, 60)
         self.spin_hold_days.setSuffix(" days")
-        self.chk_hold_3mf.toggled.connect(self.spin_hold_days.setEnabled)
-        hold_after = QLabel("before moving to 3D Models")
-        hold_after.setStyleSheet("color: #8E8E93;")
-        hold_row.addWidget(self.chk_hold_3mf)
-        hold_row.addWidget(self.spin_hold_days)
-        hold_row.addWidget(hold_after)
-        hold_row.addStretch(1)
-        form.addRow("3D Printing (.3MF) Hold:", hold_row)
-
-        notif_row = QHBoxLayout()
-        notif_row.setSpacing(8)
-        self.chk_notifications = QCheckBox(
-            "Show a ribbon with Undo in the top-right corner when files are sorted"
+        hold_sub.add_row(
+            SettingRow(
+                "Hold Duration",
+                "Days to keep .3MF files in Downloads before filing.",
+                controls=self.spin_hold_days,
+                compact=True,
+            )
         )
+        card_archives.add_row(hold_sub, with_divider=False)
+        layout.addWidget(card_archives)
+
+        # ------------------------------------------------------------------
+        # Card 3: Notifications & Quick Switcher HUD
+        # ------------------------------------------------------------------
+        card_hud = SettingCard(
+            "Notifications & Quick Switcher",
+            "Side ribbon Undo alerts and recent-file picker for Open/Upload dialogs.",
+        )
+
+        self.chk_notifications = MacToggle()
+        card_hud.add_row(
+            SettingRow(
+                "Side Ribbon Notifications",
+                "Show a ribbon with 1-click Undo in the top-right corner when files are sorted.",
+                controls=self.chk_notifications,
+            )
+        )
+
+        notif_sub = DependentSubGroup(self.chk_notifications, collapse_when_off=False)
         self.spin_ribbon_timeout = QDoubleSpinBox()
         self.spin_ribbon_timeout.setRange(1.0, 30.0)
         self.spin_ribbon_timeout.setDecimals(0)
         self.spin_ribbon_timeout.setSingleStep(1.0)
         self.spin_ribbon_timeout.setSuffix(" s")
-        self.spin_ribbon_timeout.setFixedWidth(104)
+        self.spin_ribbon_timeout.setFixedWidth(90)
         self.spin_ribbon_timeout.setToolTip(
             "How many seconds before Side Ribbon notifications automatically close."
         )
-        self.chk_notifications.toggled.connect(self.spin_ribbon_timeout.setEnabled)
-
         self.btn_preview_ribbon = InteractiveRibbonBtn("Preview Ribbon")
         self.btn_preview_ribbon.clicked.connect(self._on_preview_ribbon)
         self.btn_close_ribbons = InteractiveRibbonBtn("Close Ribbons")
         self.btn_close_ribbons.setObjectName("GhostButton")
         self.btn_close_ribbons.setToolTip("Immediately dismiss any active Side Ribbon notifications.")
         self.btn_close_ribbons.clicked.connect(self._on_close_all_ribbons)
+        notif_sub.add_row(
+            SettingRow(
+                "Ribbon Timeout & Preview",
+                "Auto-close delay and quick test controls.",
+                controls=[self.spin_ribbon_timeout, self.btn_preview_ribbon, self.btn_close_ribbons],
+                compact=True,
+            )
+        )
+        card_hud.add_row(notif_sub, with_divider=False)
 
-        notif_opts = QHBoxLayout()
-        notif_opts.setSpacing(8)
-        notif_opts.addWidget(QLabel("Close after"))
-        notif_opts.addWidget(self.spin_ribbon_timeout)
-        notif_opts.addWidget(self.btn_preview_ribbon)
-        notif_opts.addWidget(self.btn_close_ribbons)
-        notif_opts.addStretch(1)
-        notif_col = QVBoxLayout()
-        notif_col.setSpacing(6)
-        notif_row.addWidget(self.chk_notifications)
-        notif_row.addStretch(1)
-        notif_col.addLayout(notif_row)
-        notif_col.addLayout(notif_opts)
-        form.addRow("Notifications:", notif_col)
+        self.chk_quick_switcher = MacToggle()
+        card_hud.add_row(
+            SettingRow(
+                "Quick Switcher",
+                "Offer files Download Sorter just sorted inside Open and Upload file dialogs.",
+                controls=self.chk_quick_switcher,
+            )
+        )
 
-        updates_row = QHBoxLayout()
-        updates_row.setSpacing(8)
-        self.chk_check_updates = QCheckBox("Check for new versions once a day")
-        self.chk_check_updates.setToolTip(
-            "Asks GitHub which version is newest. Nothing about you or your files is sent."
-        )
-        self.btn_check_updates = InteractiveRibbonBtn(
-            "Check for Updates Now",
-            make_vector_icon("refresh", "#F5F5F7", 14),
-        )
-        self.btn_check_updates.setToolTip(
-            "Check GitHub Releases right now for a newer version of Download Sorter."
-        )
-        self.btn_check_updates.clicked.connect(self._on_check_updates_now)
-        updates_row.addWidget(self.chk_check_updates)
-        updates_row.addWidget(self.btn_check_updates)
-        updates_row.addStretch(1)
-        form.addRow("Updates:", updates_row)
-
-        qs_row = QHBoxLayout()
-        qs_row.setSpacing(8)
-        self.chk_quick_switcher = QCheckBox(
-            "Offer the files it just sorted in Open and Upload dialogs"
-        )
+        qs_sub = DependentSubGroup(self.chk_quick_switcher, collapse_when_off=False)
         self.spin_qs_timeout = QDoubleSpinBox()
         self.spin_qs_timeout.setRange(10.0, 3600.0)
         self.spin_qs_timeout.setDecimals(0)
         self.spin_qs_timeout.setSingleStep(30.0)
         self.spin_qs_timeout.setSuffix(" s")
-        self.spin_qs_timeout.setFixedWidth(90)
+        self.spin_qs_timeout.setFixedWidth(86)
         self.spin_qs_timeout.setToolTip("How many seconds general downloads stay offered in Quick Switcher.")
 
         self.spin_qs_3d_hours = QDoubleSpinBox()
@@ -1538,7 +1780,7 @@ class MainWindow(QMainWindow):
         self.spin_qs_3d_hours.setDecimals(1)
         self.spin_qs_3d_hours.setSingleStep(1.0)
         self.spin_qs_3d_hours.setSuffix(" hrs")
-        self.spin_qs_3d_hours.setFixedWidth(90)
+        self.spin_qs_3d_hours.setFixedWidth(86)
         self.spin_qs_3d_hours.setToolTip("How many hours 3D/CAD files (.3mf, .stl, .step, etc.) stay offered.")
 
         self.edit_qs_hotkey = QLineEdit()
@@ -1548,54 +1790,34 @@ class MainWindow(QMainWindow):
             "number or F-key (default: Ctrl+G)."
         )
 
-        self.chk_quick_switcher.toggled.connect(self.spin_qs_timeout.setEnabled)
-        self.chk_quick_switcher.toggled.connect(self.spin_qs_3d_hours.setEnabled)
-        self.chk_quick_switcher.toggled.connect(self.edit_qs_hotkey.setEnabled)
-
-        qs_opts = QHBoxLayout()
-        qs_opts.setSpacing(8)
-        qs_opts.addWidget(QLabel("Offer files for"))
-        qs_opts.addWidget(self.spin_qs_timeout)
-        qs_opts.addWidget(QLabel("3D/CAD files for"))
-        qs_opts.addWidget(self.spin_qs_3d_hours)
-        qs_opts.addWidget(QLabel("Pick with"))
-        qs_opts.addWidget(self.edit_qs_hotkey)
-        qs_opts.addStretch(1)
-        qs_col = QVBoxLayout()
-        qs_col.setSpacing(6)
-        qs_row.addWidget(self.chk_quick_switcher)
-        qs_row.addStretch(1)
-        qs_col.addLayout(qs_row)
-        qs_col.addLayout(qs_opts)
-        form.addRow("Quick Switcher:", qs_col)
-
-        self.spin_settle = QDoubleSpinBox()
-        self.spin_settle.setRange(0.0, 60.0)
-        self.spin_settle.setSingleStep(0.5)
-        self.spin_settle.setSuffix(" s")
-        settle_row = QHBoxLayout()
-        settle_row.setSpacing(8)
-        settle_row.addWidget(self.spin_settle)
-        settle_hint = QLabel("Wait a few seconds after a download finishes before moving it")
-        settle_hint.setStyleSheet("color: #8E8E93;")
-        settle_row.addWidget(settle_hint, 1)
-        form.addRow("Safety Delay:", settle_row)
-
-        self.chk_startup = QCheckBox("Start Download Sorter automatically when I sign in to Windows")
-        form.addRow("Windows Integration:", self.chk_startup)
-
-        self.chk_context_menu = QCheckBox(
-            "Add 'Sort with Download Sorter' when I right-click a folder in File Explorer"
+        qs_sub.add_row(
+            SettingRow(
+                "Offer Window & Hotkey",
+                "General seconds, 3D/CAD hours, and keyboard pick shortcut.",
+                controls=[self.spin_qs_timeout, self.spin_qs_3d_hours, self.edit_qs_hotkey],
+                compact=True,
+            )
         )
-        form.addRow("", self.chk_context_menu)
+        card_hud.add_row(qs_sub, with_divider=False)
+        layout.addWidget(card_hud)
 
-        chrome_col = QVBoxLayout()
-        chrome_col.setSpacing(6)
+        # ------------------------------------------------------------------
+        # Card 4: Chrome Extension Integration
+        # ------------------------------------------------------------------
+        self.lbl_chrome_status = _make_badge("READY TO SETUP", "neutral")
+        card_chrome = SettingCard(
+            "Chrome Extension",
+            "Route Chrome downloads straight into sorted subfolders so Chrome's bubble stays draggable.",
+            header_right_widget=self.lbl_chrome_status,
+        )
+
+        chrome_body = QWidget()
+        chrome_col = QVBoxLayout(chrome_body)
+        chrome_col.setContentsMargins(14, 10, 14, 10)
+        chrome_col.setSpacing(8)
+
         chrome_row = QHBoxLayout()
         chrome_row.setSpacing(8)
-        self.lbl_chrome_status = _make_badge("READY TO SETUP", "neutral")
-        chrome_row.addWidget(self.lbl_chrome_status)
-
         self.btn_install_chrome_host = InteractiveRibbonBtn(
             "Install Chrome Host",
             make_vector_icon("bolt", "#FFFFFF", 14),
@@ -1644,10 +1866,55 @@ class MainWindow(QMainWindow):
         self.lbl_chrome_hint.setOpenExternalLinks(False)
         self.lbl_chrome_hint.linkActivated.connect(lambda _href: self.open_chrome_walkthrough())
         chrome_col.addWidget(self.lbl_chrome_hint)
-        form.addRow("Chrome Extension:", chrome_col)
+        card_chrome.add_row(chrome_body)
+        layout.addWidget(card_chrome)
 
-        backup_row = QHBoxLayout()
-        backup_row.setSpacing(8)
+        # ------------------------------------------------------------------
+        # Card 5: Windows, Updates & Backup
+        # ------------------------------------------------------------------
+        card_sys = SettingCard(
+            "System, Updates & Backup",
+            "Windows integration, release checks, and portable configuration backup.",
+        )
+
+        self.chk_startup = MacToggle()
+        card_sys.add_row(
+            SettingRow(
+                "Start at Windows Sign-In",
+                "Launch Download Sorter automatically in the system tray when you log in.",
+                controls=self.chk_startup,
+            )
+        )
+
+        self.chk_context_menu = MacToggle()
+        card_sys.add_row(
+            SettingRow(
+                "Explorer Context Menu",
+                "Add 'Sort with Download Sorter' when you right-click a folder in File Explorer.",
+                controls=self.chk_context_menu,
+            )
+        )
+
+        self.chk_check_updates = MacToggle()
+        self.chk_check_updates.setToolTip(
+            "Asks GitHub which version is newest. Nothing about you or your files is sent."
+        )
+        self.btn_check_updates = InteractiveRibbonBtn(
+            "Check for Updates Now",
+            make_vector_icon("refresh", "#F5F5F7", 14),
+        )
+        self.btn_check_updates.setToolTip(
+            "Check GitHub Releases right now for a newer version of Download Sorter."
+        )
+        self.btn_check_updates.clicked.connect(self._on_check_updates_now)
+        card_sys.add_row(
+            SettingRow(
+                "Automatic Update Checks",
+                "Check GitHub once a day for a newer release.",
+                controls=[self.btn_check_updates, self.chk_check_updates],
+            )
+        )
+
         self.btn_carry_over_settings = InteractiveRibbonBtn(
             "Carry Over Setup && Rules...",
             make_vector_icon("layers", "#F5F5F7", 14),
@@ -1656,7 +1923,6 @@ class MainWindow(QMainWindow):
             "Carry over your v2.8 config or exported setup file without losing any rules"
         )
         self.btn_carry_over_settings.clicked.connect(self.open_carry_over_dialog)
-        backup_row.addWidget(self.btn_carry_over_settings)
 
         self.btn_export_setup = InteractiveRibbonBtn(
             "Export Setup...",
@@ -1667,13 +1933,19 @@ class MainWindow(QMainWindow):
             "Save your complete setup, rules & Folder Architecture to a JSON file"
         )
         self.btn_export_setup.clicked.connect(self._export_current_setup)
-        backup_row.addWidget(self.btn_export_setup)
-        backup_row.addStretch(1)
-        form.addRow("Upgrade & Backup", backup_row)
-
-        cfg_layout.addLayout(form)
-        layout.addWidget(cfg_card)
+        card_sys.add_row(
+            SettingRow(
+                "Upgrade & Backup",
+                "Import rules from v2.8 or export your complete setup to JSON.",
+                controls=[self.btn_carry_over_settings, self.btn_export_setup],
+            )
+        )
+        layout.addWidget(card_sys)
         layout.addStretch(1)
+
+        outer_layout.addStretch(1)
+        outer_layout.addWidget(content_col, 10)
+        outer_layout.addStretch(1)
         return page
 
     # ------------------------------------------------------------------
@@ -2123,6 +2395,9 @@ class MainWindow(QMainWindow):
         self.chk_hold_3mf.setChecked(cfg.hold_3mf_enabled)
         self.spin_hold_days.setValue(max(1, int(cfg.hold_3mf_days)))
         self.spin_hold_days.setEnabled(cfg.hold_3mf_enabled)
+        self.chk_auto_unzip_all.setChecked(bool(cfg.auto_unzip_all))
+        self.chk_zip_keep_original.setChecked(bool(cfg.zip_keep_original))
+        self.chk_zip_keep_original.setEnabled(bool(cfg.auto_unzip_all))
         self.chk_startup.setChecked(is_startup_enabled())
         self.chk_context_menu.setChecked(is_context_menu_enabled())
         self._refresh_chrome_status()
@@ -2656,6 +2931,8 @@ class MainWindow(QMainWindow):
         self.edit_qs_hotkey.setText(cfg.quick_switcher_hotkey)
         cfg.hold_3mf_enabled = self.chk_hold_3mf.isChecked()
         cfg.hold_3mf_days = int(self.spin_hold_days.value())
+        cfg.auto_unzip_all = self.chk_auto_unzip_all.isChecked()
+        cfg.zip_keep_original = self.chk_zip_keep_original.isChecked()
         self._commit_config(cfg)
 
         warnings: list[str] = []
@@ -2859,6 +3136,18 @@ class MainWindow(QMainWindow):
         self.refresh_all()
         return dlg
 
+    def _open_detox_dialog(self) -> DetoxDialog:
+        dlg = DetoxDialog(self.service, self)
+        dlg.exec()
+        self.refresh_all()
+        return dlg
+
+    def _open_quick_search(self) -> None:
+        from download_sorter.ui.quick_search_palette import QuickSearchPalette
+
+        dlg = QuickSearchPalette(self.service.db, self.service.watch_root, self)
+        dlg.exec()
+
     def complete_walkthrough(self) -> None:
         """Persist tutorial completion and smoothly hide the Home instructions block."""
         slide_toggle(
@@ -2914,6 +3203,9 @@ class MainWindow(QMainWindow):
                 btn.set_collapsed(width < self.HEADER_COMPACT_WIDTH)
             for btn in (self.btn_pause, self.btn_file_held):
                 btn.set_collapsed(width < self.HEADER_TIGHT_WIDTH)
+            for btn in (getattr(self, "btn_detox", None), getattr(self, "btn_quick_search", None)):
+                if btn is not None:
+                    btn.set_collapsed(width < 1200)
         if hasattr(self, "list_test_trace"):
             show_trace = height >= self.TESTER_TRACE_MIN_HEIGHT
             if self.list_test_trace.isHidden() == show_trace:

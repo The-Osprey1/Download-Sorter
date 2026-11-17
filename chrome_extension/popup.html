@@ -3,154 +3,93 @@
 <head>
   <meta charset="utf-8" />
   <title>Download Sorter Connector</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      width: 320px;
-      background: #111113;
-      color: #f5f5f7;
-      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 12.5px;
-      padding: 14px;
-    }
-    .card {
-      background: #1c1c1e;
-      border: 1px solid #2c2c2e;
-      border-radius: 12px;
-      padding: 12px 14px;
-      margin-bottom: 10px;
-    }
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 6px;
-    }
-    .title-wrap {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .title-wrap img { width: 22px; height: 22px; }
-    .title { font-size: 14px; font-weight: 600; color: #ffffff; }
-    .pill {
-      padding: 3px 9px;
-      border-radius: 10px;
-      font-size: 10.5px;
-      font-weight: 600;
-      border: 1px solid transparent;
-    }
-    .pill.ok {
-      background: rgba(48, 209, 88, 0.16);
-      color: #30d158;
-      border-color: rgba(48, 209, 88, 0.4);
-    }
-    .pill.warn {
-      background: rgba(255, 159, 10, 0.16);
-      color: #ff9f0a;
-      border-color: rgba(255, 159, 10, 0.4);
-    }
-    .pill.err {
-      background: rgba(255, 69, 58, 0.16);
-      color: #ff453a;
-      border-color: rgba(255, 69, 58, 0.4);
-    }
-    .muted { color: #8e8e93; font-size: 11.5px; line-height: 1.4; }
-    .row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      margin-top: 10px;
-    }
-    .toggle-btn {
-      flex: 1;
-      border: 1px solid #3a3a3c;
-      background: #2c2c2e;
-      color: #f5f5f7;
-      border-radius: 8px;
-      padding: 7px 10px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .toggle-btn:hover { background: #363639; }
-    .primary-btn {
-      flex: 1;
-      border: none;
-      background: #0a84ff;
-      color: #ffffff;
-      border-radius: 8px;
-      padding: 7px 10px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .primary-btn:hover { background: #2693ff; }
-    .recent-title {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-      font-weight: 600;
-      color: #ebebf5;
-    }
-    .link-btn {
-      background: none;
-      border: none;
-      color: #8e8e93;
-      font-size: 11px;
-      cursor: pointer;
-    }
-    .link-btn:hover { color: #ffffff; }
-    .list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
-    .item {
-      background: #141416;
-      border: 1px solid #252528;
-      border-radius: 8px;
-      padding: 6px 8px;
-    }
-    .item-name {
-      font-weight: 500;
-      color: #f5f5f7;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .item-dest {
-      color: #5ac8fa;
-      font-size: 11px;
-      margin-top: 2px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-  </style>
+  <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <div class="card">
-    <div class="header">
-      <div class="title-wrap">
-        <img src="icons/icon48.png" alt="Download Sorter" />
-        <span class="title">Download Sorter</span>
+  <div class="popup-shell" id="appRoot" data-routing="active">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+            <path d="M8 2V10.5M8 10.5L4.5 7M8 10.5L11.5 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2.5 12.5H13.5" stroke="#5AC8FA" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <span class="brand-title">Download Sorter</span>
       </div>
-      <span id="status-pill" class="pill warn">Checking...</span>
-    </div>
-    <p id="status-detail" class="muted">Connecting to desktop sorter...</p>
-    <div class="row">
-      <button id="btn-toggle" class="toggle-btn">Routing: ON</button>
-      <button id="btn-open" class="primary-btn">Open App</button>
-    </div>
-  </div>
 
-  <div class="card" style="margin-bottom: 0;">
-    <div class="recent-title">
-      <span>Recently Routed in Chrome</span>
-      <button id="btn-clear" class="link-btn">Clear</button>
-    </div>
-    <ul id="recent-list" class="list"></ul>
-    <p id="recent-empty" class="muted">New Chrome downloads save straight into your sorted folders so dragging never breaks.</p>
+      <div id="status-pill" class="status-pill" role="status" aria-live="polite">
+        <span class="status-dot"></span>
+        <span id="status-text">Checking...</span>
+      </div>
+    </header>
+
+    <section class="card routing-card">
+      <div>
+        <div class="routing-title">Chrome Auto-Routing</div>
+        <div class="routing-subtitle" id="status-detail">Connecting to desktop sorter...</div>
+      </div>
+      <label class="mac-switch" title="Toggle Chrome Direct Routing">
+        <input type="checkbox" id="routing-toggle" checked />
+        <span class="mac-slider"></span>
+      </label>
+    </section>
+
+    <section class="quick-actions" aria-label="Quick Actions">
+      <button type="button" class="btn-action btn-primary-subtle" id="btn-open">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M6 3H3.5C2.67 3 2 3.67 2 4.5V12.5C2 13.33 2.67 14 3.5 14H11.5C12.33 14 13 13.33 13 12.5V10M9.5 2H14M14 2V6.5M14 2L7.5 8.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>Open App</span>
+      </button>
+
+      <button type="button" class="btn-action" id="btn-pause" aria-pressed="false">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="4" y="3" width="2.6" height="10" rx="1" fill="currentColor"/>
+          <rect x="9.4" y="3" width="2.6" height="10" rx="1" fill="currentColor"/>
+        </svg>
+        <span id="pause-label">Pause App</span>
+      </button>
+
+      <button type="button" class="btn-action" id="btn-undo">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3.5 6.5H10C11.93 6.5 13.5 8.07 13.5 10C13.5 11.93 11.93 13.5 10 13.5H6M3.5 6.5L6.5 3.5M3.5 6.5L6.5 9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span id="undo-label">Undo Last</span>
+      </button>
+    </section>
+
+    <section class="card site-test-card" id="site-test-card">
+      <div class="site-test-info">
+        <div class="site-test-host" id="site-test-host">Current Tab</div>
+        <div class="site-test-result" id="site-test-result">Click Test to preview site routing</div>
+      </div>
+      <button type="button" class="btn-item" id="btn-test-site">Test Site</button>
+    </section>
+
+    <section class="recent-section">
+      <div class="section-header">
+        <div class="section-header-left">
+          <span class="section-title">RECENTLY ROUTED</span>
+          <span class="section-count" id="recent-count">0</span>
+        </div>
+        <button id="btn-clear" class="link-btn">Clear</button>
+      </div>
+
+      <ul id="recent-list" class="recent-list" role="list"></ul>
+
+      <div class="empty-state" id="recent-empty">
+        <div class="empty-halo" aria-hidden="true"></div>
+        <div class="empty-icon" aria-hidden="true">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+            <path d="M4 10C4 7.79086 5.79086 6 8 6H12.3431C13.404 6 14.4214 6.42143 15.1716 7.17157L16.8284 8.82843C17.5786 9.57857 18.596 10 19.6569 10H24C26.2091 10 28 11.7909 28 14V22C28 24.2091 26.2091 26 24 26H8C5.79086 26 4 24.2091 4 22V10Z" stroke="#2C2C2E" stroke-width="1.75" fill="#1C1C1E"/>
+            <path d="M16 14V21M16 21L13 18M16 21L19 18" stroke="#5AC8FA" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <p class="empty-title">No downloads routed yet</p>
+        <p class="empty-desc">New Chrome downloads save straight into your sorted folders so dragging never breaks.</p>
+      </div>
+    </section>
   </div>
 
   <script src="popup.js"></script>

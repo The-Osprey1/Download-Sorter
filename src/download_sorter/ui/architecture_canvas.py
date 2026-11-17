@@ -1,20 +1,41 @@
-"""Interactive layered Folder Architecture canvas, premade/custom dialogs & shift confirmation."""
+"""Interactive direct-manipulation Folder Architecture canvas, template shelf, pills & dialogs."""
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QMimeData,
+    QPoint,
+    QPointF,
+    QRectF,
+    Qt,
+    QVariantAnimation,
+    Signal,
+)
+from PySide6.QtGui import (
+    QColor,
+    QDrag,
+    QFont,
+    QFontMetrics,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -24,6 +45,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -31,11 +53,12 @@ from PySide6.QtWidgets import (
 )
 
 from download_sorter.architecture import (
-    ARCHITECTURE_PRESETS,
     KIND_COLORS,
     PREMADE_FOLDER_CATALOG,
     ArchNode,
     FolderArchitecture,
+    _clean_exts,
+    _clean_strs,
     apply_architecture_to_config,
     architecture_from_config,
 )
@@ -44,13 +67,84 @@ from download_sorter.ui.motion import (
     CollapsibleRibbonBtn,
     ElidedLabel,
     InteractiveRibbonBtn,
+    animations_enabled,
     make_vector_icon,
 )
 from download_sorter.ui.workers import run_async
 
+MIME_TEMPLATE = "application/x-downloadsorter-template"
+
+KIND_CHOICES: tuple[tuple[str, str], ...] = (
+    ("Document", "doc"),
+    ("PDF", "pdf"),
+    ("3D Print", "print"),
+    ("CAD", "cad"),
+    ("CNC", "cnc"),
+    ("Sheet", "sheet"),
+    ("School", "school"),
+    ("Career", "career"),
+    ("Finance", "finance"),
+    ("Image", "image"),
+    ("Video", "video"),
+    ("Audio", "audio"),
+    ("Archive", "archive"),
+    ("Installer", "installer"),
+    ("Code", "code"),
+    ("Design", "design"),
+    ("Fonts", "fonts"),
+)
+
+BLUEPRINT_PILLS: tuple[tuple[str, str, str], ...] = (
+    ("standard", "Standard", "Balanced 2-Tier Default"),
+    ("basic_starter", "Starter", "Clean 2-Tier Foundation"),
+    ("flat", "1-Tier", "Minimalist 1-Tier Flat Categories"),
+    ("maker_pro", "Maker", "Maker & CAD Pro (3-Tier Workshop)"),
+    ("student_pro", "Student", "Student & Career Pro (3-Tier Academic)"),
+    ("creator_pro", "Creator", "Creator, Design & Finance (3-Tier Studio)"),
+)
+
+
+def _make_pill_button(text: str, *, checkable: bool = True, tooltip: str = "") -> QPushButton:
+    btn = QPushButton(text)
+    btn.setObjectName("ArchPillBtn")
+    btn.setCheckable(checkable)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    btn.setStyleSheet(
+        """
+        QPushButton#ArchPillBtn {
+            background-color: #1C1C1E;
+            color: #AEAEB2;
+            border: 1px solid #2C2C2E;
+            border-radius: 7px;
+            padding: 3px 9px;
+            font-size: 11.5px;
+            font-weight: 600;
+        }
+        QPushButton#ArchPillBtn:hover {
+            background-color: #262629;
+            border-color: #3A3A3C;
+            color: #F5F5F7;
+        }
+        QPushButton#ArchPillBtn:checked {
+            background-color: rgba(10, 132, 255, 42);
+            border: 1px solid #0A84FF;
+            color: #FFFFFF;
+        }
+        QPushButton#ArchPillBtn:disabled {
+            background-color: #161618;
+            color: #48484A;
+            border-color: #222225;
+        }
+        """
+    )
+    if tooltip:
+        btn.setToolTip(tooltip)
+    return btn
+
 
 class PremadeFolderDialog(QDialog):
-    """Pick one or more premade folders from the 46-template catalog for any tier."""
+    """Pick one or more premade folders from the 46-template catalog using visual pills."""
 
     def __init__(
         self,
@@ -61,45 +155,48 @@ class PremadeFolderDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.arch = arch
+        self._selected_tier = max(1, min(arch.tier_count, default_tier))
+        self._preferred_parent_id = default_parent_id
         self.setWindowTitle("Add Premade Folders")
         self.resize(620, 520)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
-        root.setSpacing(12)
+        root.setSpacing(10)
 
         hdr = QLabel("Choose from 45+ premade folders & smart packs to place into your tier layout:")
         hdr.setWordWrap(True)
         hdr.setStyleSheet("color: #AEAEB2; font-size: 12.5px;")
         root.addWidget(hdr)
 
-        top_controls = QHBoxLayout()
-        top_controls.setSpacing(10)
-
-        self.combo_tier = QComboBox()
+        tier_row = QHBoxLayout()
+        tier_row.setSpacing(6)
+        tier_row.addWidget(QLabel("Target Tier:"))
+        self._tier_btns: dict[int, QPushButton] = {}
         for t in range(1, arch.tier_count + 1):
-            label = f"Tier {t}" + (" (Main Folder)" if t == 1 else " (Subfolder)")
-            self.combo_tier.addItem(label, t)
-        idx_t = self.combo_tier.findData(max(1, min(arch.tier_count, default_tier)))
-        self.combo_tier.setCurrentIndex(max(0, idx_t))
-        self.combo_tier.currentIndexChanged.connect(self._on_tier_changed)
+            label = f"Tier {t}" + (" (Main)" if t == 1 else "")
+            btn = _make_pill_button(label, checkable=True)
+            btn.clicked.connect(lambda _chk, tier=t: self._select_tier(tier))
+            self._tier_btns[t] = btn
+            tier_row.addWidget(btn)
+        tier_row.addStretch(1)
+        root.addLayout(tier_row)
 
-        self.combo_parent = QComboBox()
-        self.combo_parent.setMinimumWidth(180)
+        parent_hdr = QLabel("Inside Parent Folder:")
+        parent_hdr.setStyleSheet("color: #98989D; font-size: 11.5px;")
+        root.addWidget(parent_hdr)
+
+        self.list_parents = QListWidget()
+        self.list_parents.setMaximumHeight(92)
+        root.addWidget(self.list_parents)
 
         self.edit_search = QLineEdit()
         self.edit_search.setPlaceholderText("Filter premade folders (e.g. PDF, School, CAD, Invoice)...")
         self.edit_search.textChanged.connect(self._populate_list)
-
-        top_controls.addWidget(QLabel("Target Tier:"))
-        top_controls.addWidget(self.combo_tier)
-        top_controls.addWidget(QLabel("Inside Parent:"))
-        top_controls.addWidget(self.combo_parent)
-        root.addLayout(top_controls)
         root.addWidget(self.edit_search)
 
         self.list_widget = QListWidget()
-        self.list_widget.setMinimumHeight(290)
+        self.list_widget.setMinimumHeight(210)
         root.addWidget(self.list_widget, 1)
 
         footer = QHBoxLayout()
@@ -121,45 +218,60 @@ class PremadeFolderDialog(QDialog):
         footer.addWidget(buttons)
         root.addLayout(footer)
 
-        self._refresh_parents(default_parent_id)
-        self._populate_list()
+        self._select_tier(self._selected_tier)
 
-    def _on_tier_changed(self) -> None:
-        self._refresh_parents(None)
+    def _select_tier(self, tier: int) -> None:
+        self._selected_tier = max(1, min(self.arch.tier_count, tier))
+        for t, btn in self._tier_btns.items():
+            btn.setChecked(t == self._selected_tier)
+        self._refresh_parents(self._preferred_parent_id)
         self._populate_list()
 
     def _refresh_parents(self, preferred_id: str | None) -> None:
-        tier = int(self.combo_tier.currentData() or 1)
-        self.combo_parent.clear()
+        tier = self._selected_tier
+        self.list_parents.clear()
         if tier <= 1:
-            self.combo_parent.addItem("Downloads/ (Root)", None)
-            self.combo_parent.setEnabled(False)
+            it = QListWidgetItem("Downloads/ (Root)")
+            it.setData(Qt.ItemDataRole.UserRole, None)
+            self.list_parents.addItem(it)
+            self.list_parents.setCurrentRow(0)
+            self.list_parents.setEnabled(False)
             return
-        self.combo_parent.setEnabled(True)
-        self.combo_parent.addItem("(Auto-match default parent)", "")
+        self.list_parents.setEnabled(True)
+        auto_it = QListWidgetItem("(Auto-match default parent)")
+        auto_it.setData(Qt.ItemDataRole.UserRole, "")
+        self.list_parents.addItem(auto_it)
+        target_row = 0
         for pnode in self.arch.nodes_in_tier(tier - 1):
-            self.combo_parent.addItem(self.arch.node_relative_path(pnode.id), pnode.id)
-        if preferred_id:
-            idx = self.combo_parent.findData(preferred_id)
-            if idx >= 0:
-                self.combo_parent.setCurrentIndex(idx)
+            it = QListWidgetItem(self.arch.node_relative_path(pnode.id))
+            it.setData(Qt.ItemDataRole.UserRole, pnode.id)
+            self.list_parents.addItem(it)
+            if preferred_id and pnode.id == preferred_id:
+                target_row = self.list_parents.count() - 1
+        self.list_parents.setCurrentRow(target_row)
 
     def _populate_list(self) -> None:
         checked_keys = set(self.selected_keys())
         self.list_widget.clear()
         query = self.edit_search.text().strip().lower()
-        target_tier = int(self.combo_tier.currentData() or 1)
+        target_tier = self._selected_tier
         show_all = self.chk_show_all.isChecked()
 
         for item in PREMADE_FOLDER_CATALOG:
             if not show_all and int(item["tier"]) != target_tier:
                 continue
-            hay = f"{item['name']} {item['summary']} {' '.join(item['extensions'])} {' '.join(item['keywords'])}".lower()
+            hay = (
+                f"{item['name']} {item['summary']} "
+                f"{' '.join(item['extensions'])} {' '.join(item['keywords'])}"
+            ).lower()
             if query and query not in hay:
                 continue
             rule_tags: list[str] = []
             if item["extensions"]:
-                rule_tags.append(", ".join(item["extensions"][:4]) + ("..." if len(item["extensions"]) > 4 else ""))
+                rule_tags.append(
+                    ", ".join(item["extensions"][:4])
+                    + ("..." if len(item["extensions"]) > 4 else "")
+                )
             if item["keywords"]:
                 rule_tags.append(f"{len(item['keywords'])} keywords")
             if item["domains"]:
@@ -184,15 +296,18 @@ class PremadeFolderDialog(QDialog):
         return keys
 
     def target_tier(self) -> int:
-        return int(self.combo_tier.currentData() or 1)
+        return self._selected_tier
 
     def target_parent_id(self) -> str | None:
-        val = self.combo_parent.currentData()
+        cur = self.list_parents.currentItem()
+        if cur is None:
+            return None
+        val = cur.data(Qt.ItemDataRole.UserRole)
         return str(val) if val else None
 
 
 class CustomFolderNodeDialog(QDialog):
-    """Create or edit a Custom Folder node with sorting rules at any tier."""
+    """Create or edit a Custom Folder node with clickable tier & category pills (zero dropdowns)."""
 
     def __init__(
         self,
@@ -206,8 +321,11 @@ class CustomFolderNodeDialog(QDialog):
         super().__init__(parent)
         self.arch = arch
         self.editing_node = node
+        self._selected_tier = max(1, min(arch.tier_count, node.tier if node else default_tier))
+        self._selected_kind = node.kind if node else "doc"
+        self._preferred_parent_id = node.parent_id if node else default_parent_id
         self.setWindowTitle("Edit Folder & Rules" if node else "New Custom Folder & Rules")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(540)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -220,41 +338,59 @@ class CustomFolderNodeDialog(QDialog):
         self.edit_name = QLineEdit(node.name if node else "")
         self.edit_name.setPlaceholderText("e.g. Lab Reports, Invoices, Guitar Tabs")
 
-        self.combo_tier = QComboBox()
+        # Clickable Tier Pill Selector
+        tier_wrap = QWidget()
+        tier_row = QHBoxLayout(tier_wrap)
+        tier_row.setContentsMargins(0, 0, 0, 0)
+        tier_row.setSpacing(6)
+        self._tier_btns: dict[int, QPushButton] = {}
         for t in range(1, arch.tier_count + 1):
-            self.combo_tier.addItem(f"Tier {t}", t)
-        cur_tier = node.tier if node else default_tier
-        idx_t = self.combo_tier.findData(max(1, min(arch.tier_count, cur_tier)))
-        self.combo_tier.setCurrentIndex(max(0, idx_t))
-        self.combo_tier.currentIndexChanged.connect(lambda: self._populate_parents(None))
+            btn = _make_pill_button(f"Tier {t}", checkable=True)
+            btn.clicked.connect(lambda _chk, tier=t: self._select_tier(tier))
+            self._tier_btns[t] = btn
+            tier_row.addWidget(btn)
+        tier_row.addStretch(1)
 
-        self.combo_parent = QComboBox()
+        # Clickable Parent Folder List
+        self.list_parents = QListWidget()
+        self.list_parents.setMaximumHeight(92)
 
-        self.combo_kind = QComboBox()
-        for k in (
-            ("Document", "doc"),
-            ("PDF", "pdf"),
-            ("3D Print / .3MF / .STL", "print"),
-            ("CAD Engineering", "cad"),
-            ("CNC / G-Code", "cnc"),
-            ("Spreadsheet", "sheet"),
-            ("School & Study", "school"),
-            ("Career & Resume", "career"),
-            ("Finance & Taxes", "finance"),
-            ("Image & Photo", "image"),
-            ("Video", "video"),
-            ("Audio", "audio"),
-            ("Archive / ZIP", "archive"),
-            ("Installer", "installer"),
-            ("Code & Dev", "code"),
-            ("Design & SVG", "design"),
-            ("Fonts", "fonts"),
-        ):
-            self.combo_kind.addItem(k[0], k[1])
-        if node:
-            idx_k = self.combo_kind.findData(node.kind)
-            if idx_k >= 0:
-                self.combo_kind.setCurrentIndex(idx_k)
+        # Clickable Category Color Pills
+        kind_wrap = QWidget()
+        kind_grid = QGridLayout(kind_wrap)
+        kind_grid.setContentsMargins(0, 0, 0, 0)
+        kind_grid.setSpacing(5)
+        self._kind_btns: dict[str, QPushButton] = {}
+        for idx, (label, k_key) in enumerate(KIND_CHOICES):
+            col_hex = KIND_COLORS.get(k_key, KIND_COLORS["default"])
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                f"""
+                QPushButton {{
+                    background-color: #1C1C1E;
+                    color: #AEAEB2;
+                    border: 1px solid #2C2C2E;
+                    border-left: 3px solid {col_hex};
+                    border-radius: 6px;
+                    padding: 3px 8px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    text-align: left;
+                }}
+                QPushButton:hover {{ background-color: #262629; color: #F5F5F7; }}
+                QPushButton:checked {{
+                    background-color: rgba(10, 132, 255, 40);
+                    border: 1px solid {col_hex};
+                    border-left: 4px solid {col_hex};
+                    color: #FFFFFF;
+                }}
+                """
+            )
+            btn.clicked.connect(lambda _chk, k=k_key: self._select_kind(k))
+            self._kind_btns[k_key] = btn
+            kind_grid.addWidget(btn, idx // 4, idx % 4)
 
         self.edit_exts = QLineEdit(", ".join(node.extensions) if node else "")
         self.edit_exts.setPlaceholderText("e.g. .pdf, .docx, .zip (leave blank for any file type)")
@@ -266,9 +402,9 @@ class CustomFolderNodeDialog(QDialog):
         self.edit_domains.setPlaceholderText("e.g. canvas.edu, makerworld.com (optional)")
 
         form.addRow("Folder Name:", self.edit_name)
-        form.addRow("Layer / Tier:", self.combo_tier)
-        form.addRow("Parent Folder:", self.combo_parent)
-        form.addRow("Category Color:", self.combo_kind)
+        form.addRow("Layer / Tier:", tier_wrap)
+        form.addRow("Parent Folder:", self.list_parents)
+        form.addRow("Category Color:", kind_wrap)
         form.addRow("File Extensions:", self.edit_exts)
         form.addRow("Filename Keywords:", self.edit_keywords)
         form.addRow("Website Domains:", self.edit_domains)
@@ -284,47 +420,73 @@ class CustomFolderNodeDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self._populate_parents(node.parent_id if node else default_parent_id)
+        self._select_kind(self._selected_kind)
+        self._select_tier(self._selected_tier)
+
+    def _select_kind(self, kind_key: str) -> None:
+        self._selected_kind = kind_key
+        for k, btn in self._kind_btns.items():
+            btn.setChecked(k == kind_key)
+
+    def _select_tier(self, tier: int) -> None:
+        self._selected_tier = max(1, min(self.arch.tier_count, tier))
+        for t, btn in self._tier_btns.items():
+            btn.setChecked(t == self._selected_tier)
+        self._populate_parents(self._preferred_parent_id)
 
     def _populate_parents(self, preferred_id: str | None) -> None:
-        tier = int(self.combo_tier.currentData() or 1)
-        self.combo_parent.clear()
+        tier = self._selected_tier
+        self.list_parents.clear()
         if tier <= 1:
-            self.combo_parent.addItem("Downloads/ (Top-Level)", None)
-            self.combo_parent.setEnabled(False)
+            it = QListWidgetItem("Downloads/ (Top-Level)")
+            it.setData(Qt.ItemDataRole.UserRole, None)
+            self.list_parents.addItem(it)
+            self.list_parents.setCurrentRow(0)
+            self.list_parents.setEnabled(False)
             return
-        self.combo_parent.setEnabled(True)
+        self.list_parents.setEnabled(True)
+        selected_row = 0
         for pnode in self.arch.nodes_in_tier(tier - 1):
-            if self.editing_node and pnode.id == self.editing_node.id:
+            if self.editing_node and (
+                pnode.id == self.editing_node.id
+                or self.arch.is_descendant_of(pnode.id, self.editing_node.id)
+            ):
                 continue
-            self.combo_parent.addItem(self.arch.node_relative_path(pnode.id), pnode.id)
-        if preferred_id:
-            idx = self.combo_parent.findData(preferred_id)
-            if idx >= 0:
-                self.combo_parent.setCurrentIndex(idx)
+            it = QListWidgetItem(self.arch.node_relative_path(pnode.id))
+            it.setData(Qt.ItemDataRole.UserRole, pnode.id)
+            self.list_parents.addItem(it)
+            if preferred_id and pnode.id == preferred_id:
+                selected_row = self.list_parents.count() - 1
+        if self.list_parents.count() > 0:
+            self.list_parents.setCurrentRow(selected_row)
 
     def _on_save(self) -> None:
         name = self.edit_name.text().strip().replace("/", "").replace("\\", "")
         if not name:
             QMessageBox.warning(self, "Missing Name", "Please enter a folder name.")
             return
-        tier = int(self.combo_tier.currentData() or 1)
-        if tier > 1 and self.combo_parent.count() == 0:
+        if self._selected_tier > 1 and self.list_parents.count() == 0:
             QMessageBox.warning(
                 self,
                 "Parent Required",
-                f"Add at least one folder in Tier {tier - 1} before placing a folder in Tier {tier}.",
+                f"Add at least one folder in Tier {self._selected_tier - 1} before placing a folder in Tier {self._selected_tier}.",
             )
             return
         self.accept()
 
     def values(self) -> dict[str, Any]:
         split = lambda s: [x.strip() for x in s.split(",") if x.strip()]
+        cur_parent = self.list_parents.currentItem()
+        parent_id = (
+            str(cur_parent.data(Qt.ItemDataRole.UserRole))
+            if (self._selected_tier > 1 and cur_parent and cur_parent.data(Qt.ItemDataRole.UserRole))
+            else None
+        )
         return {
             "name": self.edit_name.text().strip(),
-            "tier": int(self.combo_tier.currentData() or 1),
-            "parent_id": self.combo_parent.currentData() if int(self.combo_tier.currentData() or 1) > 1 else None,
-            "kind": str(self.combo_kind.currentData() or "default"),
+            "tier": self._selected_tier,
+            "parent_id": parent_id,
+            "kind": self._selected_kind or "default",
             "extensions": split(self.edit_exts.text()),
             "keywords": split(self.edit_keywords.text()),
             "domains": split(self.edit_domains.text()),
@@ -406,41 +568,353 @@ class ShiftConfirmDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class _TemplateDragList(QListWidget):
+    """Draggable list of premade folder templates with translucent Sequoia card ghost."""
+
+    template_double_clicked = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSpacing(4)
+        self.setStyleSheet(
+            """
+            QListWidget {
+                background: transparent;
+                border: none;
+                outline: none;
+            }
+            QListWidget::item {
+                background-color: #161618;
+                color: #F5F5F7;
+                border: 1px solid #2C2C2E;
+                border-radius: 8px;
+                padding: 6px 8px;
+                font-size: 11.5px;
+            }
+            QListWidget::item:hover {
+                background-color: #242428;
+                border: 1px solid #0A84FF;
+            }
+            QListWidget::item:selected {
+                background-color: #242834;
+                border: 1px solid #0A84FF;
+            }
+            """
+        )
+        self.itemDoubleClicked.connect(self._on_double_click)
+
+    def _on_double_click(self, item: QListWidgetItem) -> None:
+        tpl = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(tpl, dict) and tpl.get("key"):
+            self.template_double_clicked.emit(str(tpl["key"]))
+
+    def startDrag(self, supportedActions) -> None:  # noqa: ANN001
+        item = self.currentItem()
+        if item is None:
+            return
+        tpl = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(tpl, dict):
+            return
+
+        payload = {
+            "key": tpl["key"],
+            "name": tpl["name"],
+            "tier": tpl["tier"],
+            "kind": tpl["kind"],
+            "extensions": tpl["extensions"],
+        }
+        mime = QMimeData()
+        mime.setData(MIME_TEMPLATE, json.dumps(payload).encode("utf-8"))
+
+        color_hex = KIND_COLORS.get(str(tpl.get("kind", "default")), "#0A84FF")
+        ghost = QPixmap(186, 58)
+        ghost.fill(Qt.GlobalColor.transparent)
+        p = QPainter(ghost)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setBrush(QColor(28, 28, 30, 232))
+        p.setPen(QPen(QColor(color_hex), 1.8))
+        p.drawRoundedRect(2, 2, 182, 54, 10, 10)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color_hex))
+        p.drawRoundedRect(4, 11, 3.5, 36, 1.5, 1.5)
+
+        p.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
+        p.setPen(QColor("#F5F5F7"))
+        fm = QFontMetrics(p.font())
+        p.drawText(
+            QRectF(14, 9, 160, 20),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            fm.elidedText(str(tpl["name"]), Qt.TextElideMode.ElideRight, 158),
+        )
+        exts = ", ".join(tpl.get("extensions", [])[:3]) or f"Tier {tpl['tier']} pack"
+        p.setFont(QFont("Segoe UI", 8))
+        p.setPen(QColor("#8E8E93"))
+        p.drawText(
+            QRectF(14, 30, 160, 18),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            QFontMetrics(p.font()).elidedText(exts, Qt.TextElideMode.ElideRight, 158),
+        )
+        p.end()
+
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.setPixmap(ghost)
+        drag.setHotSpot(QPoint(93, 29))
+        drag.exec(Qt.DropAction.CopyAction)
+
+
+class TemplateShelfWidget(QFrame):
+    """Collapsible left-hand Sequoia shelf of draggable premade folder chips."""
+
+    template_activated = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("SurfaceCard")
+        self._collapsed = False
+        self._tier_filter = "all"
+        self.setFixedWidth(168)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(4)
+        self._lbl_title = QLabel("TEMPLATES")
+        self._lbl_title.setStyleSheet(
+            "color: #8E8E93; font-size: 10px; font-weight: 700; letter-spacing: 0.7px;"
+        )
+        hdr.addWidget(self._lbl_title, 1)
+
+        self.btn_toggle = QPushButton("")
+        self.btn_toggle.setIcon(make_vector_icon("arrow_left", "#98989D", 12))
+        self.btn_toggle.setFixedSize(24, 24)
+        self.btn_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle.setToolTip("Collapse or expand Template Shelf")
+        self.btn_toggle.setStyleSheet(
+            "QPushButton { background: transparent; border: 1px solid #2C2C2E; border-radius: 6px; padding: 0; }"
+            "QPushButton:hover { background: #262629; border-color: #48484A; }"
+        )
+        self.btn_toggle.clicked.connect(self.toggle_collapsed)
+        hdr.addWidget(self.btn_toggle)
+        outer.addLayout(hdr)
+
+        self._body = QWidget()
+        bl = QVBoxLayout(self._body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+
+        self.edit_search = QLineEdit()
+        self.edit_search.setPlaceholderText("Filter...")
+        self.edit_search.setFixedHeight(26)
+        self.edit_search.setStyleSheet(
+            "QLineEdit { background: #141416; border: 1px solid #2C2C2E; border-radius: 6px; padding: 2px 7px; font-size: 11.5px; }"
+            "QLineEdit:focus { border-color: #0A84FF; }"
+        )
+        self.edit_search.textChanged.connect(self._populate)
+        bl.addWidget(self.edit_search)
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(4)
+        self._filter_btns: dict[str, QPushButton] = {}
+        for fkey, label in (("all", "All"), ("t1", "T1"), ("t2", "T2+")):
+            b = _make_pill_button(label, checkable=True)
+            b.setStyleSheet(
+                b.styleSheet()
+                + "QPushButton#ArchPillBtn { padding: 2px 8px; font-size: 10.5px; }"
+            )
+            b.clicked.connect(lambda _c, k=fkey: self._set_tier_filter(k))
+            self._filter_btns[fkey] = b
+            filter_row.addWidget(b)
+        filter_row.addStretch(1)
+        bl.addLayout(filter_row)
+
+        self.list_templates = _TemplateDragList()
+        self.list_templates.template_double_clicked.connect(self.template_activated.emit)
+        bl.addWidget(self.list_templates, 1)
+
+        tip = QLabel("Drag onto canvas or card")
+        tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tip.setStyleSheet("color: #636366; font-size: 10px;")
+        bl.addWidget(tip)
+
+        outer.addWidget(self._body, 1)
+        self._set_tier_filter("all")
+
+    def toggle_collapsed(self) -> None:
+        self._collapsed = not self._collapsed
+        self._body.setVisible(not self._collapsed)
+        self._lbl_title.setVisible(not self._collapsed)
+        if self._collapsed:
+            self.setFixedWidth(40)
+            self.btn_toggle.setIcon(make_vector_icon("arrow_right", "#98989D", 12))
+        else:
+            self.setFixedWidth(168)
+            self.btn_toggle.setIcon(make_vector_icon("arrow_left", "#98989D", 12))
+
+    def _set_tier_filter(self, fkey: str) -> None:
+        self._tier_filter = fkey
+        for k, b in self._filter_btns.items():
+            b.setChecked(k == fkey)
+        self._populate()
+
+    def _populate(self) -> None:
+        self.list_templates.clear()
+        query = self.edit_search.text().strip().lower()
+        for item in PREMADE_FOLDER_CATALOG:
+            tier = int(item["tier"])
+            if self._tier_filter == "t1" and tier != 1:
+                continue
+            if self._tier_filter == "t2" and tier < 2:
+                continue
+            hay = (
+                f"{item['name']} {item['summary']} "
+                f"{' '.join(item['extensions'])} {' '.join(item['keywords'])}"
+            ).lower()
+            if query and query not in hay:
+                continue
+            exts = ", ".join(item["extensions"][:2])
+            if len(item["extensions"]) > 2:
+                exts += "+"
+            sub = exts or f"Tier {tier}"
+            li = QListWidgetItem(f"{item['name']}\n{sub}")
+            li.setToolTip(f"Drag to add '{item['name']}' (Tier {tier})\n{item['summary']}")
+            li.setData(Qt.ItemDataRole.UserRole, item)
+            self.list_templates.addItem(li)
+
+
 class FolderArchitectureCanvas(QWidget):
-    """Interactive visual QPainter multi-tier folder architecture graph."""
+    """Interactive direct-manipulation QPainter multi-tier folder architecture graph."""
 
     node_selected = Signal(str)
     node_edit_requested = Signal(str)
     node_delete_requested = Signal(str)
     tier_add_requested = Signal(int)
+    node_reparent_requested = Signal(str, str)  # (node_id, new_parent_id_or_empty)
+    node_spawn_child_requested = Signal(str, str)  # (parent_id_or_empty, default_name)
+    node_renamed = Signal(str, str)  # (node_id, new_name)
+    template_dropped = Signal(str, int, str)  # (premade_key, target_tier, parent_id_or_empty)
+    zoom_changed = Signal(float)
 
     MARGIN_X = 16
     MARGIN_Y = 14
-    TIER_GAP = 26
-    HEADER_H = 32
-    CARD_W = 160
-    CARD_H = 52
+    TIER_GAP = 28
+    HEADER_H = 30
+    CARD_W = 166
+    CARD_H = 62
     CARD_GAP_X = 12
-    CARD_GAP_Y = 10
+    CARD_GAP_Y = 12
     BAND_PAD_X = 12
-    BAND_PAD_BOTTOM = 12
+    BAND_PAD_BOTTOM = 14
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._arch = FolderArchitecture()
         self._watch_label = "Downloads/"
+        self._zoom = 1.0
         self._selected_id: str | None = None
         self._hovered_id: str | None = None
         self._hovered_delete_id: str | None = None
+        self._hovered_plus_id: str | None = None
         self._hovered_tier_add: int | None = None
+
         self._node_rects: dict[str, QRectF] = {}
+        self._rendered_rects: dict[str, QRectF] = {}
+        self._anim_from_rects: dict[str, QRectF] = {}
         self._delete_rects: dict[str, QRectF] = {}
+        self._plus_rects: dict[str, QRectF] = {}
         self._tier_add_rects: dict[int, QRectF] = {}
         self._tier_band_rects: dict[int, QRectF] = {}
+
+        # Drag-and-drop card reparenting state
+        self._press_node_id: str | None = None
+        self._press_pt = QPointF()
+        self._dragging_id: str | None = None
+        self._drag_offset = QPointF()
+        self._drop_target_id: str | None = None
+        self._drop_state: str | None = None  # None | "valid" | "invalid"
+        self._drop_promote_tier1 = False
+
+        # Middle-mouse / Alt+drag panning inside parent QScrollArea
+        self._panning = False
+        self._pan_last_global = QPoint()
+
+        # Drag-to-spawn '+' handle state
+        self._spawning_from_id: str | None = None
+        self._spawn_press_pt = QPointF()
+        self._spawn_cur_pt = QPointF()
+        self._spawn_dragging = False
+        self._spawn_hover_node_id: str | None = None
+        self._spawn_hover_valid = False
+
+        # External template drag-over state
+        self._ext_drop_node_id: str | None = None
+        self._ext_drop_valid = False
+        self._ext_drop_band: int | None = None
+
+        # Layout OutCubic transition
+        self._layout_anim = QVariantAnimation(self)
+        self._layout_anim.setDuration(220)
+        self._layout_anim.setStartValue(0.0)
+        self._layout_anim.setEndValue(1.0)
+        self._layout_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._layout_anim.valueChanged.connect(self._on_layout_anim_tick)
+        self._layout_anim.finished.connect(self._on_layout_anim_done)
+
+        # Inline double-click rename editor
+        self._editing_node_id: str | None = None
+        self._inline_cancel = False
+        self._inline_edit = QLineEdit(self)
+        self._inline_edit.hide()
+        self._inline_edit.setStyleSheet(
+            """
+            QLineEdit {
+                background-color: #111113;
+                color: #F5F5F7;
+                border: 1px solid #0A84FF;
+                border-radius: 5px;
+                padding: 1px 5px;
+                font-size: 11.5px;
+                font-weight: 600;
+            }
+            """
+        )
+        self._inline_edit.installEventFilter(self)
+        self._inline_edit.editingFinished.connect(self._commit_inline_rename)
+
         self.setMouseTracking(True)
+        self.setAcceptDrops(True)
         self._recompute_layout()
 
-    def set_architecture(self, arch: FolderArchitecture, watch_label: str = "Downloads/") -> None:
+    @property
+    def zoom(self) -> float:
+        return self._zoom
+
+    def set_zoom(self, factor: float) -> None:
+        clamped = max(0.65, min(1.45, float(factor)))
+        if abs(clamped - self._zoom) < 0.01:
+            return
+        self._zoom = clamped
+        self._recompute_layout(update_min_size=True)
+        self.zoom_changed.emit(self._zoom)
+        self.update()
+
+    def snapshot_rects(self) -> dict[str, QRectF]:
+        return {k: QRectF(v) for k, v in self._rendered_rects.items()}
+
+    def set_architecture(
+        self,
+        arch: FolderArchitecture,
+        watch_label: str = "Downloads/",
+        *,
+        animate: bool = False,
+        prev_rects: dict[str, QRectF] | None = None,
+    ) -> None:
         self._arch = arch
         self._watch_label = watch_label
         if self._selected_id and arch.get_node(self._selected_id) is None:
@@ -448,6 +922,38 @@ class FolderArchitectureCanvas(QWidget):
         if not self._selected_id and arch.nodes:
             self._selected_id = arch.nodes[0].id
         self._recompute_layout(update_min_size=True)
+
+        should_anim = (
+            animate
+            and prev_rects
+            and animations_enabled()
+            and not os.environ.get("PYTEST_CURRENT_TEST")
+        )
+        if should_anim:
+            self._anim_from_rects = dict(prev_rects or {})
+            self._layout_anim.stop()
+            self._layout_anim.start()
+        else:
+            self._layout_anim.stop()
+            self._rendered_rects = {k: QRectF(v) for k, v in self._node_rects.items()}
+        self.update()
+
+    def _on_layout_anim_tick(self, value: Any) -> None:
+        t = float(value)
+        blended: dict[str, QRectF] = {}
+        for nid, target in self._node_rects.items():
+            start = self._anim_from_rects.get(nid, target)
+            blended[nid] = QRectF(
+                start.x() + (target.x() - start.x()) * t,
+                start.y() + (target.y() - start.y()) * t,
+                start.width() + (target.width() - start.width()) * t,
+                start.height() + (target.height() - start.height()) * t,
+            )
+        self._rendered_rects = blended
+        self.update()
+
+    def _on_layout_anim_done(self) -> None:
+        self._rendered_rects = {k: QRectF(v) for k, v in self._node_rects.items()}
         self.update()
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001
@@ -464,6 +970,50 @@ class FolderArchitectureCanvas(QWidget):
         if node_id:
             self.node_selected.emit(node_id)
 
+    def start_inline_rename(self, node_id: str) -> None:
+        node = self._arch.get_node(node_id)
+        rect = self._rendered_rects.get(node_id) or self._node_rects.get(node_id)
+        if node is None or rect is None:
+            return
+        self._editing_node_id = node_id
+        self._inline_cancel = False
+        self._inline_edit.setText(node.name)
+        sx = (rect.left() + 9) * self._zoom
+        sy = (rect.top() + 5) * self._zoom
+        sw = max(80.0, (rect.width() - 32) * self._zoom)
+        sh = 22.0 * self._zoom
+        self._inline_edit.setGeometry(int(sx), int(sy), int(sw), int(sh))
+        self._inline_edit.show()
+        self._inline_edit.setFocus()
+        self._inline_edit.selectAll()
+        self.update()
+
+    def _commit_inline_rename(self) -> None:
+        if not self._inline_edit.isVisible():
+            return
+        nid = self._editing_node_id
+        self._editing_node_id = None
+        new_name = self._inline_edit.text().strip().replace("/", "").replace("\\", "")
+        self._inline_edit.hide()
+        if self._inline_cancel or not nid or not new_name:
+            self._inline_cancel = False
+            self.update()
+            return
+        node = self._arch.get_node(nid)
+        if node is not None and new_name != node.name:
+            self.node_renamed.emit(nid, new_name)
+        self.update()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
+        if obj is self._inline_edit and event.type() == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self._inline_cancel = True
+                self._inline_edit.hide()
+                self._editing_node_id = None
+                self.update()
+                return True
+        return super().eventFilter(obj, event)
+
     def _ordered_tier_nodes(self) -> dict[int, list[ArchNode]]:
         ordered: dict[int, list[ArchNode]] = {}
         t1 = self._arch.nodes_in_tier(1)
@@ -478,13 +1028,14 @@ class FolderArchitectureCanvas(QWidget):
     def _recompute_layout(self, *, update_min_size: bool = True) -> None:
         self._node_rects.clear()
         self._delete_rects.clear()
+        self._plus_rects.clear()
         self._tier_add_rects.clear()
         self._tier_band_rects.clear()
 
         ordered = self._ordered_tier_nodes()
         parent_w = (self.parentWidget().width() - 4) if self.parentWidget() is not None else 740
-        avail_w = max(720, self.width(), parent_w)
-        band_w = float(avail_w - self.MARGIN_X * 2)
+        logical_w = max(380.0, max(self.width(), parent_w) / self._zoom)
+        band_w = float(logical_w - self.MARGIN_X * 2)
         cols = max(
             1,
             int((band_w - self.BAND_PAD_X * 2 + self.CARD_GAP_X) // (self.CARD_W + self.CARD_GAP_X)),
@@ -497,7 +1048,9 @@ class FolderArchitectureCanvas(QWidget):
         root_w = max(self.CARD_W, 210)
         x0 = self.MARGIN_X + (band_w - root_w) / 2.0
         y0 = band0_y + self.HEADER_H
-        self._node_rects["__root__"] = QRectF(x0, y0, root_w, self.CARD_H)
+        root_rect = QRectF(x0, y0, root_w, self.CARD_H)
+        self._node_rects["__root__"] = root_rect
+        self._plus_rects["__root__"] = QRectF(root_rect.center().x() - 9, root_rect.bottom() - 9, 18, 18)
 
         cur_band_y = band0_y + band0_h + self.TIER_GAP
 
@@ -513,7 +1066,7 @@ class FolderArchitectureCanvas(QWidget):
             )
             self._tier_band_rects[t] = QRectF(self.MARGIN_X, cur_band_y, band_w, band_h)
             self._tier_add_rects[t] = QRectF(
-                self.MARGIN_X + band_w - 68, cur_band_y + 5, 56, 22
+                self.MARGIN_X + band_w - 68, cur_band_y + 4, 56, 22
             )
 
             for idx, node in enumerate(cards):
@@ -526,16 +1079,35 @@ class FolderArchitectureCanvas(QWidget):
                 cy = cur_band_y + self.HEADER_H + r_idx * (self.CARD_H + self.CARD_GAP_Y)
                 rect = QRectF(cx, cy, self.CARD_W, self.CARD_H)
                 self._node_rects[node.id] = rect
-                self._delete_rects[node.id] = QRectF(rect.right() - 20, rect.top() + 5, 15, 15)
+                self._delete_rects[node.id] = QRectF(rect.right() - 20, rect.top() + 5, 16, 16)
+                if node.tier < FolderArchitecture.MAX_TIERS:
+                    self._plus_rects[node.id] = QRectF(rect.center().x() - 9, rect.bottom() - 9, 18, 18)
 
             cur_band_y += band_h + self.TIER_GAP
 
-        total_h = max(360, int(cur_band_y - self.TIER_GAP + self.MARGIN_Y))
-        if update_min_size and (self.minimumWidth() != 680 or self.minimumHeight() != total_h):
-            self.setMinimumSize(680, total_h)
+        if self._layout_anim.state() != QVariantAnimation.State.Running:
+            self._rendered_rects = {k: QRectF(v) for k, v in self._node_rects.items()}
+
+        total_h = max(340, int((cur_band_y - self.TIER_GAP + self.MARGIN_Y) * self._zoom))
+        min_w = max(380, int(380 * self._zoom))
+        if update_min_size and (self.minimumWidth() != min_w or self.minimumHeight() != total_h):
+            self.setMinimumSize(min_w, total_h)
+
+    def _display_rect(self, nid: str) -> QRectF | None:
+        base = self._rendered_rects.get(nid) or self._node_rects.get(nid)
+        if base is None:
+            return None
+        if nid == self._dragging_id:
+            return base.translated(self._drag_offset)
+        return base
+
+    def _to_canvas(self, pt: QPointF) -> QPointF:
+        return QPointF(pt.x() / self._zoom, pt.y() / self._zoom)
 
     def paintEvent(self, event) -> None:  # noqa: ANN001
-        self._recompute_layout(update_min_size=False)
+        if self._layout_anim.state() != QVariantAnimation.State.Running:
+            self._recompute_layout(update_min_size=False)
+
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
@@ -544,31 +1116,41 @@ class FolderArchitectureCanvas(QWidget):
         p.setBrush(QColor("#111113"))
         p.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 12, 12)
 
+        p.save()
+        p.scale(self._zoom, self._zoom)
+        logical_w = int(self.width() / self._zoom)
+        logical_h = int(self.height() / self._zoom)
+
         # Subtle dot grid
-        p.setPen(QColor(255, 255, 255, 14))
-        for gx in range(20, self.width(), 24):
-            for gy in range(20, self.height(), 24):
+        p.setPen(QColor(255, 255, 255, 16))
+        for gx in range(20, logical_w, 26):
+            for gy in range(20, logical_h, 26):
                 p.drawPoint(gx, gy)
 
-        # Draw Horizontal Tier Bands Top-to-Bottom
+        # Horizontal Tier Bands Top-to-Bottom
         for t in range(0, self._arch.tier_count + 1):
             band_rect = self._tier_band_rects.get(t)
             if band_rect is None:
                 continue
-            p.setPen(QPen(QColor("#232327"), 1.0))
-            p.setBrush(QColor("#161618"))
+            promote_hi = (t == 1 and self._drop_promote_tier1) or (self._ext_drop_band == t)
+            band_border = QColor("#30D158") if promote_hi else QColor("#232327")
+            band_bg = QColor(48, 209, 88, 16) if promote_hi else QColor("#161618")
+            p.setPen(QPen(band_border, 1.4 if promote_hi else 1.0))
+            p.setBrush(band_bg)
             p.drawRoundedRect(band_rect, 11, 11)
 
             f_hdr = QFont("Segoe UI", 9, QFont.Weight.Bold)
             p.setFont(f_hdr)
-            p.setPen(QColor("#0A84FF") if t == 0 else QColor("#98989D"))
-            title = (
-                "TIER 0 · ROOT FOLDER"
-                if t == 0
-                else f"TIER {t} · {len(self._arch.nodes_in_tier(t))} FOLDERS"
-            )
+            p.setPen(QColor("#0A84FF") if t == 0 else (QColor("#30D158") if promote_hi else QColor("#98989D")))
+            if t == 0:
+                title = "TIER 0 · ROOT FOLDER"
+            else:
+                count = len(self._arch.nodes_in_tier(t))
+                title = f"TIER {t} · {count} FOLDER{'S' if count != 1 else ''}"
+                if t == 1 and self._drop_promote_tier1:
+                    title += "  ·  DROP TO PROMOTE TO TIER 1"
             p.drawText(
-                QRectF(band_rect.left() + 14, band_rect.top() + 4, band_rect.width() - 92, 24),
+                QRectF(band_rect.left() + 14, band_rect.top() + 3, band_rect.width() - 92, 24),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 title,
             )
@@ -582,22 +1164,23 @@ class FolderArchitectureCanvas(QWidget):
                 p.setPen(QColor("#F5F5F7"))
                 p.drawText(add_rect, Qt.AlignmentFlag.AlignCenter, "+ Add")
 
-        # Draw Top-to-Bottom Cubic Bezier Connectors (dim pass first, active highlights on top)
-        root_rect = self._node_rects.get("__root__")
+        # Cubic Bezier Connectors (dim pass first, active/dragged highlights on top)
+        root_rect = self._display_rect("__root__")
         connector_items: list[tuple[bool, ArchNode, QRectF, QRectF]] = []
         for node in self._arch.nodes:
             if node.tier > self._arch.tier_count:
                 continue
-            dst_rect = self._node_rects.get(node.id)
+            dst_rect = self._display_rect(node.id)
             if dst_rect is None:
                 continue
-            src_rect = root_rect if node.tier == 1 else self._node_rects.get(node.parent_id or "")
+            src_rect = root_rect if node.tier == 1 else self._display_rect(node.parent_id or "")
             if src_rect is None:
                 continue
             is_hi = bool(
                 node.id == self._selected_id
                 or node.id == self._hovered_id
-                or (node.parent_id and node.parent_id == self._selected_id)
+                or node.id == self._dragging_id
+                or (node.parent_id and (node.parent_id == self._selected_id or node.parent_id == self._dragging_id))
             )
             connector_items.append((is_hi, node, src_rect, dst_rect))
 
@@ -606,11 +1189,11 @@ class FolderArchitectureCanvas(QWidget):
                 if is_hi != want_hi:
                     continue
                 col = QColor(node.accent_hex)
-                col.setAlpha(220 if is_hi else 48)
+                col.setAlpha(225 if is_hi else 52)
                 p.setPen(
                     QPen(
                         col,
-                        2.0 if is_hi else 1.15,
+                        2.1 if is_hi else 1.2,
                         Qt.PenStyle.SolidLine,
                         Qt.PenCapStyle.RoundCap,
                     )
@@ -618,85 +1201,299 @@ class FolderArchitectureCanvas(QWidget):
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p1 = QPointF(src_rect.center().x(), src_rect.bottom())
                 p2 = QPointF(dst_rect.center().x(), dst_rect.top())
-                dy = max(14.0, (p2.y() - p1.y()) * 0.48)
+                dy = max(16.0, abs(p2.y() - p1.y()) * 0.48)
                 path = QPainterPath(p1)
                 path.cubicTo(QPointF(p1.x(), p1.y() + dy), QPointF(p2.x(), p2.y() - dy), p2)
                 p.drawPath(path)
 
-        # Draw Tier 0 Root Card
+        # Live '+' Handle Drag-to-Spawn Dashed Wire
+        if self._spawning_from_id and self._spawn_dragging:
+            src_rect = self._display_rect(self._spawning_from_id)
+            if src_rect is not None:
+                p1 = QPointF(src_rect.center().x(), src_rect.bottom())
+                p2 = self._spawn_cur_pt
+                dy = max(24.0, abs(p2.y() - p1.y()) * 0.48)
+                path = QPainterPath(p1)
+                path.cubicTo(QPointF(p1.x(), p1.y() + dy), QPointF(p2.x(), p2.y() - dy), p2)
+                pen = QPen(QColor("#0A84FF"), 2.2, Qt.PenStyle.DashLine, Qt.PenCapStyle.RoundCap)
+                p.setPen(pen)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawPath(path)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor("#0A84FF"))
+                p.drawEllipse(p2, 4.5, 4.5)
+
+        # Tier 0 Root Card
         if root_rect is not None:
-            p.setPen(QPen(QColor("#0A84FF"), 1.4))
-            p.setBrush(QColor("#1C1C1E"))
-            p.drawRoundedRect(root_rect, 10, 10)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#0A84FF"))
-            p.drawRoundedRect(QRectF(root_rect.left(), root_rect.top() + 10, 3.5, root_rect.height() - 20), 1.5, 1.5)
-            p.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-            p.setPen(QColor("#F5F5F7"))
-            p.drawText(root_rect.adjusted(14, 9, -10, -24), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "Downloads")
-            p.setFont(QFont("Segoe UI", 8))
-            p.setPen(QColor("#8E8E93"))
-            fm = QFontMetrics(p.font())
-            elided_watch = fm.elidedText(self._watch_label, Qt.TextElideMode.ElideMiddle, int(root_rect.width() - 24))
-            p.drawText(root_rect.adjusted(14, 29, -10, -6), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_watch)
+            self._paint_root_card(p, root_rect)
 
-        # Draw Tier 1..N Node Cards
-        for node in self._arch.nodes:
-            rect = self._node_rects.get(node.id)
-            if rect is None:
-                continue
-            selected = node.id == self._selected_id
-            hovered = node.id == self._hovered_id
-            col = QColor(node.accent_hex)
+        # Tier 1..N Node Cards (draw non-dragged first, dragged card on top)
+        ordered_nodes = [n for n in self._arch.nodes if n.id != self._dragging_id]
+        if self._dragging_id:
+            dragged_node = self._arch.get_node(self._dragging_id)
+            if dragged_node is not None:
+                ordered_nodes.append(dragged_node)
 
-            border = col if selected else (QColor("#48484A") if hovered else QColor("#2C2C2E"))
-            p.setPen(QPen(border, 1.6 if selected else 1.0))
-            p.setBrush(QColor("#242428") if selected else QColor("#1C1C1E"))
-            p.drawRoundedRect(rect, 10, 10)
+        for node in ordered_nodes:
+            rect = self._display_rect(node.id)
+            if rect is not None:
+                self._paint_node_card(p, node, rect)
 
-            # Left Accent Stripe
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(col)
-            p.drawRoundedRect(QRectF(rect.left() + 0.5, rect.top() + 9, 3.5, rect.height() - 18), 1.5, 1.5)
+        p.restore()
 
-            # Folder Name
+    def _drop_halo_for(self, nid: str) -> str | None:
+        if self._drop_target_id == nid and self._drop_state:
+            return self._drop_state
+        if self._ext_drop_node_id == nid:
+            return "valid" if self._ext_drop_valid else "invalid"
+        if self._spawn_hover_node_id == nid:
+            return "valid" if self._spawn_hover_valid else "invalid"
+        return None
+
+    def _paint_root_card(self, p: QPainter, root_rect: QRectF) -> None:
+        halo = self._drop_halo_for("__root__")
+        if halo:
+            hcol = QColor("#30D158" if halo == "valid" else "#FF453A")
+            hcol.setAlpha(75)
+            p.setPen(QPen(hcol, 6))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(root_rect.adjusted(-2, -2, 2, 2), 12, 12)
+
+        border_col = QColor("#30D158" if halo == "valid" else ("#FF453A" if halo == "invalid" else "#0A84FF"))
+        p.setPen(QPen(border_col, 1.8 if halo else 1.4))
+        p.setBrush(QColor("#1C1C1E"))
+        p.drawRoundedRect(root_rect, 10, 10)
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#0A84FF"))
+        p.drawRoundedRect(QRectF(root_rect.left() + 0.5, root_rect.top() + 10, 3.5, root_rect.height() - 20), 1.5, 1.5)
+
+        p.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        p.setPen(QColor("#F5F5F7"))
+        p.drawText(
+            root_rect.adjusted(14, 9, -56, -28),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "Downloads",
+        )
+
+        # ROOT badge
+        badge_r = QRectF(root_rect.right() - 48, root_rect.top() + 10, 38, 16)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(10, 132, 255, 40))
+        p.drawRoundedRect(badge_r, 5, 5)
+        p.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+        p.setPen(QColor("#64D2FF"))
+        p.drawText(badge_r, Qt.AlignmentFlag.AlignCenter, "ROOT")
+
+        p.setFont(QFont("Segoe UI", 8))
+        p.setPen(QColor("#8E8E93"))
+        fm = QFontMetrics(p.font())
+        elided_watch = fm.elidedText(self._watch_label, Qt.TextElideMode.ElideMiddle, int(root_rect.width() - 26))
+        p.drawText(
+            root_rect.adjusted(14, 31, -10, -8),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            elided_watch,
+        )
+
+        # '+' Spawn handle on bottom center
+        self._paint_plus_handle(p, "__root__", root_rect)
+
+    def _paint_node_card(self, p: QPainter, node: ArchNode, rect: QRectF) -> None:
+        selected = node.id == self._selected_id
+        hovered = node.id == self._hovered_id
+        is_dragging = node.id == self._dragging_id
+        col = QColor(node.accent_hex)
+        halo = self._drop_halo_for(node.id)
+
+        if halo:
+            hcol = QColor("#30D158" if halo == "valid" else "#FF453A")
+            hcol.setAlpha(75)
+            p.setPen(QPen(hcol, 6))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(rect.adjusted(-2, -2, 2, 2), 12, 12)
+        elif selected or is_dragging:
+            hcol = QColor(col)
+            hcol.setAlpha(55)
+            p.setPen(QPen(hcol, 4.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 11, 11)
+
+        if halo == "valid":
+            border = QColor("#30D158")
+        elif halo == "invalid":
+            border = QColor("#FF453A")
+        elif selected or is_dragging:
+            border = col
+        elif hovered:
+            border = QColor("#48484A")
+        else:
+            border = QColor("#2C2C2E")
+
+        p.setPen(QPen(border, 1.8 if (selected or halo or is_dragging) else 1.0))
+        p.setBrush(QColor("#25252A") if (selected or is_dragging) else (QColor("#212125") if hovered else QColor("#1C1C1E")))
+        p.drawRoundedRect(rect, 10, 10)
+
+        # Left Accent Stripe
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(col)
+        p.drawRoundedRect(QRectF(rect.left() + 0.5, rect.top() + 9, 3.5, rect.height() - 18), 1.5, 1.5)
+
+        # Folder Name (hidden while inline editing)
+        if self._editing_node_id != node.id:
             p.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
             p.setPen(QColor("#F5F5F7"))
             fm_name = QFontMetrics(p.font())
             title = fm_name.elidedText(node.name, Qt.TextElideMode.ElideRight, int(rect.width() - 36))
-            p.drawText(rect.adjusted(13, 8, -22, -26), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
-
-            # Rule/Ext Summary Line
-            parts: list[str] = []
-            if node.keywords:
-                parts.append(f"{len(node.keywords)} kw")
-            if node.domains:
-                parts.append(f"{len(node.domains)} site")
-            if node.extensions:
-                parts.append(", ".join(node.extensions[:2]) + ("+" if len(node.extensions) > 2 else ""))
-            sub_txt = " • ".join(parts) if parts else "Container folder"
-            p.setFont(QFont("Segoe UI", 8))
-            p.setPen(QColor("#8E8E93"))
-            fm_sub = QFontMetrics(p.font())
             p.drawText(
-                rect.adjusted(13, 29, -10, -7),
+                rect.adjusted(12, 7, -22, -32),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                fm_sub.elidedText(sub_txt, Qt.TextElideMode.ElideRight, int(rect.width() - 24)),
+                title,
             )
 
-            # Hover Delete '×' button
-            if hovered or selected:
-                del_r = self._delete_rects[node.id]
-                del_hov = self._hovered_delete_id == node.id
-                p.setPen(QColor("#FF453A" if del_hov else "#8E8E93"))
-                p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-                p.drawText(del_r, Qt.AlignmentFlag.AlignCenter, "×")
+        # Rule/Ext Summary Line
+        parts: list[str] = []
+        if node.keywords:
+            parts.append(f"{len(node.keywords)} kw")
+        if node.domains:
+            parts.append(f"{len(node.domains)} site")
+        if node.extensions:
+            parts.append(", ".join(node.extensions[:2]) + ("+" if len(node.extensions) > 2 else ""))
+        sub_txt = " • ".join(parts) if parts else "Container folder"
+        p.setFont(QFont("Segoe UI", 8))
+        p.setPen(QColor("#8E8E93"))
+        fm_sub = QFontMetrics(p.font())
+        p.drawText(
+            rect.adjusted(12, 26, -10, -18),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            fm_sub.elidedText(sub_txt, Qt.TextElideMode.ElideRight, int(rect.width() - 22)),
+        )
+
+        # Child count + Tier micro-footer
+        child_count = len(self._arch.children_of(node.id))
+        footer = f"T{node.tier}" + (f" · {child_count} sub" if child_count else "")
+        p.setFont(QFont("Segoe UI", 7.5))
+        p.setPen(QColor("#636366"))
+        p.drawText(
+            rect.adjusted(12, 42, -10, -4),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            footer,
+        )
+
+        # Hover / Selected Delete '×' button
+        if (hovered or selected) and not is_dragging:
+            del_r = self._delete_rects[node.id]
+            del_hov = self._hovered_delete_id == node.id
+            if del_hov:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor("#FF453A"))
+                p.drawEllipse(del_r)
+                p.setPen(QColor("#FFFFFF"))
+            else:
+                p.setPen(QColor("#8E8E93"))
+            p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            p.drawText(del_r, Qt.AlignmentFlag.AlignCenter, "×")
+
+        # '+' Spawn handle on bottom center
+        if not is_dragging:
+            self._paint_plus_handle(p, node.id, rect)
+
+    def _paint_plus_handle(self, p: QPainter, nid: str, rect: QRectF) -> None:
+        plus_r = self._plus_rects.get(nid)
+        if plus_r is None:
+            return
+        is_active = (
+            nid == self._hovered_id
+            or nid == self._selected_id
+            or nid == self._hovered_plus_id
+            or nid == self._spawning_from_id
+        )
+        if not is_active:
+            # Subtle output port dot
+            p.setPen(QPen(QColor("#2C2C2E"), 1.0))
+            p.setBrush(QColor("#161618"))
+            p.drawEllipse(QPointF(rect.center().x(), rect.bottom()), 3.2, 3.2)
+            return
+
+        hov = nid == self._hovered_plus_id or nid == self._spawning_from_id
+        p.setPen(QPen(QColor("#111113"), 1.4))
+        p.setBrush(QColor("#0A84FF") if hov else QColor("#3A3A3C"))
+        p.drawEllipse(plus_r)
+        p.setPen(QPen(QColor("#FFFFFF"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        c = plus_r.center()
+        p.drawLine(QPointF(c.x() - 3.2, c.y()), QPointF(c.x() + 3.2, c.y()))
+        p.drawLine(QPointF(c.x(), c.y() - 3.2), QPointF(c.x(), c.y() + 3.2))
+
+    # --- Mouse & Direct Manipulation Events ---
+
+    def _hit_node_at(self, pt: QPointF, *, exclude: str | None = None) -> str | None:
+        for nid, rect in self._rendered_rects.items():
+            if nid == exclude:
+                continue
+            if rect.contains(pt):
+                return nid
+        return None
 
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
-        pt = event.position()
+        if self._panning:
+            cur_g = event.globalPosition().toPoint()
+            delta_g = cur_g - self._pan_last_global
+            self._pan_last_global = cur_g
+            scroll_area = self._find_scroll_area()
+            if scroll_area is not None:
+                hb = scroll_area.horizontalScrollBar()
+                vb = scroll_area.verticalScrollBar()
+                hb.setValue(hb.value() - delta_g.x())
+                vb.setValue(vb.value() - delta_g.y())
+            return
+
+        pt = self._to_canvas(event.position())
+
+        # 1. Active '+' handle drag-to-spawn
+        if self._spawning_from_id is not None:
+            if not self._spawn_dragging and (pt - self._spawn_press_pt).manhattanLength() > 8:
+                self._spawn_dragging = True
+            self._spawn_cur_pt = pt
+            self._spawn_hover_node_id = None
+            self._spawn_hover_valid = False
+            if self._spawn_dragging:
+                hit = self._hit_node_at(pt, exclude=self._spawning_from_id)
+                if hit and hit != "__root__":
+                    src_pid = None if self._spawning_from_id == "__root__" else self._spawning_from_id
+                    hit_node = self._arch.get_node(hit)
+                    if hit_node is not None and hit_node.parent_id != src_pid:
+                        self._spawn_hover_node_id = hit
+                        self._spawn_hover_valid = self._arch.can_reparent(hit, src_pid)
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            self.update()
+            return
+
+        # 2. Active card drag-and-drop reparenting
+        if self._press_node_id is not None:
+            delta = pt - self._press_pt
+            if self._dragging_id is None and delta.manhattanLength() > 6:
+                self._dragging_id = self._press_node_id
+            if self._dragging_id is not None:
+                self._drag_offset = delta
+                self._evaluate_reparent_hover(pt)
+                self.setCursor(Qt.CursorShape.ClosedHandCursor)
+                self.update()
+                return
+
+        # 3. Hover hit-testing
         self._hovered_delete_id = None
+        self._hovered_plus_id = None
         self._hovered_id = None
         self._hovered_tier_add = None
+
+        for nid, pr in self._plus_rects.items():
+            nr = self._rendered_rects.get(nid)
+            is_vis = nid == self._selected_id or (nr is not None and nr.adjusted(-6, -6, 6, 12).contains(pt))
+            if is_vis and pr.adjusted(-3, -3, 3, 3).contains(pt):
+                self._hovered_plus_id = nid
+                self._hovered_id = nid
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.update()
+                return
 
         for t, r in self._tier_add_rects.items():
             if r.contains(pt):
@@ -706,7 +1503,7 @@ class FolderArchitectureCanvas(QWidget):
                 return
 
         for nid, dr in self._delete_rects.items():
-            nr = self._node_rects.get(nid)
+            nr = self._rendered_rects.get(nid)
             if (nid == self._selected_id or (nr and nr.contains(pt))) and dr.contains(pt):
                 self._hovered_delete_id = nid
                 self._hovered_id = nid
@@ -714,50 +1511,301 @@ class FolderArchitectureCanvas(QWidget):
                 self.update()
                 return
 
-        for nid, rect in self._node_rects.items():
-            if nid != "__root__" and rect.contains(pt):
+        for nid, rect in self._rendered_rects.items():
+            if rect.contains(pt):
                 self._hovered_id = nid
-                self.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.setCursor(
+                    Qt.CursorShape.OpenHandCursor if nid != "__root__" else Qt.CursorShape.ArrowCursor
+                )
                 self.update()
                 return
 
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
 
+    def _evaluate_reparent_hover(self, pt: QPointF) -> None:
+        self._drop_target_id = None
+        self._drop_state = None
+        self._drop_promote_tier1 = False
+
+        dragged_id = self._dragging_id
+        if not dragged_id:
+            return
+        dragged = self._arch.get_node(dragged_id)
+        if dragged is None:
+            return
+        dragged_rect = self._display_rect(dragged_id)
+        if dragged_rect is None:
+            return
+
+        # Find best overlap with another card (or cursor inside another card)
+        best_target: str | None = None
+        best_area = 0.0
+        for nid, rect in self._rendered_rects.items():
+            if nid == dragged_id:
+                continue
+            if rect.contains(pt):
+                best_target = nid
+                break
+            inter = dragged_rect.intersected(rect)
+            area = inter.width() * inter.height()
+            if area > 650.0 and area > best_area:
+                best_area = area
+                best_target = nid
+
+        if best_target == "__root__":
+            if dragged.tier != 1:
+                self._drop_target_id = "__root__"
+                self._drop_state = "valid" if self._arch.can_reparent(dragged_id, None) else "invalid"
+            return
+
+        if best_target is not None:
+            if best_target == dragged.parent_id:
+                return
+            self._drop_target_id = best_target
+            self._drop_state = (
+                "valid" if self._arch.can_reparent(dragged_id, best_target) else "invalid"
+            )
+            return
+
+        # Empty space inside Tier 1 band promotes nested nodes back to Tier 1
+        band1 = self._tier_band_rects.get(1)
+        if band1 is not None and band1.contains(pt) and dragged.tier != 1:
+            if self._arch.can_reparent(dragged_id, None):
+                self._drop_promote_tier1 = True
+
+    def _find_scroll_area(self) -> QScrollArea | None:
+        w = self.parentWidget()
+        while w is not None:
+            if isinstance(w, QScrollArea):
+                return w
+            w = w.parentWidget()
+        return None
+
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.MouseButton.MiddleButton or (
+            event.button() == Qt.MouseButton.LeftButton
+            and (event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        ):
+            self._panning = True
+            self._pan_last_global = event.globalPosition().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pt = event.position()
+        if self._inline_edit.isVisible():
+            self._commit_inline_rename()
 
+        pt = self._to_canvas(event.position())
+
+        # 1. Check '+' handle press first (works on __root__ and tier < MAX_TIERS nodes)
+        for nid, pr in self._plus_rects.items():
+            nr = self._rendered_rects.get(nid)
+            is_vis = nid == self._selected_id or (nr is not None and nr.adjusted(-6, -6, 6, 12).contains(pt))
+            if is_vis and pr.adjusted(-3, -3, 3, 3).contains(pt):
+                self._spawning_from_id = nid
+                self._spawn_press_pt = pt
+                self._spawn_cur_pt = pt
+                self._spawn_dragging = False
+                self.update()
+                return
+
+        # 2. Check tier '+ Add' pill
         for t, r in self._tier_add_rects.items():
             if r.contains(pt):
                 self.tier_add_requested.emit(t)
                 return
 
+        # 3. Check delete '×'
         for nid, dr in self._delete_rects.items():
-            nr = self._node_rects.get(nid)
+            nr = self._rendered_rects.get(nid)
             if (nid == self._selected_id or (nr and nr.contains(pt))) and dr.contains(pt):
                 self.node_delete_requested.emit(nid)
                 return
 
-        for nid, rect in self._node_rects.items():
+        # 4. Select & prepare drag on a non-root card
+        for nid, rect in self._rendered_rects.items():
             if nid != "__root__" and rect.contains(pt):
                 self.select_node(nid)
+                self._press_node_id = nid
+                self._press_pt = pt
+                self._drag_offset = QPointF()
                 return
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
+        if self._panning:
+            self._panning = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        pt = self._to_canvas(event.position())
+
+        # Complete '+' handle spawn or wire-reparent
+        if self._spawning_from_id is not None:
+            src_id = self._spawning_from_id
+            was_dragging = self._spawn_dragging
+            hover_nid = self._spawn_hover_node_id
+            hover_valid = self._spawn_hover_valid
+
+            self._spawning_from_id = None
+            self._spawn_dragging = False
+            self._spawn_hover_node_id = None
+            self._spawn_hover_valid = False
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.update()
+
+            parent_arg = "" if src_id == "__root__" else src_id
+            if was_dragging and hover_nid and hover_valid:
+                self.node_reparent_requested.emit(hover_nid, parent_arg)
+            elif not was_dragging or hover_nid is None:
+                self.node_spawn_child_requested.emit(parent_arg, "New Subfolder" if parent_arg else "New Folder")
+            return
+
+        # Complete card drag reparenting
+        dragged_id = self._dragging_id
+        dragged_rect = self._display_rect(dragged_id) if dragged_id else None
+        drop_target = self._drop_target_id
+        drop_state = self._drop_state
+        promote_t1 = self._drop_promote_tier1
+
+        self._press_node_id = None
+        self._dragging_id = None
+        self._drag_offset = QPointF()
+        self._drop_target_id = None
+        self._drop_state = None
+        self._drop_promote_tier1 = False
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+        if dragged_id is not None:
+            if drop_target == "__root__" and drop_state == "valid":
+                self.node_reparent_requested.emit(dragged_id, "")
+            elif promote_t1:
+                self.node_reparent_requested.emit(dragged_id, "")
+            elif drop_target and drop_state == "valid":
+                self.node_reparent_requested.emit(dragged_id, drop_target)
+            elif (
+                dragged_rect is not None
+                and animations_enabled()
+                and not os.environ.get("PYTEST_CURRENT_TEST")
+            ):
+                # Spring back smoothly to original layout slot
+                self._anim_from_rects = {**self._rendered_rects, dragged_id: dragged_rect}
+                self._layout_anim.stop()
+                self._layout_anim.start()
+            else:
+                self.update()
+            return
+
+        self.update()
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pt = event.position()
-        for nid, rect in self._node_rects.items():
+        pt = self._to_canvas(event.position())
+        for nid, rect in self._rendered_rects.items():
             if nid != "__root__" and rect.contains(pt):
                 self.select_node(nid)
-                self.node_edit_requested.emit(nid)
+                # Double-clicking the title area opens inline rename; lower body opens full rules editor
+                title_zone = QRectF(rect.left(), rect.top(), rect.width() - 22, 28)
+                if title_zone.contains(pt):
+                    self.start_inline_rename(nid)
+                else:
+                    self.node_edit_requested.emit(nid)
                 return
+
+    def wheelEvent(self, event) -> None:  # noqa: ANN001
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta != 0:
+                factor = 1.1 if delta > 0 else 1 / 1.1
+                self.set_zoom(self._zoom * factor)
+                event.accept()
+                return
+        super().wheelEvent(event)
+
+    # --- External Template Shelf Drag-and-Drop ---
+
+    def dragEnterEvent(self, event) -> None:  # noqa: ANN001
+        if event.mimeData().hasFormat(MIME_TEMPLATE):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: ANN001
+        if not event.mimeData().hasFormat(MIME_TEMPLATE):
+            super().dragMoveEvent(event)
+            return
+        pt = self._to_canvas(event.position())
+        self._ext_drop_node_id = None
+        self._ext_drop_valid = False
+        self._ext_drop_band = None
+
+        hit = self._hit_node_at(pt)
+        if hit == "__root__":
+            self._ext_drop_node_id = "__root__"
+            self._ext_drop_valid = True
+        elif hit is not None:
+            node = self._arch.get_node(hit)
+            self._ext_drop_node_id = hit
+            self._ext_drop_valid = bool(node is not None and node.tier < FolderArchitecture.MAX_TIERS)
+        else:
+            for t, band in self._tier_band_rects.items():
+                if t >= 1 and band.contains(pt):
+                    self._ext_drop_band = t
+                    break
+        self.update()
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: ANN001
+        self._ext_drop_node_id = None
+        self._ext_drop_valid = False
+        self._ext_drop_band = None
+        self.update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: ANN001
+        if not event.mimeData().hasFormat(MIME_TEMPLATE):
+            super().dropEvent(event)
+            return
+        try:
+            raw = bytes(event.mimeData().data(MIME_TEMPLATE)).decode("utf-8")
+            payload = json.loads(raw)
+            key = str(payload.get("key", ""))
+        except Exception:
+            key = ""
+
+        target_nid = self._ext_drop_node_id
+        target_valid = self._ext_drop_valid
+        target_band = self._ext_drop_band
+
+        self._ext_drop_node_id = None
+        self._ext_drop_valid = False
+        self._ext_drop_band = None
+        self.update()
+
+        if not key:
+            return
+        if target_nid == "__root__":
+            self.template_dropped.emit(key, 1, "")
+        elif target_nid is not None and target_valid:
+            parent_node = self._arch.get_node(target_nid)
+            if parent_node is not None:
+                self.template_dropped.emit(key, parent_node.tier + 1, parent_node.id)
+        elif target_nid is not None and not target_valid:
+            # Dropped on max-depth card -> ignore cleanly
+            return
+        elif target_band is not None:
+            self.template_dropped.emit(key, target_band, "")
+        else:
+            self.template_dropped.emit(key, 1, "")
+        event.acceptProposedAction()
 
 
 class ArchitectureTab(QWidget):
-    """Tab 2: Interactive Layered Folder Architecture Canvas + Premade/Custom Rules + Shift/Undo/Defaults."""
+    """Tab 2: Direct-Manipulation Folder Architecture Canvas + Template Shelf + Inline Inspector."""
 
     architecture_applied = Signal(str)
     undo_requested = Signal()
@@ -766,38 +1814,65 @@ class ArchitectureTab(QWidget):
     action_progress = Signal(int, int, str)
     action_finished = Signal(str, str)  # (summary_msg, kind)
 
+    TOOLBAR_COMPACT_WIDTH = 980
+
     def __init__(self, service: SorterService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.service = service
         self._arch: FolderArchitecture = architecture_from_config(service.config)
         self._dirty = False
+        self._active_preset = "standard"
+        self._undo_stack: list[tuple[FolderArchitecture, str | None]] = []
+        self._redo_stack: list[tuple[FolderArchitecture, str | None]] = []
+        self._syncing_inspector = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
-        root.setSpacing(12)
+        root.setSpacing(10)
 
-        # Top Two-Row Action Bar Card (spacious Apple layout, zero horizontal cramping)
+        # Top Compact Command & Blueprint Pill Bar
         bar = QFrame()
         bar.setObjectName("SurfaceCard")
         bar_outer = QVBoxLayout(bar)
-        bar_outer.setContentsMargins(14, 10, 14, 10)
-        bar_outer.setSpacing(8)
+        bar_outer.setContentsMargins(12, 8, 12, 8)
+        bar_outer.setSpacing(7)
 
+        # Row 1: Tiers, Diagram Undo/Redo, Arrange, Auto-Create, Shift Undo, Defaults, Apply & Shift
         bar_row1 = QHBoxLayout()
-        bar_row1.setSpacing(8)
+        bar_row1.setSpacing(6)
 
-        self.combo_preset = QComboBox()
-        for key, meta in ARCHITECTURE_PRESETS.items():
-            self.combo_preset.addItem(str(meta["label"]), key)
-        self.combo_preset.setMinimumWidth(150)
-        self.combo_preset.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.combo_preset.setMinimumContentsLength(14)
-        bar_row1.addWidget(QLabel("Blueprint:"))
-        bar_row1.addWidget(self.combo_preset)
+        self.btn_add_tier = InteractiveRibbonBtn("+ Tier")
+        self.btn_add_tier.setToolTip("Add a new horizontal folder depth tier (up to 5 tiers)")
+        self.btn_add_tier.clicked.connect(self._on_add_tier)
+        bar_row1.addWidget(self.btn_add_tier)
 
-        self.btn_load_preset = InteractiveRibbonBtn("Load Preset")
-        self.btn_load_preset.clicked.connect(self._on_load_preset)
-        bar_row1.addWidget(self.btn_load_preset)
+        self.btn_remove_tier = InteractiveRibbonBtn("- Tier")
+        self.btn_remove_tier.setToolTip("Remove the deepest folder tier")
+        self.btn_remove_tier.clicked.connect(self._on_remove_tier)
+        bar_row1.addWidget(self.btn_remove_tier)
+
+        self.btn_diag_undo = QPushButton("")
+        self.btn_diag_undo.setIcon(make_vector_icon("undo", "#F5F5F7", 14))
+        self.btn_diag_undo.setFixedSize(32, 30)
+        self.btn_diag_undo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_diag_undo.setToolTip("Undo diagram edit (Ctrl+Z)")
+        self.btn_diag_undo.clicked.connect(self.undo_diagram_edit)
+        bar_row1.addWidget(self.btn_diag_undo)
+
+        self.btn_diag_redo = QPushButton("")
+        self.btn_diag_redo.setIcon(make_vector_icon("redo", "#F5F5F7", 14))
+        self.btn_diag_redo.setFixedSize(32, 30)
+        self.btn_diag_redo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_diag_redo.setToolTip("Redo diagram edit (Ctrl+Y)")
+        self.btn_diag_redo.clicked.connect(self.redo_diagram_edit)
+        bar_row1.addWidget(self.btn_diag_redo)
+
+        self.btn_auto_layout = CollapsibleRibbonBtn("Arrange", make_vector_icon("fit", "#F5F5F7", 14))
+        self.btn_auto_layout.setToolTip("Auto-arrange cards and reset zoom to 100%")
+        self.btn_auto_layout.clicked.connect(self._on_auto_arrange)
+        bar_row1.addWidget(self.btn_auto_layout)
+
+        bar_row1.addStretch(1)
 
         self.btn_auto_create = CollapsibleRibbonBtn(
             "Auto-Create Basic",
@@ -809,17 +1884,17 @@ class ArchitectureTab(QWidget):
         self.btn_auto_create.clicked.connect(self._on_auto_create_basic)
         bar_row1.addWidget(self.btn_auto_create)
 
-        bar_row1.addStretch(1)
-
-        # Always visible Undo, Return to Defaults & Apply/Shift controls
         self.btn_arch_undo = CollapsibleRibbonBtn("Undo", make_vector_icon("undo", "#F5F5F7", 14))
-        self.btn_arch_undo.setToolTip("Undo last file shift and architecture change")
+        self.btn_arch_undo.setToolTip("Undo last file shift and applied architecture change")
         self.btn_arch_undo.clicked.connect(self._on_undo_clicked)
         bar_row1.addWidget(self.btn_arch_undo)
 
-        self.btn_arch_defaults = InteractiveRibbonBtn("Return to Defaults")
+        self.btn_arch_defaults = CollapsibleRibbonBtn(
+            "Defaults",
+            make_vector_icon("refresh", "#98989D", 14),
+        )
         self.btn_arch_defaults.setObjectName("GhostButton")
-        self.btn_arch_defaults.setToolTip("Reset Folder Architecture & Rules to starter defaults")
+        self.btn_arch_defaults.setToolTip("Return Folder Architecture & Rules to starter defaults")
         self.btn_arch_defaults.clicked.connect(self._on_return_to_defaults)
         bar_row1.addWidget(self.btn_arch_defaults)
 
@@ -832,29 +1907,23 @@ class ArchitectureTab(QWidget):
         bar_row1.addWidget(self.btn_apply_shift)
         bar_outer.addLayout(bar_row1)
 
+        # Row 2: Segmented Blueprint Pill Selector (replaces Load Preset dropdown)
         bar_row2 = QHBoxLayout()
-        bar_row2.setSpacing(8)
+        bar_row2.setSpacing(6)
+        lbl_bp = QLabel("Blueprint:")
+        lbl_bp.setStyleSheet("color: #98989D; font-size: 11.5px; font-weight: 600;")
+        bar_row2.addWidget(lbl_bp)
 
-        self.btn_add_tier = InteractiveRibbonBtn("+ Add Tier")
-        self.btn_add_tier.setToolTip("Add a new horizontal folder depth tier (up to 5 tiers)")
-        self.btn_add_tier.clicked.connect(self._on_add_tier)
-        bar_row2.addWidget(self.btn_add_tier)
+        self._blueprint_btns: dict[str, QPushButton] = {}
+        for key, short_label, tip in BLUEPRINT_PILLS:
+            pill = _make_pill_button(short_label, checkable=True, tooltip=f"Load {tip}")
+            pill.clicked.connect(lambda _chk, pkey=key: self._on_load_preset(pkey))
+            self._blueprint_btns[key] = pill
+            bar_row2.addWidget(pill)
 
-        self.btn_remove_tier = InteractiveRibbonBtn("- Remove Tier")
-        self.btn_remove_tier.setToolTip("Remove the deepest folder tier")
-        self.btn_remove_tier.clicked.connect(self._on_remove_tier)
-        bar_row2.addWidget(self.btn_remove_tier)
-
-        self.btn_add_premade = InteractiveRibbonBtn("Premade Folder", make_vector_icon("folder", "#F5F5F7", 14))
-        self.btn_add_premade.clicked.connect(lambda: self._open_premade_dialog())
-        bar_row2.addWidget(self.btn_add_premade)
-
-        self.btn_add_custom = InteractiveRibbonBtn("Custom Folder", make_vector_icon("plus", "#F5F5F7", 14))
-        self.btn_add_custom.clicked.connect(lambda: self._open_custom_dialog())
-        bar_row2.addWidget(self.btn_add_custom)
-
-        bar_row2.addStretch(1)
-        layer_tip = ElidedLabel("Top-to-Bottom Flow: Tier 0 Root -> Tier 1 Categories -> Tier 2+ Subfolders")
+        layer_tip = ElidedLabel(
+            "Drag templates onto canvas/cards · Drag '+' handle to spawn · Drag cards to reparent · Double-click title to rename"
+        )
         layer_tip.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         layer_tip.setStyleSheet("color: #6E6E73; font-size: 11px;")
         bar_row2.addWidget(layer_tip, 1)
@@ -862,22 +1931,31 @@ class ArchitectureTab(QWidget):
 
         root.addWidget(bar)
 
-        # Canvas + Right Inspector
+        # 3-Pane Body: Template Shelf | Interactive Canvas | Inline Inspector
         body = QHBoxLayout()
-        body.setSpacing(12)
+        body.setSpacing(10)
+
+        self.shelf = TemplateShelfWidget(self)
+        self.shelf.template_activated.connect(self._on_template_activated)
+        body.addWidget(self.shelf)
 
         canvas_card = QFrame()
         canvas_card.setObjectName("SurfaceCard")
         cc_layout = QVBoxLayout(canvas_card)
-        cc_layout.setContentsMargins(12, 12, 12, 12)
-        cc_layout.setSpacing(8)
+        cc_layout.setContentsMargins(10, 10, 10, 10)
+        cc_layout.setSpacing(6)
 
         hdr_row = QHBoxLayout()
         self.lbl_arch_summary = QLabel("")
         self.lbl_arch_summary.setStyleSheet("color: #98989D; font-size: 12px;")
         hdr_row.addWidget(self.lbl_arch_summary, 1)
 
-        hint = ElidedLabel("Click a folder to inspect · Double-click to edit rules · Click '+ Add' inside any tier")
+        self.lbl_zoom = QLabel("100%")
+        self.lbl_zoom.setStyleSheet("color: #6E6E73; font-size: 11px;")
+        self.lbl_zoom.setToolTip("Hold Ctrl + Mouse Wheel on canvas to zoom")
+        hdr_row.addWidget(self.lbl_zoom)
+
+        hint = ElidedLabel("Click to inspect · Double-click title to rename · Double-click rules to edit")
         hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         hint.setStyleSheet("color: #6E6E73; font-size: 11px;")
         hdr_row.addWidget(hint, 2)
@@ -891,15 +1969,19 @@ class ArchitectureTab(QWidget):
         self.canvas.node_edit_requested.connect(self._edit_node_by_id)
         self.canvas.node_delete_requested.connect(self._delete_node_by_id)
         self.canvas.tier_add_requested.connect(self._on_tier_quick_add)
+        self.canvas.node_reparent_requested.connect(self._on_node_reparented)
+        self.canvas.node_spawn_child_requested.connect(self._on_spawn_child_inline)
+        self.canvas.node_renamed.connect(self._on_node_renamed)
+        self.canvas.template_dropped.connect(self._on_template_dropped)
+        self.canvas.zoom_changed.connect(lambda z: self.lbl_zoom.setText(f"{int(round(z * 100))}%"))
         self.scroll.setWidget(self.canvas)
         cc_layout.addWidget(self.scroll, 1)
         body.addWidget(canvas_card, 1)
 
-        # Right Inspector Card
+        # Right Inspector Card (scrollable, inline editing without dropdowns)
         insp = QFrame()
         insp.setObjectName("SurfaceCard")
-        insp.setFixedWidth(250)
-        # The panel scrolls in a short window instead of setting the window's height.
+        insp.setFixedWidth(232)
         insp_outer = QVBoxLayout(insp)
         insp_outer.setContentsMargins(0, 0, 0, 0)
         insp_scroll = QScrollArea()
@@ -914,15 +1996,15 @@ class ArchitectureTab(QWidget):
         insp_scroll.setWidget(insp_body)
         insp_outer.addWidget(insp_scroll)
         il = QVBoxLayout(insp_body)
-        il.setContentsMargins(14, 14, 14, 14)
-        il.setSpacing(10)
+        il.setContentsMargins(12, 12, 12, 12)
+        il.setSpacing(8)
 
         insp_title = QLabel("Selected Folder")
         insp_title.setObjectName("CardTitle")
         il.addWidget(insp_title)
 
         self.lbl_sel_name = QLabel("None")
-        self.lbl_sel_name.setStyleSheet("font-size: 15px; font-weight: 600; color: #F5F5F7;")
+        self.lbl_sel_name.setStyleSheet("font-size: 14px; font-weight: 600; color: #F5F5F7;")
         self.lbl_sel_name.setWordWrap(True)
         il.addWidget(self.lbl_sel_name)
 
@@ -931,8 +2013,69 @@ class ArchitectureTab(QWidget):
         self.lbl_sel_path.setWordWrap(True)
         il.addWidget(self.lbl_sel_path)
 
+        # Inline Name & Color Swatches
+        self.edit_insp_name = QLineEdit()
+        self.edit_insp_name.setPlaceholderText("Folder name...")
+        self.edit_insp_name.editingFinished.connect(self._on_inspector_fields_committed)
+        il.addWidget(self.edit_insp_name)
+
+        swatch_row = QHBoxLayout()
+        swatch_row.setSpacing(4)
+        self._swatch_btns: dict[str, QPushButton] = {}
+        for label, k_key in (
+            ("Doc", "doc"),
+            ("PDF", "pdf"),
+            ("3D", "print"),
+            ("CAD", "cad"),
+            ("Image", "image"),
+            ("Video", "video"),
+            ("Code", "code"),
+            ("Finance", "finance"),
+            ("School", "school"),
+        ):
+            hex_c = KIND_COLORS[k_key]
+            sb = QPushButton("")
+            sb.setFixedSize(16, 16)
+            sb.setCursor(Qt.CursorShape.PointingHandCursor)
+            sb.setToolTip(f"Color: {label}")
+            sb.setCheckable(True)
+            sb.setStyleSheet(
+                f"QPushButton {{ background-color: {hex_c}; border: 1px solid #2C2C2E; border-radius: 8px; padding: 0; }}"
+                f"QPushButton:checked {{ border: 2px solid #FFFFFF; }}"
+            )
+            sb.clicked.connect(lambda _c, k=k_key: self._on_inspector_kind_picked(k))
+            self._swatch_btns[k_key] = sb
+            swatch_row.addWidget(sb)
+        swatch_row.addStretch(1)
+        il.addLayout(swatch_row)
+
+        # Inline Rule Inputs
+        lbl_ext = QLabel("Extensions")
+        lbl_ext.setStyleSheet("color: #8E8E93; font-size: 10.5px; font-weight: 600;")
+        il.addWidget(lbl_ext)
+        self.edit_insp_exts = QLineEdit()
+        self.edit_insp_exts.setPlaceholderText(".pdf, .docx, .3mf")
+        self.edit_insp_exts.editingFinished.connect(self._on_inspector_fields_committed)
+        il.addWidget(self.edit_insp_exts)
+
+        lbl_kw = QLabel("Keywords")
+        lbl_kw.setStyleSheet("color: #8E8E93; font-size: 10.5px; font-weight: 600;")
+        il.addWidget(lbl_kw)
+        self.edit_insp_keywords = QLineEdit()
+        self.edit_insp_keywords.setPlaceholderText("invoice, syllabus")
+        self.edit_insp_keywords.editingFinished.connect(self._on_inspector_fields_committed)
+        il.addWidget(self.edit_insp_keywords)
+
+        lbl_dom = QLabel("Websites")
+        lbl_dom.setStyleSheet("color: #8E8E93; font-size: 10.5px; font-weight: 600;")
+        il.addWidget(lbl_dom)
+        self.edit_insp_domains = QLineEdit()
+        self.edit_insp_domains.setPlaceholderText("makerworld.com")
+        self.edit_insp_domains.editingFinished.connect(self._on_inspector_fields_committed)
+        il.addWidget(self.edit_insp_domains)
+
         self.lbl_sel_rules = QLabel("")
-        self.lbl_sel_rules.setStyleSheet("color: #98989D; font-size: 12px;")
+        self.lbl_sel_rules.setStyleSheet("color: #636366; font-size: 11px;")
         self.lbl_sel_rules.setWordWrap(True)
         il.addWidget(self.lbl_sel_rules)
 
@@ -954,34 +2097,134 @@ class ArchitectureTab(QWidget):
         div.setObjectName("CardDivider")
         il.addWidget(div)
 
-        self.btn_carry_over = InteractiveRibbonBtn("Carry Over v2.8 / Setup...")
+        self.btn_carry_over = InteractiveRibbonBtn("Carry Over Setup...")
         self.btn_carry_over.setObjectName("GhostButton")
+        self.btn_carry_over.setToolTip("Carry over a Download Sorter v2.8 config or exported v3 setup")
         self.btn_carry_over.clicked.connect(self.carry_over_requested.emit)
         il.addWidget(self.btn_carry_over)
 
         body.addWidget(insp)
         root.addLayout(body, 1)
 
+        self._update_blueprint_pills()
+        self._update_undo_redo_buttons()
         self.sync_from_service(force=True)
 
-    # Below this width Auto-Create Basic and Undo show only their icons.
-    TOOLBAR_COMPACT_WIDTH = 950
+    def _apply_compact_mode(self) -> None:
+        compact = self.width() < self.TOOLBAR_COMPACT_WIDTH
+        changed = (
+            self.btn_auto_layout.is_collapsed() != compact
+            or self.btn_auto_create.is_collapsed() != compact
+            or self.btn_arch_undo.is_collapsed() != compact
+            or self.btn_arch_defaults.is_collapsed() != compact
+        )
+        self.btn_auto_layout.set_collapsed(compact)
+        self.btn_auto_create.set_collapsed(compact)
+        self.btn_arch_undo.set_collapsed(compact)
+        self.btn_arch_defaults.set_collapsed(compact)
+        if changed:
+            w: QWidget | None = self
+            while w is not None:
+                if w.layout() is not None:
+                    w.layout().invalidate()
+                w.updateGeometry()
+                if w.isWindow():
+                    break
+                w = w.parentWidget()
+
+    def showEvent(self, event) -> None:  # noqa: ANN001
+        super().showEvent(event)
+        self._apply_compact_mode()
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001
         super().resizeEvent(event)
-        compact = self.width() < self.TOOLBAR_COMPACT_WIDTH
-        self.btn_auto_create.set_collapsed(compact)
-        self.btn_arch_undo.set_collapsed(compact)
+        self._apply_compact_mode()
+
+    def keyPressEvent(self, event) -> None:  # noqa: ANN001
+        from PySide6.QtWidgets import QApplication
+
+        if isinstance(QApplication.focusWidget(), QLineEdit):
+            super().keyPressEvent(event)
+            return
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_Z:
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    self.redo_diagram_edit()
+                else:
+                    self.undo_diagram_edit()
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_Y:
+                self.redo_diagram_edit()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    # --- Local Diagram Undo / Redo ---
+
+    def _push_undo_snapshot(self) -> None:
+        self._undo_stack.append((self._arch.clone(), self.canvas.selected_node_id))
+        if len(self._undo_stack) > 40:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._update_undo_redo_buttons()
+
+    def undo_diagram_edit(self) -> None:
+        if not self._undo_stack:
+            return
+        prev_rects = self.canvas.snapshot_rects()
+        self._redo_stack.append((self._arch.clone(), self.canvas.selected_node_id))
+        arch_snap, sel_id = self._undo_stack.pop()
+        self._arch = arch_snap
+        self._dirty = True
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
+        if sel_id and self._arch.get_node(sel_id):
+            self.canvas.select_node(sel_id)
+        self._update_undo_redo_buttons()
+
+    def redo_diagram_edit(self) -> None:
+        if not self._redo_stack:
+            return
+        prev_rects = self.canvas.snapshot_rects()
+        self._undo_stack.append((self._arch.clone(), self.canvas.selected_node_id))
+        arch_snap, sel_id = self._redo_stack.pop()
+        self._arch = arch_snap
+        self._dirty = True
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
+        if sel_id and self._arch.get_node(sel_id):
+            self.canvas.select_node(sel_id)
+        self._update_undo_redo_buttons()
+
+    def _update_undo_redo_buttons(self) -> None:
+        self.btn_diag_undo.setEnabled(bool(self._undo_stack))
+        self.btn_diag_redo.setEnabled(bool(self._redo_stack))
+
+    def _update_blueprint_pills(self) -> None:
+        for key, pill in self._blueprint_btns.items():
+            pill.setChecked(key == self._active_preset)
 
     def sync_from_service(self, *, force: bool = False) -> None:
         if force or not self._dirty:
             self._arch = architecture_from_config(self.service.config)
             self._dirty = False
+            self._undo_stack.clear()
+            self._redo_stack.clear()
+            self._update_undo_redo_buttons()
         self._redraw_canvas()
 
-    def _redraw_canvas(self) -> None:
+    def _redraw_canvas(
+        self,
+        *,
+        animate: bool = False,
+        prev_rects: dict[str, QRectF] | None = None,
+    ) -> None:
         watch = str(self.service.watch_root)
-        self.canvas.set_architecture(self._arch, watch_label=watch)
+        self.canvas.set_architecture(
+            self._arch,
+            watch_label=watch,
+            animate=animate,
+            prev_rects=prev_rects,
+        )
         self.btn_add_tier.setEnabled(self._arch.tier_count < FolderArchitecture.MAX_TIERS)
         self.btn_remove_tier.setEnabled(self._arch.tier_count > FolderArchitecture.MIN_TIERS)
         dirty_tag = "  •  Unsaved draft (click Apply & Shift Files)" if self._dirty else ""
@@ -991,43 +2234,202 @@ class ArchitectureTab(QWidget):
         self._update_inspector(self.canvas.selected_node_id or "")
 
     def _update_inspector(self, node_id: str) -> None:
-        node = self._arch.get_node(node_id)
+        self._syncing_inspector = True
+        try:
+            node = self._arch.get_node(node_id)
+            if node is None:
+                self.lbl_sel_name.setText("Click any folder node")
+                self.lbl_sel_path.setText(str(self.service.watch_root))
+                self.lbl_sel_rules.setText("Select a folder card or drag a template onto the canvas.")
+                self.edit_insp_name.setText("")
+                self.edit_insp_exts.setText("")
+                self.edit_insp_keywords.setText("")
+                self.edit_insp_domains.setText("")
+                for w in (
+                    self.edit_insp_name,
+                    self.edit_insp_exts,
+                    self.edit_insp_keywords,
+                    self.edit_insp_domains,
+                ):
+                    w.setEnabled(False)
+                for sb in self._swatch_btns.values():
+                    sb.setChecked(False)
+                    sb.setEnabled(False)
+                self.btn_edit_node.setEnabled(False)
+                self.btn_add_child.setEnabled(False)
+                self.btn_delete_node.setEnabled(False)
+                return
+
+            rel = self._arch.node_relative_path(node.id)
+            self.lbl_sel_name.setText(f"{node.name} (Tier {node.tier})")
+            self.lbl_sel_path.setText(f"Downloads\\{rel}")
+            self.edit_insp_name.setText(node.name)
+            self.edit_insp_exts.setText(", ".join(node.extensions))
+            self.edit_insp_keywords.setText(", ".join(node.keywords))
+            self.edit_insp_domains.setText(", ".join(node.domains))
+            for w in (
+                self.edit_insp_name,
+                self.edit_insp_exts,
+                self.edit_insp_keywords,
+                self.edit_insp_domains,
+            ):
+                w.setEnabled(True)
+            for k, sb in self._swatch_btns.items():
+                sb.setEnabled(True)
+                sb.setChecked(k == node.kind)
+
+            child_count = len(self._arch.children_of(node.id))
+            self.lbl_sel_rules.setText(
+                f"{child_count} subfolder{'s' if child_count != 1 else ''} · Press Enter to apply inline edits"
+            )
+            self.btn_edit_node.setEnabled(True)
+            self.btn_add_child.setEnabled(node.tier < FolderArchitecture.MAX_TIERS)
+            self.btn_delete_node.setEnabled(True)
+        finally:
+            self._syncing_inspector = False
+
+    def _on_inspector_fields_committed(self) -> None:
+        if self._syncing_inspector:
+            return
+        node = self._arch.get_node(self.canvas.selected_node_id)
         if node is None:
-            self.lbl_sel_name.setText("Click any folder node")
-            self.lbl_sel_path.setText(str(self.service.watch_root))
-            self.lbl_sel_rules.setText("Select a node on the canvas to inspect or customize its rules.")
-            self.btn_edit_node.setEnabled(False)
-            self.btn_add_child.setEnabled(False)
-            self.btn_delete_node.setEnabled(False)
+            return
+        split = lambda s: [x.strip() for x in s.split(",") if x.strip()]
+        new_name = self.edit_insp_name.text().strip().replace("/", "").replace("\\", "") or node.name
+        new_exts = _clean_exts(split(self.edit_insp_exts.text()))
+        new_kws = _clean_strs(split(self.edit_insp_keywords.text()))
+        new_doms = [d.lower() for d in _clean_strs(split(self.edit_insp_domains.text()))]
+
+        if (
+            new_name == node.name
+            and new_exts == node.extensions
+            and new_kws == node.keywords
+            and new_doms == node.domains
+        ):
             return
 
-        rel = self._arch.node_relative_path(node.id)
-        self.lbl_sel_name.setText(f"{node.name} (Tier {node.tier})")
-        self.lbl_sel_path.setText(f"Downloads\\{rel}")
+        self._push_undo_snapshot()
+        self._arch.update_node(
+            node.id,
+            name=new_name,
+            extensions=new_exts,
+            keywords=new_kws,
+            domains=new_doms,
+        )
+        self._dirty = True
+        self._redraw_canvas()
 
-        lines = [
-            f"Extensions: {', '.join(node.extensions) or 'Any matched by rule'}",
-            f"Keywords: {', '.join(node.keywords) or 'None'}",
-            f"Websites: {', '.join(node.domains) or 'None'}",
-        ]
-        self.lbl_sel_rules.setText("\n".join(lines))
-        self.btn_edit_node.setEnabled(True)
-        self.btn_add_child.setEnabled(node.tier < FolderArchitecture.MAX_TIERS)
-        self.btn_delete_node.setEnabled(True)
+    def _on_inspector_kind_picked(self, kind_key: str) -> None:
+        node = self._arch.get_node(self.canvas.selected_node_id)
+        if node is None or node.kind == kind_key:
+            self._update_inspector(self.canvas.selected_node_id or "")
+            return
+        self._push_undo_snapshot()
+        self._arch.update_node(node.id, kind=kind_key)
+        self._dirty = True
+        self._redraw_canvas()
 
-    def _on_load_preset(self) -> None:
-        key = str(self.combo_preset.currentData() or "standard")
+    # --- Direct-Manipulation Canvas Signal Handlers ---
+
+    def _on_node_reparented(self, node_id: str, new_parent_id: str) -> None:
+        pid: str | None = new_parent_id or None
+        node = self._arch.get_node(node_id)
+        if node is None or node.parent_id == pid:
+            return
+        if not self._arch.can_reparent(node_id, pid):
+            return
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
+        if self._arch.reparent_node(node_id, pid):
+            self._dirty = True
+            self._redraw_canvas(animate=True, prev_rects=prev_rects)
+            self.canvas.select_node(node_id)
+
+    def _on_spawn_child_inline(self, parent_id: str, default_name: str) -> None:
+        pid = parent_id or None
+        if pid is None:
+            tier = 1
+            kind = "doc"
+        else:
+            pnode = self._arch.get_node(pid)
+            if pnode is None or pnode.tier >= FolderArchitecture.MAX_TIERS:
+                return
+            tier = pnode.tier + 1
+            kind = pnode.kind
+
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
+        node = self._arch.add_custom_node(
+            name=default_name,
+            tier=tier,
+            parent_id=pid,
+            kind=kind,
+        )
+        self._dirty = True
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
+        self.canvas.select_node(node.id)
+        if rect := self.canvas._node_rects.get(node.id):
+            z = self.canvas.zoom
+            self.scroll.ensureVisible(int(rect.center().x() * z), int(rect.center().y() * z), 40, 40)
+        self.canvas.start_inline_rename(node.id)
+
+    def _on_node_renamed(self, node_id: str, new_name: str) -> None:
+        node = self._arch.get_node(node_id)
+        if node is None or node.name == new_name:
+            return
+        self._push_undo_snapshot()
+        self._arch.update_node(node_id, name=new_name)
+        self._dirty = True
+        self._redraw_canvas()
+        self.canvas.select_node(node_id)
+
+    def _on_template_dropped(self, premade_key: str, target_tier: int, parent_id: str) -> None:
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
+        pid = parent_id or None
+        node = self._arch.add_premade_node(premade_key, tier=target_tier, parent_id=pid)
+        if node is None:
+            self._undo_stack.pop()
+            self._update_undo_redo_buttons()
+            return
+        self._dirty = True
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
+        self.canvas.select_node(node.id)
+
+    def _on_template_activated(self, premade_key: str) -> None:
+        sel = self._arch.get_node(self.canvas.selected_node_id)
+        if sel is not None and sel.tier < FolderArchitecture.MAX_TIERS:
+            target_tier = sel.tier + 1
+            parent_id = sel.id
+        else:
+            target_tier = 1
+            parent_id = ""
+        self._on_template_dropped(premade_key, target_tier, parent_id)
+
+    # --- Toolbar & Blueprint Actions ---
+
+    def _on_load_preset(self, key: str = "standard") -> None:
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
+        self._active_preset = key
+        self._update_blueprint_pills()
         self._arch = FolderArchitecture.from_preset(key)
         self._dirty = True
-        self._redraw_canvas()
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
+
+    def _on_auto_arrange(self) -> None:
+        prev_rects = self.canvas.snapshot_rects()
+        self.canvas.set_zoom(1.0)
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
 
     def _on_auto_create_basic(self) -> None:
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
+        self._active_preset = "basic_starter"
+        self._update_blueprint_pills()
         self._arch = FolderArchitecture.auto_create_basic(self.service.watch_root)
-        idx = self.combo_preset.findData("basic_starter")
-        if idx >= 0:
-            self.combo_preset.setCurrentIndex(idx)
         self._dirty = True
-        self._redraw_canvas()
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
         if self._arch.nodes:
             self.canvas.select_node(self._arch.nodes[0].id)
         self.architecture_applied.emit(
@@ -1035,27 +2437,42 @@ class ArchitectureTab(QWidget):
         )
 
     def _on_add_tier(self) -> None:
+        if self._arch.tier_count >= FolderArchitecture.MAX_TIERS:
+            return
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
         self._arch.add_tier()
         self._dirty = True
-        self._redraw_canvas()
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
 
     def _on_remove_tier(self) -> None:
         if self._arch.tier_count <= 1:
             return
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
         self._arch.remove_last_tier()
         self._dirty = True
-        self._redraw_canvas()
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
 
     def _on_tier_quick_add(self, tier: int) -> None:
-        self._open_premade_dialog(default_tier=tier)
+        parent_id = ""
+        if tier > 1:
+            sel = self._arch.get_node(self.canvas.selected_node_id)
+            if sel is not None and sel.tier == tier - 1:
+                parent_id = sel.id
+            else:
+                prev_nodes = self._arch.nodes_in_tier(tier - 1)
+                if not prev_nodes:
+                    self._open_premade_dialog(default_tier=tier)
+                    return
+                parent_id = prev_nodes[0].id
+        self._on_spawn_child_inline(parent_id, "New Folder")
 
     def _on_add_child_for_selected(self) -> None:
         node = self._arch.get_node(self.canvas.selected_node_id)
-        if node is None:
+        if node is None or node.tier >= FolderArchitecture.MAX_TIERS:
             return
-        if node.tier >= self._arch.tier_count:
-            self._arch.add_tier()
-        self._open_custom_dialog(default_tier=node.tier + 1, default_parent_id=node.id)
+        self._on_spawn_child_inline(node.id, "New Subfolder")
 
     def _open_premade_dialog(self, default_tier: int = 2, default_parent_id: str | None = None) -> None:
         dlg = PremadeFolderDialog(
@@ -1068,6 +2485,8 @@ class ArchitectureTab(QWidget):
             keys = dlg.selected_keys()
             if not keys:
                 return
+            prev_rects = self.canvas.snapshot_rects()
+            self._push_undo_snapshot()
             t_tier = dlg.target_tier()
             p_id = dlg.target_parent_id()
             last_added: ArchNode | None = None
@@ -1076,7 +2495,7 @@ class ArchitectureTab(QWidget):
                 if node is not None:
                     last_added = node
             self._dirty = True
-            self._redraw_canvas()
+            self._redraw_canvas(animate=True, prev_rects=prev_rects)
             if last_added is not None:
                 self.canvas.select_node(last_added.id)
 
@@ -1093,10 +2512,12 @@ class ArchitectureTab(QWidget):
             parent=self,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            prev_rects = self.canvas.snapshot_rects()
+            self._push_undo_snapshot()
             vals = dlg.values()
             node = self._arch.add_custom_node(**vals)
             self._dirty = True
-            self._redraw_canvas()
+            self._redraw_canvas(animate=True, prev_rects=prev_rects)
             self.canvas.select_node(node.id)
 
     def _edit_node_by_id(self, node_id: str) -> None:
@@ -1105,18 +2526,22 @@ class ArchitectureTab(QWidget):
             return
         dlg = CustomFolderNodeDialog(self._arch, node=node, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            prev_rects = self.canvas.snapshot_rects()
+            self._push_undo_snapshot()
             vals = dlg.values()
             self._arch.update_node(node.id, **vals)
             self._dirty = True
-            self._redraw_canvas()
+            self._redraw_canvas(animate=True, prev_rects=prev_rects)
             self.canvas.select_node(node.id)
 
     def _delete_node_by_id(self, node_id: str) -> None:
         if not node_id or self._arch.get_node(node_id) is None:
             return
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
         self._arch.remove_node(node_id)
         self._dirty = True
-        self._redraw_canvas()
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
 
     def _run_background(
         self,
@@ -1163,8 +2588,8 @@ class ArchitectureTab(QWidget):
             raise
 
     def _on_apply_and_shift(self) -> None:
+        self._on_inspector_fields_committed()
         target_cfg = apply_architecture_to_config(self._arch, self.service.config)
-        # Scanning every managed folder for the confirmation preview is disk work too.
         self._run_background(
             lambda: self.service.preview_architecture_shift(target_cfg),
             lambda plan: self._confirm_and_shift(target_cfg, plan),
@@ -1240,6 +2665,7 @@ class ArchitectureTab(QWidget):
         )
         if ans != QMessageBox.StandardButton.Yes:
             return
+
         def _done(res: dict[str, Any]) -> None:
             self._dirty = False
             self.sync_from_service(force=True)

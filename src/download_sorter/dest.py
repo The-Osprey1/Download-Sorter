@@ -10,6 +10,7 @@ watched folder those either escape it or become a folder literally named
 
 from __future__ import annotations
 
+from datetime import datetime
 import os
 from pathlib import Path, PureWindowsPath
 import re
@@ -19,6 +20,34 @@ DEFAULT_FALLBACK = "Other"
 # A path part that is still an unexpanded variable: ${NAME}, $NAME or %NAME%.
 _VAR_PART_RE = re.compile(r"^(\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[^%]*%)$")
 _BAD_CHARS = set('<>:"|?*')
+_UNSAFE_TOKEN_CHARS_RE = re.compile(r'[^A-Za-z0-9._-]+')
+
+
+def resolve_destination_tokens(
+    raw: str,
+    *,
+    host: str = "",
+    ext: str = "",
+    when: datetime | None = None,
+) -> str:
+    """Expand safe dynamic tokens (``{year}``, ``{month}``, ``{day}``, ``{host}``, ``{ext}``)."""
+    text = str(raw or "")
+    if "{" not in text:
+        return text
+    now = when or datetime.now()
+    clean_host = _UNSAFE_TOKEN_CHARS_RE.sub("-", (host or "").strip().lower()).strip(".-") or "unknown-site"
+    clean_ext = _UNSAFE_TOKEN_CHARS_RE.sub("", (ext or "").strip().lower().lstrip(".")) or "other"
+    replacements = {
+        "{year}": f"{now.year:04d}",
+        "{month}": f"{now.month:02d}",
+        "{day}": f"{now.day:02d}",
+        "{host}": clean_host,
+        "{ext}": clean_ext,
+    }
+    for token, value in replacements.items():
+        if token in text:
+            text = text.replace(token, value)
+    return text
 
 
 def _expand(text: str) -> str:

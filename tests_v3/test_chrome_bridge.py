@@ -23,7 +23,7 @@ def test_chrome_extension_manifest_key_matches_extension_id() -> None:
     assert ext_dir is not None
     manifest = json.loads((ext_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["manifest_version"] == 3
-    for perm in ("downloads", "nativeMessaging", "storage"):
+    for perm in ("downloads", "nativeMessaging", "storage", "tabs", "contextMenus"):
         assert perm in manifest["permissions"]
 
     der = base64.b64decode(manifest["key"])
@@ -74,10 +74,10 @@ def test_native_messaging_framing_and_routing(app_paths: AppPaths) -> None:
     assert stl_resp["decision"] == "suggest"
     assert stl_resp["relative_dest"] == "3D Printing/Printables/bracket.stl"
 
-    # .3MF grace hold keeps .3mf at top-level
-    hold_resp = chrome_bridge.route_chrome_download({"filename": "plate1.3mf"}, app_paths)
-    assert hold_resp["decision"] == "default"
-    assert hold_resp["match_type"] == "hold"
+    # Chrome-routed .3mf goes straight to sorted subfolder (no hold needed when Chrome routes directly)
+    three_mf_resp = chrome_bridge.route_chrome_download({"filename": "plate1.3mf"}, app_paths)
+    assert three_mf_resp["decision"] == "suggest"
+    assert three_mf_resp["relative_dest"].endswith("/plate1.3mf")
 
     # Paused sorter falls back to Chrome default
     cfg.paused = True
@@ -150,6 +150,76 @@ def test_completed_chrome_download_records_db_quick_switcher_and_ipc(v3_qapp, ap
         assert seen_moves[0][1][0]["file_name"] == "photo.png"
         active = svc.db.list_active_moves(limit=5)
         assert active[0]["filename"] == "photo.png"
+
+        # 3. Live IPC 'set_paused' and 'reload_config'
+        pause_ipc = handler({"cmd": "set_paused", "paused": True})
+        assert pause_ipc["ok"] is True
+        assert svc.paused is True
+        reload_ipc = handler({"cmd": "reload_config"})
+        assert reload_ipc["ok"] is True
     finally:
         win.close()
         svc.stop(timeout=1.0)
+
+
+def test_tab_url_fallback_tokens_and_new_native_actions(app_paths: AppPaths) -> None:
+    cfg = Config.with_starter_defaults()
+    cfg.rules.insert(
+        0,
+        Rule(
+            id="gh_assets",
+            name="GitHub Releases",
+            destination="Dev/{host}/{ext}",
+            domains=["github.com"],
+            extensions=[".zip"],
+        ),
+    )
+    save_config(cfg, app_paths)
+
+    # CDN finalUrl misses domain, but active tabUrl matches github.com and expands {host}/{ext}
+    cdn_resp = chrome_bridge.route_chrome_download(
+        {
+            "filename": "release-v1.zip",
+            "finalUrl": "https://objects.githubusercontent.com/github-production-release-asset/123",
+            "tabUrl": "https://github.com/devyn/download-sorter/releases",
+            "tabTitle": "Releases · devyn/download-sorter",
+        },
+        app_paths,
+    )
+    assert cdn_resp["ok"] is True
+    assert cdn_resp["decision"] == "suggest"
+    assert cdn_resp["relative_dest"] == "Dev/objects.githubusercontent.com/zip/release-v1.zip"
+    assert cdn_resp["source_host"] == "objects.githubusercontent.com"
+
+    # list_folders returns sorted relative destinations
+    folders_resp = chrome_bridge.handle_native_request({"action": "list_folders"}, app_paths)
+    assert folders_resp["ok"] is True
+    assert "Documents" in folders_resp["folders"]
+
+    # create_rule adds a new rule and avoids duplicates
+    created = chrome_bridge.create_chrome_rule(
+        {"domain": "https://www.makerworld.com/en/models/1", "destination": "3D Models/MakerWorld"},
+        app_paths,
+        try_ipc=False,
+    )
+    assert created["ok"] is True
+    assert created["created"] is True
+    assert created["rule"]["domains"] == ["makerworld.com"]
+
+    dup = chrome_bridge.create_chrome_rule(
+        {"domain": "makerworld.com", "destination": "3D Models/MakerWorld"},
+        app_paths,
+        try_ipc=False,
+    )
+    assert dup["ok"] is True
+    assert dup["created"] is False
+
+    # toggle_pause flips and persists config.paused
+    p1 = chrome_bridge.toggle_pause_from_chrome({}, app_paths, try_ipc=False)
+    assert p1["ok"] is True and p1["paused"] is True
+    p2 = chrome_bridge.toggle_pause_from_chrome({"paused": False}, app_paths, try_ipc=False)
+    assert p2["ok"] is True and p2["paused"] is False
+
+    # undo_last runs cleanly even with no moves
+    undo_resp = chrome_bridge.undo_last_from_chrome(app_paths, try_ipc=False)
+    assert undo_resp["ok"] is True

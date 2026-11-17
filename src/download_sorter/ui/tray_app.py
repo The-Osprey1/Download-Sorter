@@ -122,6 +122,15 @@ def build_ipc_handler(
             return _in_background(service.file_held_3mf_now, lambda res: {"moved": len(res["moved"])})
         if cmd == "undo":
             return _in_background(service.undo_last_batch, lambda res: dict(res))
+        if cmd == "set_paused":
+            paused = bool(req.get("paused", not service.paused))
+            service.set_paused(paused)
+            window.refresh_all()
+            return {"ok": True, "paused": service.paused}
+        if cmd == "reload_config":
+            service.reload_config()
+            window.refresh_all()
+            return {"ok": True, "rules_count": sum(1 for r in service.config.rules if r.enabled)}
         if cmd == "chrome_routed":
             watch_dir = service.watch_root.resolve()
             raw_dest = str(req.get("dest_path") or "").strip()

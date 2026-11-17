@@ -851,6 +851,78 @@ class FolderArchitecture:
     def children_of(self, parent_id: str | None) -> list[ArchNode]:
         return [n for n in self.nodes if n.parent_id == parent_id]
 
+    def is_descendant_of(self, candidate_id: str, ancestor_id: str) -> bool:
+        """Return True if ``candidate_id`` is a strict descendant of ``ancestor_id``."""
+        cur = self.get_node(candidate_id)
+        visited: set[str] = set()
+        while cur is not None and cur.parent_id and cur.id not in visited:
+            visited.add(cur.id)
+            if cur.parent_id == ancestor_id:
+                return True
+            cur = self.get_node(cur.parent_id)
+        return False
+
+    def subtree_depth(self, node_id: str, _visited: set[str] | None = None) -> int:
+        """Return max depth below ``node_id`` (0 for a leaf node)."""
+        visited = set(_visited or ())
+        if node_id in visited:
+            return 0
+        visited.add(node_id)
+        children = self.children_of(node_id)
+        if not children:
+            return 0
+        return 1 + max(self.subtree_depth(c.id, visited) for c in children)
+
+    def can_reparent(self, node_id: str, new_parent_id: str | None) -> bool:
+        """Validate moving ``node_id`` under ``new_parent_id`` (None = Tier 1 root)."""
+        node = self.get_node(node_id)
+        if node is None:
+            return False
+        sub_depth = self.subtree_depth(node_id)
+        if new_parent_id is None:
+            return (1 + sub_depth) <= self.MAX_TIERS
+        if new_parent_id == node_id:
+            return False
+        target = self.get_node(new_parent_id)
+        if target is None:
+            return False
+        if self.is_descendant_of(new_parent_id, node_id):
+            return False
+        new_tier = target.tier + 1
+        return (new_tier + sub_depth) <= self.MAX_TIERS
+
+    def reparent_node(self, node_id: str, new_parent_id: str | None) -> bool:
+        """Move ``node_id`` (and its subtree) under ``new_parent_id`` (None = Tier 1 root)."""
+        if not self.can_reparent(node_id, new_parent_id):
+            return False
+        node = self.get_node(node_id)
+        if node is None:
+            return False
+        if new_parent_id is None:
+            node.parent_id = None
+            new_tier = 1
+        else:
+            target = self.get_node(new_parent_id)
+            if target is None:
+                return False
+            node.parent_id = target.id
+            new_tier = target.tier + 1
+
+        def _apply_tier(cur: ArchNode, tier: int, seen: set[str]) -> None:
+            if cur.id in seen:
+                return
+            seen.add(cur.id)
+            cur.tier = max(1, min(self.MAX_TIERS, tier))
+            if cur.tier == 1:
+                cur.parent_id = None
+            for child in self.children_of(cur.id):
+                _apply_tier(child, cur.tier + 1, seen)
+
+        _apply_tier(node, new_tier, set())
+        max_used = max((n.tier for n in self.nodes), default=1)
+        self.tier_count = max(self.tier_count, min(self.MAX_TIERS, max_used))
+        return True
+
     def node_relative_path(self, node_id: str) -> str:
         parts: list[str] = []
         seen: set[str] = set()

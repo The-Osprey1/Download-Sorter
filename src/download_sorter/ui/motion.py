@@ -14,7 +14,10 @@ from PySide6.QtCore import (
     Property,
     QAbstractAnimation,
     QEasingCurve,
+    QEvent,
+    QObject,
     QParallelAnimationGroup,
+    QPoint,
     QPointF,
     QPropertyAnimation,
     QRectF,
@@ -33,6 +36,7 @@ from PySide6.QtGui import (
     QLinearGradient,
     QPainter,
     QPainterPath,
+    QPaintEvent,
     QPen,
     QPixmap,
 )
@@ -43,6 +47,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QTableWidget,
     QVBoxLayout,
     QWidget,
@@ -501,6 +506,17 @@ def make_vector_icon(name: str, color_hex: str = "#F3F4F6", size: int = 16) -> Q
         path.lineTo(5.0, 12.0)
         p.drawPath(path)
         p.drawPolyline([QPointF(6.0, 3.5), QPointF(3.2, 6.0), QPointF(6.0, 8.5)])
+    elif name == "redo":
+        path = QPainterPath()
+        path.moveTo(12.5, 6.0)
+        path.lineTo(6.5, 6.0)
+        path.arcTo(QRectF(3.5, 6.0, 6.0, 6.0), 90, 180)
+        path.lineTo(11.0, 12.0)
+        p.drawPath(path)
+        p.drawPolyline([QPointF(10.0, 3.5), QPointF(12.8, 6.0), QPointF(10.0, 8.5)])
+    elif name == "fit":
+        for cx, cy, dx, dy in ((3.0, 3.0, 3.2, 3.2), (13.0, 3.0, -3.2, 3.2), (3.0, 13.0, 3.2, -3.2), (13.0, 13.0, -3.2, -3.2)):
+            p.drawPolyline([QPointF(cx + dx, cy), QPointF(cx, cy), QPointF(cx, cy + dy)])
     elif name == "folder":
         path = QPainterPath()
         path.moveTo(2.0, 4.5)
@@ -1911,3 +1927,272 @@ class SortingProgressHUD(QFrame):
 
 
 WalkthroughCanvas = WalkthroughDiagramCanvas
+
+
+# ---------------------------------------------------------------------------
+# Refined Micro-Interactions (Tactile Press, Row Flash, Crossfade, Spring Pop)
+# ---------------------------------------------------------------------------
+class _GlowOverlay(QWidget):
+    """Mouse-transparent overlay that renders a smooth border and fill glow."""
+
+    def __init__(self, parent: QWidget, color: QColor, radius: int = 8) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self._color = QColor(color)
+        self._alpha = 0.0
+        self._radius = radius
+        self.resize(parent.size())
+
+    def set_alpha(self, alpha: float) -> None:
+        self._alpha = max(0.0, min(1.0, alpha))
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        if self._alpha <= 0.005:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        fill = QColor(self._color)
+        fill.setAlphaF(self._alpha * 0.16)
+        border = QColor(self._color)
+        border.setAlphaF(self._alpha * 0.65)
+
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        painter.setBrush(fill)
+        painter.setPen(border)
+        painter.drawRoundedRect(rect, self._radius, self._radius)
+
+
+class _ButtonPressFilter(QObject):
+    """Event filter adding a tactile glow + OutBack spring release on QPushButton."""
+
+    def __init__(self, button: QPushButton, accent_hex: str = "#0A84FF") -> None:
+        super().__init__(button)
+        self._btn = button
+        self._overlay = _GlowOverlay(button, QColor(accent_hex))
+        self._overlay.show()
+
+    def _animate_glow(self, start: float, end: float, duration: int, curve: QEasingCurve.Type) -> None:
+        if not animations_enabled():
+            self._overlay.set_alpha(0.0)
+            return
+
+        anim = QVariantAnimation(self._btn)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setDuration(duration)
+        anim.setEasingCurve(curve)
+        anim.valueChanged.connect(lambda v: self._overlay.set_alpha(float(v)))
+        _keep(self._btn, "_motion_btn_glow", anim)
+        anim.start()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        et = event.type()
+        if et == QEvent.Type.Resize:
+            self._overlay.resize(self._btn.size())
+        elif et == QEvent.Type.MouseButtonPress and self._btn.isEnabled():
+            self._animate_glow(self._overlay._alpha, 1.0, 95, QEasingCurve.Type.OutCubic)
+        elif et == QEvent.Type.MouseButtonRelease and self._btn.isEnabled():
+            self._animate_glow(self._overlay._alpha, 0.0, 280, QEasingCurve.Type.OutBack)
+        elif et == QEvent.Type.Leave and self._overlay._alpha > 0:
+            self._animate_glow(self._overlay._alpha, 0.0, 180, QEasingCurve.Type.OutCubic)
+        return super().eventFilter(watched, event)
+
+
+def attach_press_feedback(button: QPushButton, accent_hex: str = "#0A84FF") -> None:
+    """Attach smooth press/release visual glow feedback to a QPushButton."""
+    filt = _ButtonPressFilter(button, accent_hex)
+    button.installEventFilter(filt)
+    setattr(button, "_ds_press_filter", filt)
+
+
+def flash_routed_widget(
+    widget: QWidget,
+    color_hex: str = "#30D158",
+    duration_ms: int = 900,
+    radius: int = 9,
+) -> None:
+    """Flash a newly routed card widget with a green/cyan highlight that decays via OutCubic."""
+    if not animations_enabled():
+        return
+
+    overlay = getattr(widget, "_ds_flash_overlay", None)
+    if overlay is None:
+        overlay = _GlowOverlay(widget, QColor(color_hex), radius=radius)
+        setattr(widget, "_ds_flash_overlay", overlay)
+    else:
+        overlay._color = QColor(color_hex)
+
+    overlay.resize(widget.size())
+    overlay.raise_()
+    overlay.show()
+
+    anim = QVariantAnimation(widget)
+    anim.setStartValue(1.0)
+    anim.setKeyValueAt(0.25, 0.85)
+    anim.setEndValue(0.0)
+    anim.setDuration(duration_ms)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    anim.valueChanged.connect(lambda v: overlay.set_alpha(float(v)))
+    anim.finished.connect(overlay.hide)
+
+    _keep(widget, "_motion_flash_row", anim)
+    anim.start()
+
+
+def flash_table_row(
+    table: QTableWidget,
+    row: int,
+    color_hex: str = "#30D158",
+    duration_ms: int = 950,
+) -> None:
+    """Flash all cells in ``row`` of a QTableWidget when a new file is routed."""
+    if not animations_enabled() or row < 0 or row >= table.rowCount():
+        return
+
+    base_color = QColor(color_hex)
+    anim = QVariantAnimation(table)
+    anim.setStartValue(0.32)
+    anim.setEndValue(0.0)
+    anim.setDuration(duration_ms)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _update_row_bg(alpha: float) -> None:
+        if row >= table.rowCount():
+            return
+        c = QColor(base_color)
+        c.setAlphaF(float(alpha))
+        brush_color = c if alpha > 0.01 else QColor(Qt.GlobalColor.transparent)
+        for col in range(table.columnCount()):
+            item = table.item(row, col)
+            if item is not None:
+                item.setBackground(brush_color)
+
+    anim.valueChanged.connect(_update_row_bg)
+    _keep(table, f"_motion_flash_table_row_{row}", anim)
+    anim.start()
+
+
+def crossfade_stacked_widget(
+    stack: QStackedWidget,
+    new_index: int,
+    duration_ms: int = 210,
+    slide_px: int = 8,
+    on_finished: Callable[[], None] | None = None,
+) -> None:
+    """Crossfade and micro-slide a QStackedWidget to ``new_index`` using OutCubic."""
+    current_index = stack.currentIndex()
+    if current_index == new_index or new_index < 0 or new_index >= stack.count():
+        return
+
+    if not animations_enabled():
+        stack.setCurrentIndex(new_index)
+        if on_finished:
+            on_finished()
+        return
+
+    current_widget = stack.currentWidget()
+    next_widget = stack.widget(new_index)
+    if current_widget is None or next_widget is None:
+        stack.setCurrentIndex(new_index)
+        return
+
+    snapshot = current_widget.grab()
+    overlay_label = QLabel(stack)
+    overlay_label.setPixmap(snapshot)
+    overlay_label.setGeometry(current_widget.geometry())
+    overlay_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+    overlay_label.show()
+    overlay_label.raise_()
+
+    out_effect = QGraphicsOpacityEffect(overlay_label)
+    overlay_label.setGraphicsEffect(out_effect)
+
+    stack.setCurrentIndex(new_index)
+    in_effect = QGraphicsOpacityEffect(next_widget)
+    in_effect.setOpacity(0.0)
+    next_widget.setGraphicsEffect(in_effect)
+
+    direction = 1 if new_index > current_index else -1
+    target_pos: QPoint = next_widget.pos()
+    start_pos = QPoint(target_pos.x(), target_pos.y() + (slide_px * direction))
+    next_widget.move(start_pos)
+
+    group = QParallelAnimationGroup(stack)
+
+    fade_out = QPropertyAnimation(out_effect, b"opacity", group)
+    fade_out.setDuration(int(duration_ms * 0.75))
+    fade_out.setStartValue(1.0)
+    fade_out.setEndValue(0.0)
+    fade_out.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    fade_in = QPropertyAnimation(in_effect, b"opacity", group)
+    fade_in.setDuration(duration_ms)
+    fade_in.setStartValue(0.0)
+    fade_in.setEndValue(1.0)
+    fade_in.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    slide_in = QPropertyAnimation(next_widget, b"pos", group)
+    slide_in.setDuration(duration_ms)
+    slide_in.setStartValue(start_pos)
+    slide_in.setEndValue(target_pos)
+    slide_in.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    group.addAnimation(fade_out)
+    group.addAnimation(fade_in)
+    group.addAnimation(slide_in)
+
+    def _cleanup() -> None:
+        overlay_label.hide()
+        overlay_label.deleteLater()
+        next_widget.setGraphicsEffect(None)
+        next_widget.move(target_pos)
+        if on_finished:
+            on_finished()
+
+    group.finished.connect(_cleanup)
+    _keep(stack, "_motion_stack_crossfade", group)
+    group.start()
+
+
+def spring_pop_in(widget: QWidget, duration_ms: int = 260, offset_y: int = 10) -> None:
+    """Animate a widget into place with an OutBack spring curve and OutCubic opacity."""
+    if not animations_enabled():
+        widget.show()
+        return
+
+    widget.show()
+    end_pos = widget.pos()
+    start_pos = QPoint(end_pos.x(), end_pos.y() + offset_y)
+    widget.move(start_pos)
+
+    eff = QGraphicsOpacityEffect(widget)
+    eff.setOpacity(0.0)
+    widget.setGraphicsEffect(eff)
+
+    group = QParallelAnimationGroup(widget)
+
+    pos_anim = QPropertyAnimation(widget, b"pos", group)
+    pos_anim.setDuration(duration_ms)
+    pos_anim.setStartValue(start_pos)
+    pos_anim.setEndValue(end_pos)
+    pos_anim.setEasingCurve(QEasingCurve.Type.OutBack)
+
+    fade_anim = QPropertyAnimation(eff, b"opacity", group)
+    fade_anim.setDuration(int(duration_ms * 0.8))
+    fade_anim.setStartValue(0.0)
+    fade_anim.setEndValue(1.0)
+    fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    group.addAnimation(pos_anim)
+    group.addAnimation(fade_anim)
+
+    def _cleanup() -> None:
+        widget.setGraphicsEffect(None)
+        widget.move(end_pos)
+
+    group.finished.connect(_cleanup)
+    _keep(widget, "_motion_spring_pop_in", group)
+    group.start()

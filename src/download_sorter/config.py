@@ -254,6 +254,8 @@ class Rule:
     keywords: list[str] = field(default_factory=list)
     domains: list[str] = field(default_factory=list)
     extensions: list[str] = field(default_factory=list)
+    content_keywords: list[str] = field(default_factory=list)
+    auto_unzip: bool = False
     enabled: bool = True
 
     def __post_init__(self) -> None:
@@ -263,6 +265,8 @@ class Rule:
         self.keywords = _normalize_str_list(self.keywords)
         self.domains = [d.lower() for d in _normalize_str_list(self.domains)]
         self.extensions = _normalize_ext_list(self.extensions)
+        self.content_keywords = _normalize_str_list(self.content_keywords)
+        self.auto_unzip = bool(self.auto_unzip)
         self.enabled = bool(self.enabled)
 
     def to_dict(self) -> dict[str, Any]:
@@ -277,6 +281,8 @@ class Rule:
             keywords=list(data.get("keywords") if "keywords" in data else data.get("match", [])),
             domains=list(data.get("domains") if "domains" in data else data.get("sites", [])),
             extensions=list(data.get("extensions", [])),
+            content_keywords=list(data.get("content_keywords", [])),
+            auto_unzip=bool(data.get("auto_unzip", False)),
             enabled=bool(data.get("enabled", True)),
         )
 
@@ -371,6 +377,8 @@ class Config:
     ribbon_timeout_seconds: float = 6.0
     hold_3mf_enabled: bool = True
     hold_3mf_days: int = 7
+    auto_unzip_all: bool = False
+    zip_keep_original: bool = True
     quick_switcher_enabled: bool = True
     quick_switcher_timeout_seconds: float = 300.0
     quick_switcher_3d_timeout_hours: float = 12.0
@@ -486,6 +494,8 @@ class Config:
             "ribbon_timeout_seconds": self.ribbon_timeout_seconds,
             "hold_3mf_enabled": self.hold_3mf_enabled,
             "hold_3mf_days": self.hold_3mf_days,
+            "auto_unzip_all": self.auto_unzip_all,
+            "zip_keep_original": self.zip_keep_original,
             "quick_switcher_enabled": self.quick_switcher_enabled,
             "quick_switcher_timeout_seconds": self.quick_switcher_timeout_seconds,
             "quick_switcher_3d_timeout_hours": self.quick_switcher_3d_timeout_hours,
@@ -517,6 +527,8 @@ class Config:
             ribbon_timeout_seconds=data.get("ribbon_timeout_seconds", 6.0),
             hold_3mf_enabled=data.get("hold_3mf_enabled", True),
             hold_3mf_days=data.get("hold_3mf_days", 7),
+            auto_unzip_all=bool(data.get("auto_unzip_all", False)),
+            zip_keep_original=bool(data.get("zip_keep_original", True)),
             quick_switcher_enabled=data.get("quick_switcher_enabled", True),
             quick_switcher_timeout_seconds=data.get("quick_switcher_timeout_seconds", 300.0),
             quick_switcher_3d_timeout_hours=data.get("quick_switcher_3d_timeout_hours", 12.0),

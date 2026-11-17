@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from datetime import datetime
 import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -291,6 +292,43 @@ def _move_with_retries(src: Path, dest: Path) -> None:
     raise last_err
 
 
+def sync_slicer_recent_projects(old_path: Path, new_path: Path) -> int:
+    """Update Bambu Studio / OrcaSlicer ``recent_projects`` when a ``.3mf`` is moved."""
+    if sys.platform != "win32":
+        return 0
+    appdata = os.environ.get("APPDATA", "")
+    if not appdata:
+        return 0
+    old_norm = str(old_path.resolve()).lower()
+    new_str = str(new_path.resolve())
+    updated = 0
+    for app_name in ("BambuStudio", "OrcaSlicer"):
+        conf_path = Path(appdata) / app_name / f"{app_name}.conf"
+        if not conf_path.is_file():
+            continue
+        try:
+            data = json.loads(conf_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        recent = data.get("recent_projects")
+        if not isinstance(recent, dict):
+            continue
+        changed = False
+        for key, val in list(recent.items()):
+            if isinstance(val, str) and val.strip() and str(Path(val)).lower() == old_norm:
+                recent[key] = new_str
+                changed = True
+                updated += 1
+        if changed:
+            try:
+                tmp = conf_path.with_suffix(".conf.tmp")
+                tmp.write_text(json.dumps(data, indent=4, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, conf_path)
+            except OSError:
+                pass
+    return updated
+
+
 def execute_move(
     src: Path,
     decision: RouteDecision,
@@ -349,6 +387,8 @@ def execute_move(
             db.rollback_move_intent(move_id)
         raise
     db.complete_move_intent(move_id, final_dest)
+    if final_dest.suffix.lower() == ".3mf":
+        sync_slicer_recent_projects(src_resolved, final_dest)
     return {
         "id": move_id,
         "batch_id": batch_id,
@@ -676,3 +716,225 @@ def delete_files_safely(
         "freed_bytes": freed_bytes,
         "recycled": used_recycle,
     }
+
+
+class ZipBombError(Exception):
+    """Raised when a ZIP archive fails zip-bomb or path-safety verification."""
+
+
+def extract_zip_safely(
+    zip_path: Path,
+    target_dir: Path,
+    watch_root: Path,
+    *,
+    db: StateDB | None = None,
+    batch_id: str | None = None,
+    keep_original: bool = False,
+    max_files: int = 500,
+    max_file_bytes: int = 250 * 1024 * 1024,
+    max_total_bytes: int = 500 * 1024 * 1024,
+    max_compression_ratio: float = 100.0,
+) -> dict[str, Any]:
+    """Safely extract a ``.zip`` archive inside ``watch_root`` with stream-based zip-bomb verification.
+
+    Verification process:
+    1. Rejects > ``max_files`` entries, symlinks, Zip-Slip (``..`` / absolute paths),
+       and declared total size > ``max_total_bytes``.
+    2. Streams each entry in 64 KB blocks, counting **actual decompressed bytes**
+       (ignoring spoofed headers) and aborting immediately if per-file size,
+       total size, or compression ratio (> ``max_compression_ratio`` above 1 MB) is exceeded.
+    3. Rolls back any partial extraction on failure and leaves the original ``.zip`` untouched.
+    """
+    import stat as _stat
+    import zipfile
+
+    root = watch_root.resolve()
+    src = zip_path.resolve()
+    if not src.is_file() or src.suffix.lower() != ".zip" or not is_under_watch_root(src, root):
+        return {"ok": False, "error": "Invalid or out-of-bounds zip archive", "extracted": []}
+
+    extract_root = (target_dir / src.stem).resolve()
+    if not is_under_watch_root(extract_root, root):
+        return {"ok": False, "error": "Target directory outside watch root", "extracted": []}
+    if extract_root.exists():
+        extract_root = _next_available_name(extract_root)
+
+    extracted: list[str] = []
+    total_extracted_bytes = 0
+    try:
+        with zipfile.ZipFile(src, "r") as zf:
+            infos = [info for info in zf.infolist() if not info.is_dir()]
+            if len(infos) > max_files:
+                raise ZipBombError(f"Archive exceeds {max_files} files ({len(infos)})")
+
+            declared_total = 0
+            for info in infos:
+                # Reject symlinks stored in Unix external_attr
+                if _stat.S_ISLNK((info.external_attr >> 16) & 0o170000):
+                    raise ZipBombError(f"Symlink entry blocked: {info.filename}")
+                declared_total += max(0, int(info.file_size))
+                if declared_total > max_total_bytes:
+                    raise ZipBombError("Declared archive size exceeds safety limit")
+                rel_member = Path(info.filename.replace("\\", "/"))
+                if rel_member.is_absolute() or ".." in rel_member.parts:
+                    raise ZipBombError(f"Unsafe archive path: {info.filename}")
+                dest_member = (extract_root / rel_member).resolve()
+                if not is_under_watch_root(dest_member, extract_root):
+                    raise ZipBombError(f"Unsafe archive target: {info.filename}")
+
+            extract_root.mkdir(parents=True, exist_ok=True)
+            for info in infos:
+                rel_member = Path(info.filename.replace("\\", "/"))
+                dest_member = (extract_root / rel_member).resolve()
+                dest_member.parent.mkdir(parents=True, exist_ok=True)
+                compress_size = max(1, int(info.compress_size))
+                file_bytes = 0
+
+                with zf.open(info, "r") as src_stream, dest_member.open("wb") as out_stream:
+                    while True:
+                        chunk = src_stream.read(65536)
+                        if not chunk:
+                            break
+                        chunk_len = len(chunk)
+                        file_bytes += chunk_len
+                        total_extracted_bytes += chunk_len
+
+                        if file_bytes > max_file_bytes:
+                            raise ZipBombError(
+                                f"File '{info.filename}' exceeded {max_file_bytes // (1024 * 1024)} MB limit"
+                            )
+                        if total_extracted_bytes > max_total_bytes:
+                            raise ZipBombError(
+                                f"Archive exceeded {max_total_bytes // (1024 * 1024)} MB total limit"
+                            )
+                        # Enforce compression ratio once at least 1 MB has been decompressed
+                        # so tiny valid files (e.g. small text/JSON) never false-positive.
+                        if file_bytes >= 1024 * 1024:
+                            ratio = file_bytes / compress_size
+                            if ratio > max_compression_ratio:
+                                raise ZipBombError(
+                                    f"Suspected zip bomb in '{info.filename}' (ratio {ratio:.1f}:1 > {max_compression_ratio:.0f}:1)"
+                                )
+                        out_stream.write(chunk)
+                extracted.append(str(dest_member))
+    except (ZipBombError, zipfile.BadZipFile, OSError, RuntimeError) as exc:
+        shutil.rmtree(extract_root, ignore_errors=True)
+        logging.warning("Zip extraction aborted for %s: %s", src.name, exc)
+        return {
+            "ok": False,
+            "zip_bomb": isinstance(exc, ZipBombError),
+            "error": str(exc),
+            "extracted": [],
+        }
+
+    archived_path = ""
+    if not keep_original and db is not None:
+        archive_rel = Path("Archives") / "_Extracted" / src.name
+        rec = execute_move(
+            src,
+            RouteDecision(
+                action="move",
+                relative_dest=archive_rel,
+                reason=f"Archived after extracting {len(extracted)} file(s)",
+                matched_rule="Auto-Unzip",
+                match_type="auto_unzip",
+            ),
+            batch_id=batch_id or f"unzip-{int(time.time())}",
+            db=db,
+            watch_root=root,
+            settle_seconds=0.0,
+        )
+        if rec:
+            archived_path = str(rec.get("dest_path") or "")
+
+    return {
+        "ok": True,
+        "extract_dir": str(extract_root),
+        "extracted": extracted,
+        "total_bytes": total_extracted_bytes,
+        "archived_zip": archived_path,
+    }
+
+
+_INSTALLER_EXTS = {".exe", ".msi", ".msix", ".msp"}
+
+
+def scan_detox_candidates(
+    watch_root: Path,
+    *,
+    old_installer_days: int = 30,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Find old installers (>.N days) and empty directories inside ``watch_root``."""
+    root = watch_root.resolve()
+    if not root.is_dir():
+        return {"old_installers": [], "empty_folders": [], "total_bytes": 0}
+
+    ref_now = now if now is not None else time.time()
+    cutoff = ref_now - max(1, int(old_installer_days)) * 86400.0
+    old_installers: list[dict[str, Any]] = []
+    empty_folders: list[str] = []
+    total_bytes = 0
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        cur = Path(dirpath)
+        # Skip hidden and internal system/archive folders
+        dirnames[:] = [
+            d for d in dirnames if not d.startswith(".") and d not in ("_Duplicates", "_Extracted")
+        ]
+        for fname in filenames:
+            fpath = cur / fname
+            if fpath.suffix.lower() not in _INSTALLER_EXTS:
+                continue
+            try:
+                st = fpath.stat()
+            except OSError:
+                continue
+            if st.st_mtime <= cutoff:
+                age_days = int((ref_now - st.st_mtime) / 86400.0)
+                total_bytes += st.st_size
+                old_installers.append(
+                    {
+                        "path": str(fpath),
+                        "name": fpath.name,
+                        "size_bytes": st.st_size,
+                        "age_days": age_days,
+                    }
+                )
+
+    # Bottom-up walk for empty directories
+    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+        cur = Path(dirpath)
+        if cur == root:
+            continue
+        if cur.name.startswith(".") or cur.name in ("_Duplicates", "_Extracted"):
+            continue
+        try:
+            if not any(cur.iterdir()):
+                empty_folders.append(str(cur))
+        except OSError:
+            pass
+
+    return {
+        "old_installers": sorted(old_installers, key=lambda item: item["age_days"], reverse=True),
+        "empty_folders": sorted(empty_folders),
+        "total_bytes": total_bytes,
+    }
+
+
+def prune_empty_folders(folder_paths: list[str], watch_root: Path) -> dict[str, Any]:
+    """Remove truly empty directories strictly inside ``watch_root``."""
+    root = watch_root.resolve()
+    removed: list[str] = []
+    failed: list[str] = []
+    for raw in folder_paths:
+        p = Path(raw).resolve()
+        if p == root or not is_under_watch_root(p, root) or not p.is_dir():
+            continue
+        try:
+            if not any(p.iterdir()):
+                p.rmdir()
+                removed.append(str(p))
+        except OSError:
+            failed.append(str(p))
+    return {"removed": removed, "failed": failed}

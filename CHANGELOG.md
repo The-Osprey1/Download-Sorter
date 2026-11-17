@@ -9,8 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- **Release notes say when a version isn't code-signed (`release_notes.py`, `.github/workflows/release.yml`).** Until code signing is set up, each release's notes open with a warning that Windows 11 Smart App Control will block it, with a link to what you can do. 3.1.0 went out unsigned without saying so. The README also has a new **Code signing policy** section for the free open-source signing Download Sorter is applying for.
+## [3.2.0] - 2026-11-16
+
+### Added
+- **Chrome Extension v1.1.0 Upgrades (`chrome_extension/`, `chrome_bridge.py`, `tray_app.py`).** Active-tab URL/title fallback routing for CDN downloads, dynamic right-click **"Download Sorter: Save & Sort to"** context menu, MIME extension repair (`.jfif`, `.bin`, `.tmp`, extensionless), Chrome-side duplicate guard (`check_duplicate` + `DUP` badge), **Test Site** (`test_tab`), **Move to...** re-routing (`reroute_file`), **Always `<host>`** 1-click rule pinning (`create_rule`), **Pause/Resume** (`toggle_pause` + `set_paused` IPC), **Undo Last**, **Reveal**, and macOS dark-mode popup animations refined with Google AI Studio.
+- **Redesigned 5-Card Settings Tab (`ui/settings_widgets.py`, `ui/theme.py`, `ui/main_window.py`).** Grouped settings into 5 scannable macOS dark-mode cards (**Core Routing & Watch Folder**, **Archives & 3D Print Workflows**, **Notifications & Quick Switcher**, **Chrome Extension**, **System, Updates & Backup**) with `MacToggle` switches and `DependentSubGroup` progressive disclosure.
+- **Global Automatic `.zip` Extraction & Zip-Bomb Verification (`config.py`, `fs_ops.py`, `service.py`).** Added `auto_unzip_all`, `zip_keep_original`, and per-rule `auto_unzip` backed by `ZipBombError` and real-time 64 KB streaming verification (max 100:1 compression ratio above 1 MB, max 250 MB/file, max 500 MB total, symlink & zip-slip blocking, no recursive nested zip extraction, and atomic rollback on failure).
+- **Dynamic Destination Tokens (`dest.py`, `router.py`).** Added `{year}`, `{month}`, `{day}`, `{host}`, and `{ext}` tokens expanded safely inside the watched folder.
+- **Content-Aware PDF Sniffing (`router.py`, `config.py`).** Per-rule `content_keywords` matching via `extract_pdf_text_preview()` for uncompressed and `FlateDecode` PDF streams.
+- **Downloads Detox (`fs_ops.py`, `service.py`, `ui/main_window.py`).** `DetoxDialog` to review and recycle installers older than 30 days and prune empty folders.
+- **Global Quick Search Palette (`Ctrl+Shift+Space`) & Rule Learning (`ui/quick_search_palette.py`, `learning.py`).** Keyboard-first search across `StateDB` history and `Downloads` files, plus manual re-route pattern tracking.
+- **Desktop UI & Motion Polish (`ui/theme.py`, `ui/motion.py`).** Specular card gradients, `attach_press_feedback()`, `flash_routed_widget()`, `flash_table_row()`, `crossfade_stacked_widget()`, and `spring_pop_in()`.
+
+### Fixed
+- **Bambu Studio "File is missing" on `.3mf` downloads (`chrome_bridge.py`, `fs_ops.py`).** Chrome-routed `.3mf` downloads now bypass the hold and save straight into `3D Models\...` before being opened in Bambu Studio, and `sync_slicer_recent_projects()` updates `BambuStudio.conf` / `OrcaSlicer.conf` `recent_projects` when a `.3mf` is moved on disk.
 
 ## [3.1.0] - 2026-11-16
 
@@ -19,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Smaller Windows package and release signing readiness (`DownloadSorter.spec`, `build_release.py`, `pe_signing.py`, `verify_release.py`, `packaging/`).** Dropped unused OpenSSL binaries (`libcrypto-3-x64.dll`, `libssl-3-x64.dll`, `qopensslbackend.dll`) that Qt hooks had picked up from runner `PATH` (reducing the Windows distribution archive by ~2.65 MB while keeping Python's own OpenSSL for updates), added a release publisher allowlist and optional whole-folder SignPath signing pipeline with Microsoft VC++ CRT refresh and PowerShell uninstaller script signing, and documented Windows 11 Smart App Control guidance (`README.md`, `BETA_TESTING.md`, `packaging/SIGNING.md`).
+- **Release notes say when a version isn't code-signed (`release_notes.py`, `.github/workflows/release.yml`).** Until code signing is set up, each release's notes open with a warning that Windows 11 Smart App Control will block it, with a link to what you can do.
 
 ## [3.0.3] - 2026-11-15
 

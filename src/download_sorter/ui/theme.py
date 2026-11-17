@@ -2,6 +2,24 @@
 
 from __future__ import annotations
 
+PALETTE = {
+    "bg_window": "#111113",
+    "bg_card": "#1C1C1E",
+    "bg_card_top": "#212124",
+    "bg_card_hover": "#232326",
+    "bg_elevated": "#262629",
+    "border": "#2C2C2E",
+    "border_hover": "#3D3D41",
+    "text_primary": "#F5F5F7",
+    "text_secondary": "#98989D",
+    "text_muted": "#636366",
+    "accent_blue": "#0A84FF",
+    "accent_green": "#30D158",
+    "accent_cyan": "#5AC8FA",
+    "accent_amber": "#FF9F0A",
+    "accent_red": "#FF453A",
+}
+
 STYLESHEET = """
 /* === GLOBAL RESET & CANVAS (macOS Sequoia Dark Mode) === */
 QMainWindow, QDialog {
@@ -55,7 +73,12 @@ QLabel#MonoPath {
 
 /* === UNIFIED TOOLBAR & SURFACE CARDS === */
 QFrame#TopStatusBar {
-    background-color: #1C1C1E;
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #222225,
+        stop: 0.08 #1C1C1E,
+        stop: 1 #1C1C1E
+    );
     border: 1px solid #2C2C2E;
     border-radius: 14px;
 }
@@ -66,9 +89,17 @@ QFrame#RibbonDivider {
     margin: 6px 2px;
 }
 QFrame#Card, QFrame#SurfaceCard, QFrame#heroBanner {
-    background-color: #1C1C1E;
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 0, y2: 1,
+        stop: 0 #212124,
+        stop: 0.06 #1C1C1E,
+        stop: 1 #1C1C1E
+    );
     border: 1px solid #2C2C2E;
     border-radius: 14px;
+}
+QFrame#Card:hover, QFrame#SurfaceCard:hover {
+    border-color: #3A3A3E;
 }
 QFrame#CardDivider {
     background-color: #262629;
@@ -350,4 +381,95 @@ QLabel#StepDot[active="true"] {
 QLabel#StepDot[done="true"] {
     background-color: #30D158;
 }
+
+/* === DYNAMIC PILL BADGES & CYAN RULE BUTTONS === */
+QLabel[pill="green"] {
+    background-color: rgba(48, 209, 88, 0.13);
+    border: 1px solid rgba(48, 209, 88, 0.34);
+    color: #30D158;
+    border-radius: 10px;
+    padding: 2px 9px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel[pill="cyan"] {
+    background-color: rgba(90, 200, 250, 0.13);
+    border: 1px solid rgba(90, 200, 250, 0.30);
+    color: #5AC8FA;
+    border-radius: 7px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 500;
+}
+QLabel[pill="blue"] {
+    background-color: rgba(10, 132, 255, 0.15);
+    border: 1px solid rgba(10, 132, 255, 0.36);
+    color: #0A84FF;
+    border-radius: 6px;
+    padding: 2px 7px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel[pill="amber"] {
+    background-color: rgba(255, 159, 10, 0.14);
+    border: 1px solid rgba(255, 159, 10, 0.34);
+    color: #FF9F0A;
+    border-radius: 10px;
+    padding: 2px 9px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QPushButton[variant="cyan-rule"] {
+    background-color: rgba(90, 200, 250, 0.08);
+    color: #5AC8FA;
+    border: 1px solid rgba(90, 200, 250, 0.25);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+}
+QPushButton[variant="cyan-rule"]:hover {
+    background-color: rgba(90, 200, 250, 0.16);
+    border-color: #5AC8FA;
+    color: #FFFFFF;
+}
+
+/* === SETTINGS TAB CARDS, DIVIDERS & ZIP SECURITY BANNER === */
+QScrollArea#SettingsScroll, QWidget#SettingsViewport {
+    background: transparent;
+    border: none;
+}
+QFrame[divider="true"] {
+    background-color: #2C2C2E;
+    border: none;
+    max-height: 1px;
+    min-height: 1px;
+}
+QFrame[dependentGroup="true"] {
+    background-color: rgba(255, 255, 255, 0.015);
+    border-left: 2px solid #3D3D41;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+    border-radius: 0px;
+}
+QFrame[securityBanner="true"] {
+    background-color: rgba(48, 209, 88, 0.06);
+    border: 1px solid rgba(48, 209, 88, 0.22);
+    border-radius: 8px;
+}
+QLabel[securitySpec="true"] {
+    color: #98989D;
+    font-size: 11px;
+    background: transparent;
+}
 """
+
+
+def set_widget_prop(widget: object, prop: str, value: object) -> None:
+    """Update a dynamic QSS property and polish the widget cleanly."""
+    widget.setProperty(prop, value)  # type: ignore[attr-defined]
+    style = widget.style()  # type: ignore[attr-defined]
+    if style is not None:
+        style.unpolish(widget)
+        style.polish(widget)
+    widget.update()  # type: ignore[attr-defined]
