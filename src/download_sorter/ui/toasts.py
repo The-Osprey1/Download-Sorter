@@ -349,6 +349,8 @@ class ToastNotification(QFrame):
 
     WIDTH = 376
     HEIGHT = 94
+    DUP_WIDTH = 418
+    DUP_HEIGHT = 114
 
     def __init__(
         self,
@@ -359,17 +361,29 @@ class ToastNotification(QFrame):
         folder_to_open: Path | None,
         on_undo: Callable[[str], None] | None = None,
         on_open_folder: Callable[[Path], None] | None = None,
+        on_replace_old: Callable[[Path, Path | None], None] | None = None,
+        on_delete_locate_old: Callable[[Path, Path | None], None] | None = None,
+        on_keep_both: Callable[[Path, Path | None], None] | None = None,
         duration_ms: int = 6000,
         kind: str = "default",
         accent_hex: str = "#0A84FF",
         badge_label: str = "SORTED",
         slot: int = 0,
+        is_duplicate: bool = False,
+        dup_path: Path | None = None,
+        existing_path: Path | None = None,
     ) -> None:
         super().__init__(None)
         self.batch_id = batch_id
+        self.is_duplicate = bool(is_duplicate)
+        self._dup_path = dup_path
+        self._existing_path = existing_path
         self._folder_to_open = folder_to_open
         self._on_undo = on_undo
         self._on_open_folder = on_open_folder
+        self._on_replace_old = on_replace_old
+        self._on_delete_locate_old = on_delete_locate_old
+        self._on_keep_both = on_keep_both
         self._duration_ms = max(250, int(duration_ms))
         self._elapsed_ms = 0.0
         self._remaining_fraction = 1.0
@@ -380,6 +394,8 @@ class ToastNotification(QFrame):
         # Auto-enrich category art when generic defaults are passed directly (e.g. unit tests)
         if kind == "default" and badge_label == "SORTED" and accent_hex == "#0A84FF":
             accent_hex, badge_label, kind = category_info(Path(title), subtitle)
+        if self.is_duplicate:
+            accent_hex = "#FF9F0A"
 
         self._kind = kind
         self._accent = QColor(accent_hex)
@@ -398,7 +414,9 @@ class ToastNotification(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        card_w = self.DUP_WIDTH if self.is_duplicate else self.WIDTH
+        card_h = self.DUP_HEIGHT if self.is_duplicate else self.HEIGHT
+        self.setFixedSize(card_w, card_h)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 11, 12, 11)
@@ -415,7 +433,8 @@ class ToastNotification(QFrame):
         eyebrow_row.setContentsMargins(0, 0, 0, 0)
         eyebrow_row.setSpacing(6)
 
-        self.eyebrow_lbl = QLabel(f"● SORTED · {badge_label.upper()}")
+        eyebrow_prefix = "DUPLICATE" if self.is_duplicate else "SORTED"
+        self.eyebrow_lbl = QLabel(f"● {eyebrow_prefix} · {badge_label.upper()}")
         self.eyebrow_lbl.setStyleSheet(
             f"color: {accent_hex}; font-size: 10px; font-weight: 700; "
             "letter-spacing: 0.6px; background: transparent;"
@@ -446,44 +465,107 @@ class ToastNotification(QFrame):
         self.title_lbl.setToolTip(title)
         right_col.addWidget(self.title_lbl)
 
-        bottom_row = QHBoxLayout()
-        bottom_row.setContentsMargins(0, 2, 0, 0)
-        bottom_row.setSpacing(6)
-
         self.subtitle_lbl = QLabel()
         self.subtitle_lbl.setStyleSheet(
             "color: #98989D; font-size: 11px; background: transparent;"
         )
         fm_sub = QFontMetrics(QFont("Segoe UI", 11))
-        self.subtitle_lbl.setText(fm_sub.elidedText(subtitle, Qt.TextElideMode.ElideRight, 148))
-        bottom_row.addWidget(self.subtitle_lbl, 1)
+        sub_max_w = 320 if self.is_duplicate else 148
+        self.subtitle_lbl.setText(fm_sub.elidedText(subtitle, Qt.TextElideMode.ElideRight, sub_max_w))
+        self.subtitle_lbl.setToolTip(subtitle)
 
         self.open_btn = QPushButton("Jump to File ›")
         self.open_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.open_btn.setToolTip("Open destination folder in File Explorer")
         self.open_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {accent_hex}; border: none; "
             "font-size: 11px; font-weight: 600; padding: 2px 4px; }"
             "QPushButton:hover { text-decoration: underline; }"
         )
-        if self._folder_to_open is None:
+        if self._folder_to_open is None or self.is_duplicate:
             self.open_btn.setVisible(False)
         else:
             self.open_btn.clicked.connect(self._handle_open)
-        bottom_row.addWidget(self.open_btn, 0)
 
         self.undo_btn = QPushButton("Undo")
         self.undo_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.undo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.undo_btn.setToolTip("Undo this sort and move file(s) back to Downloads")
         self.undo_btn.setStyleSheet(
             "QPushButton { background: #2C2C2E; color: #F5F5F7; border: 1px solid #3A3A3C; "
             "border-radius: 6px; padding: 3px 10px; font-size: 11px; font-weight: 600; }"
             "QPushButton:hover { background: #3A3A3C; }"
         )
         self.undo_btn.clicked.connect(self._handle_undo)
-        bottom_row.addWidget(self.undo_btn, 0)
+        if self.is_duplicate:
+            self.undo_btn.setVisible(False)
 
-        right_col.addLayout(bottom_row)
+        self.replace_old_btn = QPushButton("Replace Old", self)
+        self.replace_old_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.replace_old_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.replace_old_btn.setStyleSheet(
+            "QPushButton { background: #FF9F0A; color: #111111; border: none; "
+            "border-radius: 6px; padding: 3px 8px; font-size: 10.5px; font-weight: 700; }"
+            "QPushButton:hover { background: #FFB340; }"
+            "QPushButton:disabled { background: #3A3A3C; color: #8E8E93; }"
+        )
+        self.replace_old_btn.clicked.connect(self._handle_replace_old)
+        if self._existing_path is None or self._dup_path is None:
+            self.replace_old_btn.setEnabled(False)
+            self.replace_old_btn.setToolTip("Original file path not matched automatically — open Duplicates Manager to inspect.")
+        else:
+            self.replace_old_btn.setToolTip(
+                "Recycle the older sorted file and replace it with this newly downloaded duplicate."
+            )
+
+        self.delete_locate_btn = QPushButton("Delete & Locate Old", self)
+        self.delete_locate_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.delete_locate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.delete_locate_btn.setToolTip(
+            "Move the new duplicate to the Recycle Bin and highlight the older file in File Explorer."
+        )
+        self.delete_locate_btn.setStyleSheet(
+            "QPushButton { background: #2C2C2E; color: #F5F5F7; border: 1px solid #48484A; "
+            "border-radius: 6px; padding: 3px 8px; font-size: 10.5px; font-weight: 600; }"
+            "QPushButton:hover { background: #3A3A3C; }"
+        )
+        self.delete_locate_btn.clicked.connect(self._handle_delete_locate_old)
+
+        self.keep_both_btn = QPushButton("Keep Both", self)
+        self.keep_both_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.keep_both_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.keep_both_btn.setToolTip(
+            "Move the new file beside the existing file in its destination folder using numbered naming (e.g. (2))."
+        )
+        self.keep_both_btn.setStyleSheet(
+            "QPushButton { background: #2C2C2E; color: #0A84FF; border: 1px solid #3A3A3C; "
+            "border-radius: 6px; padding: 3px 8px; font-size: 10.5px; font-weight: 600; }"
+            "QPushButton:hover { background: #3A3A3C; }"
+        )
+        self.keep_both_btn.clicked.connect(self._handle_keep_both)
+
+        if self.is_duplicate:
+            right_col.addWidget(self.subtitle_lbl)
+            dup_actions_row = QHBoxLayout()
+            dup_actions_row.setContentsMargins(0, 4, 0, 0)
+            dup_actions_row.setSpacing(6)
+            dup_actions_row.addWidget(self.replace_old_btn)
+            dup_actions_row.addWidget(self.delete_locate_btn)
+            dup_actions_row.addWidget(self.keep_both_btn)
+            dup_actions_row.addStretch(1)
+            right_col.addLayout(dup_actions_row)
+        else:
+            self.replace_old_btn.setVisible(False)
+            self.delete_locate_btn.setVisible(False)
+            self.keep_both_btn.setVisible(False)
+            bottom_row = QHBoxLayout()
+            bottom_row.setContentsMargins(0, 2, 0, 0)
+            bottom_row.setSpacing(6)
+            bottom_row.addWidget(self.subtitle_lbl, 1)
+            bottom_row.addWidget(self.open_btn, 0)
+            bottom_row.addWidget(self.undo_btn, 0)
+            right_col.addLayout(bottom_row)
         root.addLayout(right_col, 1)
 
         self._tick_timer = QTimer(self)
@@ -541,12 +623,13 @@ class ToastNotification(QFrame):
 
     def _anchor_top_right(self, slot: int | None = None) -> QPoint:
         use_slot = self._slot if slot is None else max(0, int(slot))
+        step_h = max(self.HEIGHT, self.height()) + 10
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         if screen is None:
-            return QPoint(0, 18 + use_slot * (self.HEIGHT + 10))
+            return QPoint(0, 18 + use_slot * step_h)
         area = screen.availableGeometry()
         x = area.right() - self.width() - 18
-        y = area.top() + 18 + use_slot * (self.HEIGHT + 10)
+        y = area.top() + 18 + use_slot * step_h
         pos = QPoint(x, y)
         return pos
 
@@ -649,6 +732,27 @@ class ToastNotification(QFrame):
             self._on_open_folder(self._folder_to_open)
         self.dismiss(immediate=True)
 
+    def _handle_replace_old(self) -> None:
+        self._tick_timer.stop()
+        self._hard_timeout_timer.stop()
+        if self._on_replace_old is not None and self._dup_path is not None:
+            self._on_replace_old(self._dup_path, self._existing_path)
+        self.dismiss(immediate=True)
+
+    def _handle_delete_locate_old(self) -> None:
+        self._tick_timer.stop()
+        self._hard_timeout_timer.stop()
+        if self._on_delete_locate_old is not None and self._dup_path is not None:
+            self._on_delete_locate_old(self._dup_path, self._existing_path)
+        self.dismiss(immediate=True)
+
+    def _handle_keep_both(self) -> None:
+        self._tick_timer.stop()
+        self._hard_timeout_timer.stop()
+        if self._on_keep_both is not None and self._dup_path is not None:
+            self._on_keep_both(self._dup_path, self._existing_path)
+        self.dismiss(immediate=True)
+
     def _on_close_clicked(self) -> None:
         self.dismiss(immediate=True)
 
@@ -692,12 +796,18 @@ class ToastManager(QObject):
         *,
         on_undo: Callable[[str], None] | None = None,
         on_open_folder: Callable[[Path], None] | None = None,
+        on_replace_old: Callable[[Path, Path | None], None] | None = None,
+        on_delete_locate_old: Callable[[Path, Path | None], None] | None = None,
+        on_keep_both: Callable[[Path, Path | None], None] | None = None,
         default_duration_ms: int = 6000,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._on_undo = on_undo
         self._on_open_folder = on_open_folder
+        self._on_replace_old = on_replace_old
+        self._on_delete_locate_old = on_delete_locate_old
+        self._on_keep_both = on_keep_both
         self.default_duration_ms = max(500, int(default_duration_ms))
         self._active: list[ToastNotification] = []
         self._current: ToastNotification | None = None
@@ -709,6 +819,60 @@ class ToastManager(QObject):
         self._active.clear()
         self._current = None
 
+    def _spawn_toast(self, toast: ToastNotification) -> ToastNotification:
+        while len(self._active) >= self.MAX_VISIBLE:
+            oldest = self._active.pop(0)
+            oldest.dismiss(immediate=True)
+            self._reposition_slots()
+        toast._slot = len(self._active)
+        toast.closed.connect(self._on_toast_closed)
+        self._active.append(toast)
+        self._current = toast
+        toast.show_animated()
+        return toast
+
+    def _show_duplicate_move(
+        self,
+        batch_id: str,
+        move: dict[str, Any],
+        use_ms: int,
+    ) -> ToastNotification:
+        dest_raw = move.get("dest_path")
+        dup_path = Path(str(dest_raw)) if dest_raw else None
+        existing_raw = str(move.get("existing_path") or "").strip()
+        existing_path = Path(existing_raw) if existing_raw else None
+        existing_disp = str(
+            move.get("folder_display")
+            or (existing_path.parent.name if existing_path is not None else "Downloads")
+        )
+        _, badge_label, kind = category_info(existing_path or dup_path, existing_disp)
+        title = str(
+            move.get("file_name")
+            or move.get("filename")
+            or (dup_path.name if dup_path is not None else "Duplicate file")
+        )
+        subtitle = f"Already in {existing_disp}"
+        toast = ToastNotification(
+            title,
+            subtitle,
+            batch_id=batch_id,
+            folder_to_open=existing_path.parent if existing_path is not None else (dup_path.parent if dup_path else None),
+            on_undo=self._on_undo,
+            on_open_folder=self._on_open_folder,
+            on_replace_old=self._on_replace_old,
+            on_delete_locate_old=self._on_delete_locate_old,
+            on_keep_both=self._on_keep_both,
+            duration_ms=use_ms,
+            kind=kind,
+            accent_hex="#FF9F0A",
+            badge_label=badge_label,
+            slot=len(self._active),
+            is_duplicate=True,
+            dup_path=dup_path,
+            existing_path=existing_path,
+        )
+        return self._spawn_toast(toast)
+
     def show_moves(
         self,
         batch_id: str,
@@ -719,28 +883,29 @@ class ToastManager(QObject):
         if not moves:
             return None
 
-        while len(self._active) >= self.MAX_VISIBLE:
-            oldest = self._active.pop(0)
-            oldest.dismiss(immediate=True)
-            self._reposition_slots()
+        use_ms = self.default_duration_ms if duration_ms is None else max(250, int(duration_ms))
+        dups = [m for m in moves if m.get("is_duplicate")]
+        non_dups = [m for m in moves if not m.get("is_duplicate")]
 
-        first = moves[0]
+        if dups and not non_dups and len(dups) == 1:
+            return self._show_duplicate_move(batch_id, dups[0], use_ms)
+
+        primary_moves = non_dups if non_dups else moves
+        first = primary_moves[0]
         dest_raw = first.get("dest_path")
         dest = Path(str(dest_raw)) if dest_raw else None
         folder_disp = str(first.get("folder_display") or (dest.parent.name if dest else "Sorted"))
         accent_hex, badge_label, kind = category_info(dest, folder_disp)
 
-        if len(moves) == 1:
-            title = str(first.get("file_name") or (dest.name if dest else "Sorted file"))
+        if len(primary_moves) == 1:
+            title = str(first.get("file_name") or first.get("filename") or (dest.name if dest else "Sorted file"))
             subtitle = f"Saved to {folder_disp}"
             folder_to_open = dest.parent if dest else None
         else:
-            title = f"Sorted {len(moves)} files"
+            title = f"Sorted {len(primary_moves)} files"
             subtitle = f"Into {folder_disp} and more"
             folder_to_open = dest.parent if dest else None
 
-        use_ms = self.default_duration_ms if duration_ms is None else max(250, int(duration_ms))
-        slot = len(self._active)
         toast = ToastNotification(
             title,
             subtitle,
@@ -752,13 +917,12 @@ class ToastManager(QObject):
             kind=kind,
             accent_hex=accent_hex,
             badge_label=badge_label,
-            slot=slot,
+            slot=len(self._active),
         )
-        toast.closed.connect(self._on_toast_closed)
-        self._active.append(toast)
-        self._current = toast
-        toast.show_animated()
-        return toast
+        primary_toast = self._spawn_toast(toast)
+        for dup_move in dups[:2]:
+            self._show_duplicate_move(batch_id, dup_move, use_ms)
+        return primary_toast
 
     def _on_toast_closed(self, toast: ToastNotification) -> None:
         if toast in self._active:

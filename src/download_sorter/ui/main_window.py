@@ -122,11 +122,13 @@ class UpgradeCarryOverDialog(QDialog):
 
         sub = QLabel(
             "Bring over your custom keyword rules, extension overrides, subfolder names, "
-            "MakerWorld / G-Code / Haas CNC destinations, hold timer, and Folder Architecture."
+            "MakerWorld / G-Code / Haas CNC destinations, hold timer, and Folder Architecture.",
+            self,
         )
-        sub.setObjectName("MutedText")
-        sub.setWordWrap(True)
-        root.addWidget(sub)
+        sub.setVisible(False)
+        self.setToolTip(
+            "Bring over custom rules, extension overrides, folder destinations, and Folder Architecture from a v2.8 config or exported v3 setup."
+        )
 
         src_row = QHBoxLayout()
         src_row.setSpacing(8)
@@ -135,10 +137,12 @@ class UpgradeCarryOverDialog(QDialog):
         if v2_default.exists():
             self.edit_source.setText(str(v2_default))
         self.edit_source.setPlaceholderText("Path to v2.8 config.json or exported v3 setup JSON...")
+        self.edit_source.setToolTip("Path to an existing Download Sorter v2.8 config.json or exported v3 JSON file")
         self.edit_source.textChanged.connect(self._refresh_preview)
         src_row.addWidget(self.edit_source, 1)
 
         self.btn_browse = InteractiveRibbonBtn("Browse...")
+        self.btn_browse.setToolTip("Browse for a v2.8 config.json or exported v3 setup JSON file")
         self.btn_browse.clicked.connect(self._on_browse)
         src_row.addWidget(self.btn_browse)
         root.addLayout(src_row)
@@ -187,11 +191,13 @@ class UpgradeCarryOverDialog(QDialog):
             make_vector_icon("folder", "#F5F5F7", 14),
         )
         self.btn_export.setObjectName("GhostButton")
+        self.btn_export.setToolTip("Export your current rules, settings, and Folder Architecture to a portable JSON file")
         self.btn_export.clicked.connect(self._on_export_inline)
         btn_row.addWidget(self.btn_export)
         btn_row.addStretch(1)
 
         self.btn_cancel = InteractiveRibbonBtn("Cancel")
+        self.btn_cancel.setToolTip("Close without changing your current configuration")
         self.btn_cancel.clicked.connect(self.reject)
         btn_row.addWidget(self.btn_cancel)
 
@@ -200,6 +206,7 @@ class UpgradeCarryOverDialog(QDialog):
             make_vector_icon("check", "#FFFFFF", 14),
         )
         self.btn_apply.setObjectName("PrimaryButton")
+        self.btn_apply.setToolTip("Import the selected setup and optionally reorganize matching files now")
         self.btn_apply.clicked.connect(self._on_accept)
         btn_row.addWidget(self.btn_apply)
         root.addLayout(btn_row)
@@ -303,11 +310,13 @@ class RuleEditorDialog(QDialog):
 
         layout = QVBoxLayout(self)
         intro = QLabel(
-            "Tell Download Sorter which files belong together and which folder inside Downloads to move them into."
+            "Tell Download Sorter which files belong together and which folder inside Downloads to move them into.",
+            self,
         )
-        intro.setWordWrap(True)
-        intro.setStyleSheet("color: #A8B4C8; margin-bottom: 6px;")
-        layout.addWidget(intro)
+        intro.setVisible(False)
+        self.setToolTip(
+            "Define matching filenames, websites, extensions, and the target folder inside Downloads."
+        )
 
         form = QFormLayout()
 
@@ -391,6 +400,7 @@ class RuleEditorDialog(QDialog):
         )
         btn_adv.setObjectName("GhostButton")
         btn_adv.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_adv.setToolTip("Expand or collapse advanced rule filters (exclusions, regex, PDF text, file size/age, renaming)")
         layout.addWidget(btn_adv)
 
         adv_box = QFrame()
@@ -426,6 +436,12 @@ class RuleEditorDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        if ok_btn is not None:
+            ok_btn.setToolTip("Save this custom sorting rule")
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn is not None:
+            cancel_btn.setToolTip("Discard changes to this rule")
         buttons.accepted.connect(self._validate_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -495,10 +511,13 @@ class DetoxDialog(QDialog):
         btn_row = QHBoxLayout()
         self.btn_recycle = QPushButton("Recycle Selected Installers")
         self.btn_recycle.setObjectName("DangerButton")
+        self.btn_recycle.setToolTip("Send the highlighted old installer files (.exe/.msi) to the Recycle Bin")
         self.btn_recycle.clicked.connect(self._on_recycle_installers)
         self.btn_prune = QPushButton("Prune Empty Folders")
+        self.btn_prune.setToolTip("Remove empty subfolders discovered inside Downloads")
         self.btn_prune.clicked.connect(self._on_prune_folders)
         btn_close = QPushButton("Close")
+        btn_close.setToolTip("Close the Downloads Detox dialog")
         btn_close.clicked.connect(self.accept)
         btn_row.addWidget(self.btn_recycle)
         btn_row.addWidget(self.btn_prune)
@@ -693,13 +712,16 @@ class WalkthroughDialog(QDialog):
 
         self.btn_skip = InteractiveRibbonBtn("Skip")
         self.btn_skip.setObjectName("GhostButton")
+        self.btn_skip.setToolTip("Skip the onboarding guide and go straight to Download Sorter")
         self.btn_skip.clicked.connect(self.accept)
 
         self.btn_back = InteractiveRibbonBtn("Back", make_vector_icon("arrow_left", "#F5F5F7", 15))
+        self.btn_back.setToolTip("Go to previous step")
         self.btn_back.clicked.connect(lambda: self._go(self.pages.currentIndex() - 1))
 
         self.btn_next = InteractiveRibbonBtn("Next", make_vector_icon("arrow_right", "#FFFFFF", 15))
         self.btn_next.setObjectName("PrimaryButton")
+        self.btn_next.setToolTip("Continue to next walkthrough step or finish setup")
         self.btn_next.clicked.connect(self._on_next_clicked)
 
         footer.addWidget(self.btn_chrome_setup)
@@ -811,12 +833,15 @@ def _make_surface_card(
     lbl_title.setObjectName("CardTitle")
     title_col.addWidget(lbl_title)
     if isinstance(subtitle, QWidget):
-        title_col.addWidget(subtitle)
+        subtitle.setParent(card)
+        subtitle.setVisible(False)
+        tip_txt = subtitle.text() if isinstance(subtitle, QLabel) else ""
+        if tip_txt:
+            lbl_title.setToolTip(tip_txt)
+            card.setToolTip(tip_txt)
     elif subtitle:
-        lbl_sub = QLabel(subtitle)
-        lbl_sub.setObjectName("MutedText")
-        lbl_sub.setWordWrap(True)
-        title_col.addWidget(lbl_sub)
+        lbl_title.setToolTip(subtitle)
+        card.setToolTip(subtitle)
     hdr_row.addLayout(title_col, 1)
     if right_widget is not None:
         hdr_row.addWidget(right_widget)
@@ -873,8 +898,8 @@ class DuplicateManagerDialog(QDialog):
         self._syncing_checks = False
 
         self.setWindowTitle("Manage Duplicate Files")
-        self.setMinimumSize(680, 440)
-        self.resize(760, 520)
+        self.setMinimumSize(780, 460)
+        self.resize(860, 540)
         self.setStyleSheet(STYLESHEET)
 
         root = QVBoxLayout(self)
@@ -887,17 +912,20 @@ class DuplicateManagerDialog(QDialog):
         title_col.setSpacing(3)
         self.lbl_title = QLabel("Duplicate Files")
         self.lbl_title.setObjectName("CardTitle")
-        lbl_sub = QLabel(
-            "Identical SHA-256 copies isolated inside _Duplicates\\. Your sorted originals stay untouched."
+        dup_sub_text = (
+            "Duplicate or browser-numbered downloads isolated inside _Duplicates\\. "
+            "Your sorted originals stay untouched until you choose Replace Old, Delete & Locate Old, or Keep Both."
         )
-        lbl_sub.setObjectName("MutedText")
-        lbl_sub.setWordWrap(True)
+        lbl_sub = QLabel(dup_sub_text, self)
+        lbl_sub.setVisible(False)
+        self.setToolTip(dup_sub_text)
+        self.lbl_title.setToolTip(dup_sub_text)
         title_col.addWidget(self.lbl_title)
-        title_col.addWidget(lbl_sub)
         hdr_row.addLayout(title_col, 1)
 
         self.lbl_reclaim_pill = QLabel("0 B")
         self.lbl_reclaim_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_reclaim_pill.setToolTip("Total size of selected or quarantined duplicate files")
         hdr_row.addWidget(self.lbl_reclaim_pill)
         root.addLayout(hdr_row)
 
@@ -905,6 +933,7 @@ class DuplicateManagerDialog(QDialog):
         tools = QHBoxLayout()
         tools.setSpacing(8)
         self.btn_select_all = InteractiveRibbonBtn("Select All")
+        self.btn_select_all.setToolTip("Check all duplicate files in the table")
         self.btn_select_all.clicked.connect(self.select_all)
         self.btn_keep_newest = InteractiveRibbonBtn("Keep Newest Copy")
         self.btn_keep_newest.setToolTip(
@@ -913,6 +942,7 @@ class DuplicateManagerDialog(QDialog):
         self.btn_keep_newest.clicked.connect(self.select_all_except_newest)
         self.btn_clear_sel = InteractiveRibbonBtn("Clear")
         self.btn_clear_sel.setObjectName("GhostButton")
+        self.btn_clear_sel.setToolTip("Uncheck all selected duplicate files")
         self.btn_clear_sel.clicked.connect(self.clear_selection)
         tools.addWidget(self.btn_select_all)
         tools.addWidget(self.btn_keep_newest)
@@ -920,20 +950,24 @@ class DuplicateManagerDialog(QDialog):
         tools.addStretch(1)
         root.addLayout(tools)
 
-        self.tbl_dups = QTableWidget(0, 5)
-        self.tbl_dups.setHorizontalHeaderLabels(["", "Duplicate File", "Quarantine Folder", "Modified", "Size"])
+        self.tbl_dups = QTableWidget(0, 6)
+        self.tbl_dups.setHorizontalHeaderLabels(
+            ["", "Duplicate File", "Original Copy", "Quarantine Folder", "Modified", "Size"]
+        )
         _style_table(self.tbl_dups)
         hdr = self.tbl_dups.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         self.tbl_dups.setColumnWidth(0, 38)
-        self.tbl_dups.setColumnWidth(2, 150)
-        self.tbl_dups.setColumnWidth(3, 138)
-        self.tbl_dups.setColumnWidth(4, 88)
+        self.tbl_dups.setColumnWidth(3, 136)
+        self.tbl_dups.setColumnWidth(4, 126)
+        self.tbl_dups.setColumnWidth(5, 84)
         self.tbl_dups.cellClicked.connect(self._on_cell_clicked)
+        self.tbl_dups.itemSelectionChanged.connect(self._update_summary)
         self.tbl_dups.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tbl_dups.customContextMenuRequested.connect(self._show_context_menu)
         root.addWidget(self.tbl_dups, 1)
@@ -943,6 +977,38 @@ class DuplicateManagerDialog(QDialog):
         self.lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.lbl_empty)
 
+        resolve_bar = QHBoxLayout()
+        resolve_bar.setSpacing(8)
+        self.btn_replace_old = InteractiveRibbonBtn("Replace Old")
+        self.btn_replace_old.setToolTip(
+            "Recycle the matched older file inside Downloads and replace it with this newer duplicate"
+        )
+        self.btn_replace_old.setStyleSheet(
+            "QPushButton { background: rgba(255, 159, 10, 32); color: #FF9F0A; "
+            "border: 1px solid rgba(255, 159, 10, 120); border-radius: 7px; font-weight: 600; padding: 6px 12px; }"
+            "QPushButton:hover { background: rgba(255, 159, 10, 56); }"
+            "QPushButton:disabled { background: #1C1C1E; color: #636366; border-color: #2C2C2E; }"
+        )
+        self.btn_replace_old.clicked.connect(lambda: self.replace_old_for_rows())
+
+        self.btn_delete_locate_old = InteractiveRibbonBtn("Delete New && Locate Old")
+        self.btn_delete_locate_old.setToolTip(
+            "Move the newly downloaded duplicate to the Recycle Bin and highlight the older file in File Explorer"
+        )
+        self.btn_delete_locate_old.clicked.connect(lambda: self.delete_new_and_locate_old_for_rows())
+
+        self.btn_keep_both = InteractiveRibbonBtn("Keep Both")
+        self.btn_keep_both.setToolTip(
+            "Move the duplicate beside its older copy in the destination folder using numbered naming (e.g. name (2))"
+        )
+        self.btn_keep_both.clicked.connect(lambda: self.keep_both_for_rows())
+
+        resolve_bar.addWidget(self.btn_replace_old)
+        resolve_bar.addWidget(self.btn_delete_locate_old)
+        resolve_bar.addWidget(self.btn_keep_both)
+        resolve_bar.addStretch(1)
+        root.addLayout(resolve_bar)
+
         footer = QHBoxLayout()
         footer.setSpacing(10)
         self.btn_open_dups = InteractiveRibbonBtn(
@@ -950,11 +1016,13 @@ class DuplicateManagerDialog(QDialog):
             make_vector_icon("folder", "#F5F5F7", 14),
         )
         self.btn_open_dups.setObjectName("GhostButton")
+        self.btn_open_dups.setToolTip("Open the _Duplicates quarantine folder in File Explorer")
         self.btn_open_dups.clicked.connect(self._open_duplicates_folder)
         footer.addWidget(self.btn_open_dups)
         footer.addStretch(1)
 
         btn_close = QPushButton("Close")
+        btn_close.setToolTip("Close the duplicate files manager")
         btn_close.clicked.connect(self.accept)
         footer.addWidget(btn_close)
 
@@ -963,6 +1031,7 @@ class DuplicateManagerDialog(QDialog):
             make_vector_icon("delete", "#FFFFFF", 14),
         )
         self.btn_delete_checked.setObjectName("DangerButton")
+        self.btn_delete_checked.setToolTip("Move all checked duplicate files to the Windows Recycle Bin")
         self.btn_delete_checked.clicked.connect(lambda: self.delete_checked_files(confirm=True))
         footer.addWidget(self.btn_delete_checked)
         root.addLayout(footer)
@@ -991,22 +1060,41 @@ class DuplicateManagerDialog(QDialog):
             name_item = QTableWidgetItem(str(entry["name"]))
             name_item.setToolTip(str(entry["path"]))
             name_item.setData(Qt.ItemDataRole.UserRole, str(entry["path"]))
+            name_item.setData(Qt.ItemDataRole.UserRole + 1, str(entry.get("existing_path") or ""))
             self.tbl_dups.setItem(idx, 1, name_item)
+
+            orig_rel = str(entry.get("existing_rel_path") or "").strip()
+            orig_abs = str(entry.get("existing_path") or "").strip()
+            orig_item = QTableWidgetItem(orig_rel if orig_rel else "— (not matched)")
+            orig_item.setToolTip(orig_abs if orig_abs else "No matching older file found inside Downloads")
+            orig_item.setForeground(QColor("#64D2FF" if orig_rel else "#636366"))
+            self.tbl_dups.setItem(idx, 2, orig_item)
 
             sub_item = QTableWidgetItem(str(entry["subfolder"]))
             sub_item.setForeground(QColor("#8E8E93"))
-            self.tbl_dups.setItem(idx, 2, sub_item)
+            self.tbl_dups.setItem(idx, 3, sub_item)
 
             ts = datetime.fromtimestamp(float(entry["mtime"])).strftime("%Y-%m-%d %H:%M")
             ts_item = QTableWidgetItem(ts)
             ts_item.setForeground(QColor("#8E8E93"))
-            self.tbl_dups.setItem(idx, 3, ts_item)
+            self.tbl_dups.setItem(idx, 4, ts_item)
 
             sz_item = QTableWidgetItem(_format_bytes(int(entry["size_bytes"])))
             sz_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.tbl_dups.setItem(idx, 4, sz_item)
+            self.tbl_dups.setItem(idx, 5, sz_item)
 
         self._update_summary()
+
+    def _target_rows(self) -> list[int]:
+        checked = [i for i, chk in enumerate(self._checkboxes) if i < len(self._entries) and chk.isChecked()]
+        if checked:
+            return checked
+        cur = self.tbl_dups.currentRow()
+        if 0 <= cur < len(self._entries):
+            return [cur]
+        if len(self._entries) == 1:
+            return [0]
+        return []
 
     def _on_cell_clicked(self, row: int, col: int) -> None:
         if col != 0 and 0 <= row < len(self._checkboxes):
@@ -1090,20 +1178,122 @@ class DuplicateManagerDialog(QDialog):
         self.btn_keep_newest.setEnabled(total_count > 1)
         self.btn_clear_sel.setEnabled(sel_count > 0)
 
+        target_rows = self._target_rows()
+        has_target = len(target_rows) > 0
+        has_replaceable = any(bool(self._entries[r].get("existing_path")) for r in target_rows)
+        self.btn_replace_old.setEnabled(has_replaceable)
+        self.btn_delete_locate_old.setEnabled(has_target)
+        self.btn_keep_both.setEnabled(has_target)
+
     def _show_context_menu(self, pos: QPoint) -> None:
         row = self.tbl_dups.rowAt(pos.y())
         if row < 0 or row >= len(self._entries):
             return
+        entry = self._entries[row]
+        has_old = bool(entry.get("existing_path"))
         menu = QMenu(self)
-        act_reveal = menu.addAction("Show in File Explorer")
+        act_replace = menu.addAction("Replace Older Copy with This")
+        act_replace.setEnabled(has_old)
+        act_del_loc = menu.addAction("Delete New && Locate Old")
+        act_keep_both = menu.addAction("Keep Both (Move Beside Original)")
+        menu.addSeparator()
+        act_reveal = menu.addAction("Show Duplicate in File Explorer")
+        act_reveal_old = menu.addAction("Show Original in File Explorer")
+        act_reveal_old.setEnabled(has_old)
         act_toggle = menu.addAction(
             "Uncheck File" if self._checkboxes[row].isChecked() else "Select File for Deletion"
         )
         chosen = menu.exec(self.tbl_dups.viewport().mapToGlobal(pos))
-        if chosen == act_reveal:
-            _reveal_in_explorer(Path(str(self._entries[row]["path"])))
+        if chosen == act_replace:
+            self.replace_old_for_rows([row])
+        elif chosen == act_del_loc:
+            self.delete_new_and_locate_old_for_rows([row])
+        elif chosen == act_keep_both:
+            self.keep_both_for_rows([row])
+        elif chosen == act_reveal:
+            _reveal_in_explorer(Path(str(entry["path"])))
+        elif chosen == act_reveal_old and has_old:
+            _reveal_in_explorer(Path(str(entry["existing_path"])))
         elif chosen == act_toggle:
             self._checkboxes[row].setChecked(not self._checkboxes[row].isChecked())
+
+    def replace_old_for_rows(self, rows: list[int] | None = None) -> dict[str, Any]:
+        target_rows = self._target_rows() if rows is None else list(rows)
+        replaced = 0
+        errors: list[str] = []
+        for idx in target_rows:
+            if not (0 <= idx < len(self._entries)):
+                continue
+            entry = self._entries[idx]
+            existing_raw = str(entry.get("existing_path") or "").strip()
+            if not existing_raw:
+                errors.append(f"{entry['name']}: original file not found")
+                continue
+            res = self.service.replace_duplicate_with_new(Path(str(entry["path"])), Path(existing_raw))
+            if res.get("ok"):
+                replaced += 1
+            else:
+                errors.append(f"{entry['name']}: {res.get('error') or 'failed'}")
+        self.reload()
+        self.duplicates_changed.emit()
+        if errors:
+            QMessageBox.warning(self, "Replace Older Copy", "\n".join(errors))
+        return {"replaced": replaced, "errors": errors}
+
+    def delete_new_and_locate_old_for_rows(self, rows: list[int] | None = None) -> dict[str, Any]:
+        target_rows = self._target_rows() if rows is None else list(rows)
+        deleted = 0
+        located_paths: list[str] = []
+        errors: list[str] = []
+        for idx in target_rows:
+            if not (0 <= idx < len(self._entries)):
+                continue
+            entry = self._entries[idx]
+            existing_raw = str(entry.get("existing_path") or "").strip()
+            res = self.service.delete_duplicate_and_locate_old(
+                Path(str(entry["path"])),
+                Path(existing_raw) if existing_raw else Path(""),
+            )
+            if res.get("ok"):
+                deleted += 1
+                resolved_old = str(res.get("existing_path") or "")
+                if resolved_old and Path(resolved_old).exists():
+                    located_paths.append(resolved_old)
+            else:
+                errors.append(f"{entry['name']}: {res.get('error') or 'failed'}")
+        if located_paths:
+            _reveal_in_explorer(Path(located_paths[0]))
+        self.reload()
+        self.duplicates_changed.emit()
+        if errors:
+            QMessageBox.warning(self, "Delete & Locate Old", "\n".join(errors))
+        return {"deleted": deleted, "located_paths": located_paths, "errors": errors}
+
+    def keep_both_for_rows(self, rows: list[int] | None = None) -> dict[str, Any]:
+        target_rows = self._target_rows() if rows is None else list(rows)
+        kept = 0
+        final_paths: list[str] = []
+        errors: list[str] = []
+        for idx in target_rows:
+            if not (0 <= idx < len(self._entries)):
+                continue
+            entry = self._entries[idx]
+            existing_raw = str(entry.get("existing_path") or "").strip()
+            res = self.service.keep_both_duplicate(
+                Path(str(entry["path"])),
+                Path(existing_raw) if existing_raw else Path(""),
+            )
+            if res.get("ok"):
+                kept += 1
+                if res.get("final_path"):
+                    final_paths.append(str(res["final_path"]))
+            else:
+                errors.append(f"{entry['name']}: {res.get('error') or 'failed'}")
+        self.reload()
+        self.duplicates_changed.emit()
+        if errors:
+            QMessageBox.warning(self, "Keep Both Files", "\n".join(errors))
+        return {"kept": kept, "final_paths": final_paths, "errors": errors}
 
     def _open_duplicates_folder(self) -> None:
         dup_dir = self.service.watch_root / "_Duplicates"
@@ -1165,6 +1355,9 @@ class MainWindow(QMainWindow):
         self._update_release: dict[str, Any] | None = None
         self._update_downloading = False
         self._preview_toast_mgr = ToastManager(
+            on_replace_old=self._on_toast_replace_old,
+            on_delete_locate_old=self._on_toast_delete_locate_old,
+            on_keep_both=self._on_toast_keep_both,
             default_duration_ms=int(self.service.config.ribbon_timeout_seconds * 1000),
             parent=self,
         )
@@ -1262,6 +1455,7 @@ class MainWindow(QMainWindow):
             "Auto-Sort: ON",
             make_vector_icon("pause", "#30D158", 14),
         )
+        self.btn_pause.setToolTip("Pause or resume automatic background sorting of Downloads")
         self.btn_pause.clicked.connect(self._toggle_pause)
         row.addWidget(self.btn_pause)
 
@@ -1269,6 +1463,7 @@ class MainWindow(QMainWindow):
             "Move Held .3MF",
             make_vector_icon("cube", "#FF9F0A", 14),
         )
+        self.btn_file_held.setToolTip("Immediately move held .3mf slicer project files into their 3D Printing folders")
         self.btn_file_held.clicked.connect(self._on_file_held_now)
         row.addWidget(self.btn_file_held)
 
@@ -1368,6 +1563,7 @@ class MainWindow(QMainWindow):
             "Auto-Sort: ON",
             make_vector_icon("pause", "#30D158", 14),
         )
+        self.btn_home_autosort.setToolTip("Pause or resume automatic background sorting of new downloads")
         self.btn_home_autosort.clicked.connect(self._toggle_pause)
         inst_hdr_row.addWidget(self.btn_home_autosort)
 
@@ -1551,6 +1747,7 @@ class MainWindow(QMainWindow):
             packs_row.addWidget(btn)
         btn_import = InteractiveRibbonBtn("Carry Over v2.8 / Setup...")
         btn_import.setObjectName("GhostButton")
+        btn_import.setToolTip("Import rules, overrides, or folder layouts from Download Sorter v2.8 or an exported v3 JSON file")
         btn_import.clicked.connect(self.open_carry_over_dialog)
         packs_row.addWidget(btn_import)
 
@@ -1589,6 +1786,7 @@ class MainWindow(QMainWindow):
         # In a short window the suggestion bar below folds into this button, so the
         # tab keeps fitting 900 x 560; it offers the same two choices from a menu.
         self.btn_rule_suggestion_compact = InteractiveRibbonBtn("Suggestion", make_vector_icon("sparkle", "#64D2FF", 14))
+        self.btn_rule_suggestion_compact.setToolTip("Review a suggested rule learned from your manual file moves")
         self.btn_rule_suggestion_compact.clicked.connect(self._show_rule_suggestion_menu)
         self.btn_rule_suggestion_compact.setVisible(False)
         toolbar.addWidget(self.btn_rule_suggestion_compact)
@@ -1704,16 +1902,18 @@ class MainWindow(QMainWindow):
         header_bar.setContentsMargins(2, 0, 2, 2)
         header_title = QLabel("Settings")
         header_title.setObjectName("CardTitle")
-        header_sub = QLabel("Organized into simple groups — changes apply when you click Save Settings.")
-        header_sub.setObjectName("MutedText")
+        header_sub_txt = "Organized into simple groups — changes apply when you click Save Settings."
+        header_sub = QLabel(header_sub_txt, content_col)
+        header_sub.setVisible(False)
+        header_title.setToolTip(header_sub_txt)
         header_text = QVBoxLayout()
         header_text.setSpacing(1)
         header_text.addWidget(header_title)
-        header_text.addWidget(header_sub)
         header_bar.addLayout(header_text, 1)
 
         btn_save = InteractiveRibbonBtn("Save Settings", make_vector_icon("check", "#FFFFFF", 14))
         btn_save.setObjectName("PrimaryButton")
+        btn_save.setToolTip("Apply and save all changed settings to disk")
         btn_save.clicked.connect(self._save_settings_form)
         attach_press_feedback(btn_save, "#0A84FF")
         header_bar.addWidget(btn_save)
@@ -1739,6 +1939,7 @@ class MainWindow(QMainWindow):
         self.edit_watch_folder = QLineEdit()
         self.edit_watch_folder.setMinimumWidth(220)
         btn_browse = InteractiveRibbonBtn("Browse...")
+        btn_browse.setToolTip("Choose which folder Download Sorter monitors and organizes")
         btn_browse.clicked.connect(self._browse_watch_folder)
         card_core.add_row(
             SettingRow(
@@ -1889,6 +2090,7 @@ class MainWindow(QMainWindow):
             "How many seconds before Side Ribbon notifications automatically close."
         )
         self.btn_preview_ribbon = InteractiveRibbonBtn("Preview Ribbon")
+        self.btn_preview_ribbon.setToolTip("Display a sample Side Ribbon notification on the top-right screen corner")
         self.btn_preview_ribbon.clicked.connect(self._on_preview_ribbon)
         self.btn_close_ribbons = InteractiveRibbonBtn("Close Ribbons")
         self.btn_close_ribbons.setObjectName("GhostButton")
@@ -2164,6 +2366,11 @@ class MainWindow(QMainWindow):
             btn.setText(toggle_text)
             btn.setIcon(toggle_icon)
             btn.setStyleSheet(toggle_style)
+            btn.setToolTip(
+                "Automatic sorting is PAUSED — click to resume watching Downloads"
+                if paused
+                else "Automatic sorting is ON — click to pause watching Downloads"
+            )
 
     def refresh_all(self, then: Callable[[], None] | None = None) -> None:
         """Refresh every view. Config-only widgets update at once; everything that
@@ -2496,6 +2703,7 @@ class MainWindow(QMainWindow):
             self.tbl_activity.setItem(r_idx, 3, QTableWidgetItem(str(rec["reason"])))
 
             btn = QPushButton("Undo")
+            btn.setToolTip("Restore this file back to Downloads")
             move_id = int(rec["id"])
             btn.clicked.connect(lambda _=False, mid=move_id: self._on_undo_single(mid))
             self.tbl_activity.setCellWidget(r_idx, 4, btn)
@@ -2760,6 +2968,45 @@ class MainWindow(QMainWindow):
     def _on_close_all_ribbons(self) -> None:
         self._preview_toast_mgr.close_all()
         self.lbl_footer.setText("Closed active Side Ribbon notifications.")
+
+    def _on_toast_replace_old(self, dup_path: Path, existing_path: Path | None) -> None:
+        if existing_path is None:
+            self.banner.show_message("Original file path not matched automatically.", kind="warning")
+            return
+        res = self.service.replace_duplicate_with_new(dup_path, existing_path)
+        self.refresh_all()
+        if res.get("ok"):
+            self.banner.show_message(f"Replaced older copy with {dup_path.name}.", kind="success")
+        else:
+            self.banner.show_message(str(res.get("error") or "Could not replace older copy."), kind="warning")
+
+    def _on_toast_delete_locate_old(self, dup_path: Path, existing_path: Path | None) -> None:
+        res = self.service.delete_duplicate_and_locate_old(dup_path, existing_path or Path(""))
+        self.refresh_all()
+        if res.get("ok"):
+            resolved_old = str(res.get("existing_path") or (existing_path or ""))
+            if resolved_old and Path(resolved_old).exists():
+                _reveal_in_explorer(Path(resolved_old))
+                self.banner.show_message(
+                    f"Deleted duplicate {dup_path.name} and located the older copy.",
+                    kind="success",
+                )
+            else:
+                self.banner.show_message(
+                    f"Deleted duplicate {dup_path.name} (older copy could not be located).",
+                    kind="info",
+                )
+        else:
+            self.banner.show_message(str(res.get("error") or "Could not delete duplicate."), kind="warning")
+
+    def _on_toast_keep_both(self, dup_path: Path, existing_path: Path | None) -> None:
+        res = self.service.keep_both_duplicate(dup_path, existing_path or Path(""))
+        self.refresh_all()
+        if res.get("ok"):
+            final_name = Path(str(res.get("final_path") or dup_path)).name
+            self.banner.show_message(f"Kept both copies ({final_name}).", kind="success")
+        else:
+            self.banner.show_message(str(res.get("error") or "Could not keep both copies."), kind="warning")
 
     def _on_sort_now(self) -> None:
         self._run_service_action(
@@ -3039,7 +3286,13 @@ class MainWindow(QMainWindow):
         self.refresh_all(then=lambda: self._after_architecture_applied(summary_msg))
 
     def _after_architecture_applied(self, summary_msg: str) -> None:
-        if "Nothing to undo" in summary_msg or summary_msg.startswith("Auto-created"):
+        if (
+            "Nothing to undo" in summary_msg
+            or summary_msg.startswith("Auto-created")
+            or summary_msg.startswith("Scanned ")
+            or summary_msg.startswith("Loaded ")
+            or summary_msg.startswith("Restored ")
+        ):
             self.banner.show_message(summary_msg, kind="info")
         elif summary_msg.startswith("Undid"):
             flash_rows(self.tbl_sim, list(range(min(5, self.tbl_sim.rowCount()))), "#0A84FF")
