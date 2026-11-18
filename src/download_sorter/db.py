@@ -34,6 +34,17 @@ CREATE TABLE IF NOT EXISTS moves (
 
 CREATE INDEX IF NOT EXISTS idx_moves_batch ON moves(batch_id);
 CREATE INDEX IF NOT EXISTS idx_moves_active ON moves(undone_at, moved_at DESC);
+
+CREATE TABLE IF NOT EXISTS file_hashes (
+    path TEXT PRIMARY KEY,
+    size_bytes INTEGER NOT NULL,
+    mtime_ns INTEGER NOT NULL,
+    sparse_hash TEXT NOT NULL,
+    full_hash TEXT,
+    updated_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_hashes_size_sparse ON file_hashes(size_bytes, sparse_hash);
 """
 
 # Move lifecycle. A row is written as PENDING before the file is touched and
@@ -403,3 +414,66 @@ class StateDB:
                 "last_batch_id": str(last["batch_id"]) if last else "",
                 "last_moved_at": float(last["moved_at"]) if last else None,
             }
+
+    # ------------------------------------------------------------------
+    # Sparse-hash duplicate index (shares state.db, no second database)
+    # ------------------------------------------------------------------
+    def record_file_hash(
+        self,
+        path: str | Path,
+        *,
+        size_bytes: int,
+        mtime_ns: int,
+        sparse_hash: str,
+        full_hash: str | None = None,
+    ) -> None:
+        norm = str(Path(path).resolve())
+        now = time.time()
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                """
+                INSERT INTO file_hashes (path, size_bytes, mtime_ns, sparse_hash, full_hash, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path) DO UPDATE SET
+                    size_bytes = excluded.size_bytes,
+                    mtime_ns = excluded.mtime_ns,
+                    sparse_hash = excluded.sparse_hash,
+                    full_hash = COALESCE(excluded.full_hash, file_hashes.full_hash),
+                    updated_at = excluded.updated_at
+                """,
+                (norm, int(size_bytes), int(mtime_ns), str(sparse_hash), full_hash, now),
+            )
+            conn.commit()
+
+    def remove_file_hash(self, path: str | Path) -> None:
+        norm = str(Path(path).resolve())
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("DELETE FROM file_hashes WHERE path = ?", (norm,))
+            conn.commit()
+
+    def find_hash_candidates(
+        self,
+        size_bytes: int,
+        *,
+        exclude_path: str | Path | None = None,
+    ) -> list[dict[str, Any]]:
+        excl = str(Path(exclude_path).resolve()) if exclude_path is not None else ""
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT path, size_bytes, mtime_ns, sparse_hash, full_hash, updated_at
+                FROM file_hashes
+                WHERE size_bytes = ? AND path != ?
+                """,
+                (int(size_bytes), excl),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def prune_missing_hashes(self) -> int:
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute("SELECT path FROM file_hashes").fetchall()
+            missing = [str(r["path"]) for r in rows if not Path(str(r["path"])).exists()]
+            if missing:
+                conn.executemany("DELETE FROM file_hashes WHERE path = ?", [(p,) for p in missing])
+                conn.commit()
+            return len(missing)

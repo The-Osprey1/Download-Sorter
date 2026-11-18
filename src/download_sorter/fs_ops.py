@@ -11,9 +11,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import sys
 import time
 from typing import Any
+import uuid
 
 from download_sorter.db import StateDB
 from download_sorter.dest import is_under_watch_root
@@ -32,8 +34,16 @@ _SAMPLE_THRESHOLD_BYTES = 256 * 1024
 # Cloud-sync placeholders (OneDrive Files On-Demand, iCloud): reading their content
 # makes Windows download the whole file.
 FILE_ATTRIBUTE_OFFLINE = 0x00001000
+FILE_ATTRIBUTE_PINNED = 0x00080000
+FILE_ATTRIBUTE_UNPINNED = 0x00100000
 FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
-_CLOUD_PLACEHOLDER_MASK = FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+_CLOUD_PLACEHOLDER_MASK = (
+    FILE_ATTRIBUTE_OFFLINE
+    | FILE_ATTRIBUTE_UNPINNED
+    | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+)
+STAGING_DIR_NAME = ".staging"
+SPARSE_DEDUP_MIN_BYTES = 1024
 
 # Slicers read a .3mf into memory and close the file, so a lock check cannot tell
 # that the user is still working on it. A running slicer is the only signal.
@@ -117,6 +127,8 @@ def is_cloud_placeholder(path: Path) -> bool:
         attrs = int(getattr(os.stat(path), "st_file_attributes", 0) or 0)
     except OSError:
         return False
+    if attrs & FILE_ATTRIBUTE_PINNED:
+        return False
     return bool(attrs & _CLOUD_PLACEHOLDER_MASK)
 
 
@@ -194,6 +206,27 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def compute_sparse_hash(path: Path, size: int | None = None) -> str:
+    """Size-gated 3-point SHA-256 (head / mid / tail 64 KB + size)."""
+    sz = path.stat().st_size if size is None else int(size)
+    h = hashlib.sha256()
+    h.update(struct.pack("<Q", sz))
+    with open(path, "rb") as fh:
+        if sz <= 3 * _SAMPLE_BYTES:
+            while chunk := fh.read(_SAMPLE_BYTES):
+                h.update(chunk)
+        else:
+            # Head 64 KB
+            h.update(fh.read(_SAMPLE_BYTES))
+            # Mid 64 KB
+            fh.seek((sz - _SAMPLE_BYTES) // 2)
+            h.update(fh.read(_SAMPLE_BYTES))
+            # Tail 64 KB
+            fh.seek(sz - _SAMPLE_BYTES)
+            h.update(fh.read(_SAMPLE_BYTES))
+    return h.hexdigest()
+
+
 def _sample_sha256(path: Path, size: int) -> str:
     """SHA-256 of the first and last 64 KB of ``path``."""
     h = hashlib.sha256()
@@ -202,6 +235,112 @@ def _sample_sha256(path: Path, size: int) -> str:
         fh.seek(max(0, size - _SAMPLE_BYTES))
         h.update(fh.read(_SAMPLE_BYTES))
     return h.hexdigest()
+
+
+def _hide_dir_win32(path: Path) -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        FILE_ATTRIBUTE_HIDDEN = 0x2
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        if attrs != 0xFFFFFFFF:
+            ctypes.windll.kernel32.SetFileAttributesW(str(path), attrs | FILE_ATTRIBUTE_HIDDEN)
+    except Exception:
+        pass
+
+
+def staging_dir_for(base_dir: Path, batch_id: str) -> Path:
+    """Create and return ``<base_dir>\\.staging\\<batch_id>``."""
+    staging_root = Path(base_dir) / STAGING_DIR_NAME
+    staging_root.mkdir(parents=True, exist_ok=True)
+    _hide_dir_win32(staging_root)
+    batch_dir = staging_root / (batch_id or uuid.uuid4().hex[:8])
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    return batch_dir
+
+
+def cleanup_orphaned_staging(watch_root: Path, max_age_seconds: float = 300.0) -> list[Path]:
+    """Remove abandoned ``.staging\\<batch_id>`` directories older than ``max_age_seconds``."""
+    root = Path(watch_root) / STAGING_DIR_NAME
+    if not root.is_dir():
+        return []
+    now = time.time()
+    removed: list[Path] = []
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            age = now - entry.stat().st_mtime
+        except OSError:
+            continue
+        if age >= max_age_seconds:
+            try:
+                shutil.rmtree(entry)
+                removed.append(entry)
+            except OSError:
+                pass
+    return removed
+
+
+def find_renamed_duplicate(
+    src: Path,
+    *,
+    db: StateDB,
+    watch_root: Path,
+    min_bytes: int = SPARSE_DEDUP_MIN_BYTES,
+) -> Path | None:
+    """Find an identical file under ``watch_root`` even if renamed, via size -> 3-point sparse -> full SHA-256."""
+    if is_cloud_placeholder(src):
+        return None
+    try:
+        st = src.stat()
+    except OSError:
+        return None
+    if st.st_size < min_bytes:
+        return None
+
+    candidates = db.find_hash_candidates(st.st_size, exclude_path=src)
+    if not candidates:
+        return None
+
+    src_sparse = compute_sparse_hash(src, size=st.st_size)
+    sparse_matches = [c for c in candidates if c["sparse_hash"] == src_sparse]
+    if not sparse_matches:
+        return None
+
+    src_full: str | None = None
+    root_resolved = watch_root.resolve()
+    for row in sparse_matches:
+        other = Path(str(row["path"]))
+        if not other.is_file() or not is_under_watch_root(other, root_resolved):
+            db.remove_file_hash(other)
+            continue
+        if is_cloud_placeholder(other):
+            continue
+        try:
+            other_st = other.stat()
+        except OSError:
+            continue
+        if other_st.st_size != st.st_size:
+            db.remove_file_hash(other)
+            continue
+        if src_full is None:
+            src_full = _sha256(src)
+        other_full = row.get("full_hash")
+        if not other_full or other_st.st_mtime_ns != row["mtime_ns"]:
+            other_full = _sha256(other)
+            db.record_file_hash(
+                other,
+                size_bytes=other_st.st_size,
+                mtime_ns=other_st.st_mtime_ns,
+                sparse_hash=str(row["sparse_hash"]),
+                full_hash=other_full,
+            )
+        if src_full == other_full:
+            return other
+    return None
 
 
 def _files_identical(a: Path, b: Path) -> bool:
@@ -322,9 +461,27 @@ def _move_with_retries(src: Path, dest: Path) -> None:
             try:
                 os.replace(src, dest)
             except OSError as replace_err:
-                # Cross-volume move falls back to shutil.move.
+                # Cross-volume move stages into .staging\<batch_id>\ on destination volume first.
                 if getattr(replace_err, "winerror", None) == 17 or getattr(replace_err, "errno", None) == 18:
-                    shutil.move(str(src), str(dest))
+                    stage_dir = staging_dir_for(dest.parent, "xvol")
+                    staged_file = stage_dir / dest.name
+                    try:
+                        shutil.copy2(str(src), str(staged_file))
+                        os.replace(staged_file, dest)
+                        os.unlink(src)
+                    except BaseException:
+                        try:
+                            if staged_file.exists():
+                                staged_file.unlink()
+                        except OSError:
+                            pass
+                        raise
+                    finally:
+                        try:
+                            if stage_dir.exists() and not any(stage_dir.iterdir()):
+                                stage_dir.rmdir()
+                        except OSError:
+                            pass
                 else:
                     raise
             return
@@ -406,6 +563,14 @@ def execute_move(
         return None
     existing_counterpart = find_existing_counterpart(src, planned_dest)
     final_dest, is_dup = resolve_destination(src, planned_dest, watch_root)
+    if not is_dup:
+        renamed_dup = find_renamed_duplicate(src, db=db, watch_root=watch_root)
+        if renamed_dup is not None:
+            month_dir = datetime.now().strftime("%Y-%m")
+            dup_target = watch_root / "_Duplicates" / month_dir / src.name
+            final_dest = _next_available_name(dup_target)
+            is_dup = True
+            existing_counterpart = renamed_dup
     if final_dest == src_resolved:
         return None
     final_dest = final_dest.parent.resolve() / final_dest.name
@@ -432,6 +597,17 @@ def execute_move(
             db.rollback_move_intent(move_id)
         raise
     db.complete_move_intent(move_id, final_dest)
+    if not is_dup and size_bytes >= SPARSE_DEDUP_MIN_BYTES and not is_cloud_placeholder(final_dest):
+        try:
+            st_final = final_dest.stat()
+            db.record_file_hash(
+                final_dest,
+                size_bytes=st_final.st_size,
+                mtime_ns=st_final.st_mtime_ns,
+                sparse_hash=compute_sparse_hash(final_dest, size=st_final.st_size),
+            )
+        except OSError:
+            pass
     if final_dest.suffix.lower() == ".3mf":
         sync_slicer_recent_projects(src_resolved, final_dest)
     return {
@@ -1028,6 +1204,8 @@ def extract_zip_safely(
     src = zip_path.resolve()
     if not src.is_file() or src.suffix.lower() != ".zip" or not is_under_watch_root(src, root):
         return {"ok": False, "error": "Invalid or out-of-bounds zip archive", "extracted": []}
+    if is_cloud_placeholder(src):
+        return {"ok": False, "error": "Cloud placeholder (not hydrated)", "extracted": []}
 
     extract_root = (target_dir / src.stem).resolve()
     if not is_under_watch_root(extract_root, root):
@@ -1035,6 +1213,9 @@ def extract_zip_safely(
     if extract_root.exists():
         extract_root = _next_available_name(extract_root)
 
+    effective_batch = batch_id or f"unzip-{uuid.uuid4().hex[:8]}"
+    stage_dir = staging_dir_for(target_dir, effective_batch)
+    staged_files: list[str] = []
     extracted: list[str] = []
     total_extracted_bytes = 0
     try:
@@ -1051,17 +1232,18 @@ def extract_zip_safely(
                 declared_total += max(0, int(info.file_size))
                 if declared_total > max_total_bytes:
                     raise ZipBombError("Declared archive size exceeds safety limit")
+                if "\\" in info.filename and ".." in info.filename.replace("\\", "/").split("/"):
+                    raise ZipBombError(f"Unsafe archive path: {info.filename}")
                 rel_member = Path(info.filename.replace("\\", "/"))
                 if rel_member.is_absolute() or ".." in rel_member.parts:
                     raise ZipBombError(f"Unsafe archive path: {info.filename}")
-                dest_member = (extract_root / rel_member).resolve()
-                if not is_under_watch_root(dest_member, extract_root):
+                dest_member = (stage_dir / rel_member).resolve()
+                if not is_under_watch_root(dest_member, stage_dir.resolve()):
                     raise ZipBombError(f"Unsafe archive target: {info.filename}")
 
-            extract_root.mkdir(parents=True, exist_ok=True)
             for info in infos:
                 rel_member = Path(info.filename.replace("\\", "/"))
-                dest_member = (extract_root / rel_member).resolve()
+                dest_member = (stage_dir / rel_member).resolve()
                 dest_member.parent.mkdir(parents=True, exist_ok=True)
                 compress_size = max(1, int(info.compress_size))
                 file_bytes = 0
@@ -1092,8 +1274,13 @@ def extract_zip_safely(
                                     f"Suspected zip bomb in '{info.filename}' (ratio {ratio:.1f}:1 > {max_compression_ratio:.0f}:1)"
                                 )
                         out_stream.write(chunk)
-                extracted.append(str(dest_member))
+                staged_files.append(str(dest_member.relative_to(stage_dir.resolve())))
+
+        extract_root.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(stage_dir, extract_root)
+        extracted = [str((extract_root / rel).resolve()) for rel in staged_files]
     except (ZipBombError, zipfile.BadZipFile, OSError, RuntimeError) as exc:
+        shutil.rmtree(stage_dir, ignore_errors=True)
         shutil.rmtree(extract_root, ignore_errors=True)
         logging.warning("Zip extraction aborted for %s: %s", src.name, exc)
         return {

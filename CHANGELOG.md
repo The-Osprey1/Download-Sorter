@@ -9,9 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.5.0] - 2026-11-17
+## [3.5.0] - 2026-11-18
 
 ### Added
+- **3-Point Sparse-Hash Deduplication Index (`db.py`, `fs_ops.py`).** Added `file_hashes` in `StateDB` with size-gated 3-point sparse hashing (head/mid/tail 64 KB + size) and full SHA-256 confirmation to catch renamed duplicates and quarantine them to `_Duplicates/<YYYY-MM>`.
+- **Crash-Safe `.staging` Extraction & Cross-Volume Moves (`fs_ops.py`, `service.py`).** Staged ZIP extractions and cross-volume moves in `.staging\<batch_id>\` with `..` / `..\\` / symlink Zip Slip guards, OneDrive cloud-placeholder checks before opening files, and `cleanup_orphaned_staging()` on startup.
+- **Pre-Routing ZIP Peek, MIME/Container Disambiguation & Image Metadata (`router.py`).** Added `peek_zip_contents()`, `sniff_magic_mime()` / ZIP container disambiguation (`.3mf`, `.docx`, `.xlsx`, `.pptx`), copy-suffix/delimiter/alias token normalization (`normalize_filename_tokens()`), and `inspect_image_metadata()` (Pillow EXIF/resolution classification).
 - **Duplicate Download Resolution (`Replace Old`, `Delete New & Locate Old`, `Keep Both`) (`fs_ops.py`, `service.py`, `ui/toasts.py`, `ui/main_window.py`).** Duplicate downloads and browser-numbered copies (e.g. `report (1).pdf`) matched to sorted originals inside `Downloads` now offer one-click **Replace Old**, **Delete & Locate Old** (moves the new copy to the Recycle Bin and opens File Explorer highlighting the existing file), and **Keep Both** actions directly in both the top-right Side Ribbon notification and the **Manage Duplicate Files** dialog (`Original Copy` column).
 - **Focused Orthogonal Bus Routing & Parent Pills in Folder Architecture (`ui/architecture_canvas.py`).** Decluttered the Folder Architecture diagram with a single vertical Tier 0 trunk, bottom-row placement for Tier 1 parent folders, rounded orthogonal bus routing through a widened gutter (`Lines: Focused` by default with a `Lines: All` toggle pill), and color-tinted `↳ Parent` badges on Tier 2+ cards.
 - **Hover Tooltips Replacing Inline Subtitle Clutter (`ui/architecture_canvas.py`, `ui/main_window.py`, `ui/settings_widgets.py`).** Hid cluttered inline muted subtitle explanations across Settings, cards, toolbars, dialogs, and canvas node cards, surfacing clear descriptions on hover for canvas nodes and non-trivial buttons.

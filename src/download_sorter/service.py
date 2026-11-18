@@ -19,6 +19,7 @@ from download_sorter.config import Config, DEFAULT_CATEGORY_MAP, load_config, sa
 from download_sorter.db import StateDB
 from download_sorter.fs_ops import (
     ProgressCallback,
+    cleanup_orphaned_staging,
     delete_files_safely,
     execute_move,
     extract_zip_safely,
@@ -751,6 +752,10 @@ class SorterService:
             self.db.reconcile_incomplete_moves()
         except Exception:
             logging.exception("Could not reconcile interrupted moves")
+        try:
+            cleanup_orphaned_staging(self.watch_root)
+        except Exception:
+            logging.exception("Could not clean up orphaned staging directories")
         self._start_observer()
         if self.config.quick_switcher_enabled:
             self._start_quick_switcher()

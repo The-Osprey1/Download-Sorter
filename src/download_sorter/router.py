@@ -17,16 +17,48 @@ from download_sorter.dest import apply_rename_template, read_exif_date, resolve_
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
 _CAMEL_SPLIT_RE = re.compile(r"([a-z0-9])([A-Z])")
 _LETTER_DIGIT_RE = re.compile(r"(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])")
+_COPY_SUFFIX_RE = re.compile(r"(?:\s*-\s*copy)?(?:\s*\(\d{1,3}\))+$|\s*-\s*copy$", re.IGNORECASE)
 _GENERIC_SNIFF_EXTS = {"", ".bin", ".tmp", ".dat", ".jfif", ".download"}
+
+try:
+    from PIL import ExifTags as _PilExifTags, Image as _PilImage
+except ImportError:  # pragma: no cover
+    _PilExifTags = None  # type: ignore[assignment]
+    _PilImage = None  # type: ignore[assignment]
+
+_MIME_BY_EXT: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".webp": "image/webp",
+    ".wav": "audio/wav",
+    ".avi": "video/x-msvideo",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".7z": "application/x-7z-compressed",
+    ".rar": "application/vnd.rar",
+    ".gz": "application/gzip",
+    ".exe": "application/vnd.microsoft.portable-executable",
+    ".stl": "model/stl",
+    ".3mf": "model/3mf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".zip": "application/zip",
+}
 
 
 def sniff_magic_extension(path: Path | None) -> str:
-    """Detect common file extensions from magic bytes when a filename lacks a real extension."""
+    """Detect common file extensions from magic bytes and ZIP container structure."""
     if path is None or not path.is_file():
         return ""
     try:
         with path.open("rb") as fh:
-            head = fh.read(512)
+            head = fh.read(2048)
     except OSError:
         return ""
     if not head:
@@ -39,6 +71,8 @@ def sniff_magic_extension(path: Path | None) -> str:
         return ".jpg"
     if head.startswith((b"GIF87a", b"GIF89a")):
         return ".gif"
+    if head.startswith(b"BM"):
+        return ".bmp"
     if head.startswith(b"RIFF") and len(head) >= 12:
         fourcc = head[8:12]
         if fourcc == b"WEBP":
@@ -48,6 +82,8 @@ def sniff_magic_extension(path: Path | None) -> str:
         if fourcc == b"AVI ":
             return ".avi"
     if len(head) >= 12 and head[4:8] == b"ftyp":
+        if head[8:12] == b"qt  ":
+            return ".mov"
         return ".mp4"
     if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
         return ".mp3"
@@ -57,24 +93,35 @@ def sniff_magic_extension(path: Path | None) -> str:
         return ".7z"
     if head.startswith(b"Rar!\x1a\x07"):
         return ".rar"
+    if head.startswith(b"\x1f\x8b\x08"):
+        return ".gz"
     if head.startswith(b"MZ"):
         return ".exe"
-    if head.startswith(b"PK\x03\x04"):
+    if head.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
         try:
             with zipfile.ZipFile(path, "r") as zf:
-                names = set(zf.namelist()[:64])
-                if any(n.lower().endswith(".model") and "3d/" in n.lower() for n in names):
+                names = {n.replace("\\", "/").lstrip("/").lower() for n in zf.namelist()[:128]}
+                if "3d/3dmodel.model" in names or any(n.startswith("3d/") and n.endswith(".model") for n in names):
                     return ".3mf"
-                if any(n.startswith("word/") for n in names):
+                if "word/document.xml" in names or any(n.startswith("word/") for n in names):
                     return ".docx"
-                if any(n.startswith("xl/") for n in names):
+                if "xl/workbook.xml" in names or any(n.startswith("xl/") for n in names):
                     return ".xlsx"
-                if any(n.startswith("ppt/") for n in names):
+                if "ppt/presentation.xml" in names or any(n.startswith("ppt/") for n in names):
                     return ".pptx"
         except (zipfile.BadZipFile, OSError):
             pass
         return ".zip"
+    head_lower = head[:512].lstrip().lower()
+    if head_lower.startswith(b"solid ") and (b"facet normal" in head.lower() or b"endsolid" in head.lower()):
+        return ".stl"
     return ""
+
+
+def sniff_magic_mime(path: Path | None) -> tuple[str, str]:
+    """Return ``(detected_extension, mime_type)`` from magic-byte/container sniffing."""
+    ext = sniff_magic_extension(path)
+    return ext, _MIME_BY_EXT.get(ext, "")
 _PDF_STREAM_RE = re.compile(rb"stream\r?\n(.*?)\r?\nendstream", re.DOTALL)
 _PDF_TEXT_LIT_RE = re.compile(rb"\(([^()\\]{2,200})\)")
 _PDF_STREAM_MAX_OUT = 65536
@@ -205,6 +252,34 @@ def candidate_from_path(path: Path) -> FileCandidate:
     return FileCandidate(filename=path.name, path=path, source_url=read_zone_url(path))
 
 
+_TOKEN_ALIASES: dict[str, tuple[str, ...]] = {
+    "hw": ("homework",),
+    "hmk": ("homework",),
+    "syl": ("syllabus",),
+    "syll": ("syllabus",),
+    "lec": ("lecture",),
+    "sol": ("solution", "solutions"),
+    "soln": ("solution", "solutions"),
+    "proj": ("project",),
+    "sched": ("schedule",),
+    "lab": ("laboratory",),
+    "assn": ("assignment",),
+    "asgmt": ("assignment",),
+    "calc": ("calculus",),
+    "thermo": ("thermodynamics",),
+    "mech": ("mechanics", "mechanical"),
+    "mfg": ("manufacturing",),
+    "dwg": ("drawing",),
+    "spec": ("specification",),
+    "rev": ("review", "revision"),
+}
+
+_REVERSE_ALIASES: dict[str, set[str]] = {}
+for _abbr, _expansions in _TOKEN_ALIASES.items():
+    for _exp in _expansions:
+        _REVERSE_ALIASES.setdefault(_exp, set()).add(_abbr)
+
+
 def _normalize_tokens(text: str) -> str:
     """Split CamelCase, letter/digit runs and separators into lowercase space-separated tokens.
 
@@ -214,6 +289,30 @@ def _normalize_tokens(text: str) -> str:
     camel_split = _CAMEL_SPLIT_RE.sub(r"\1 \2", text)
     split = _LETTER_DIGIT_RE.sub(" ", camel_split.lower())
     return " ".join(_NON_WORD_RE.sub(" ", split).split())
+
+
+def normalize_filename_tokens(filename: str, *, expand_aliases: bool = True) -> list[str]:
+    """Return normalized lowercase tokens for a filename, stripping copy suffixes."""
+    raw_stem = Path(filename).stem
+    cleaned_stem = _COPY_SUFFIX_RE.sub("", raw_stem).strip() or raw_stem
+    tokens = _normalize_tokens(cleaned_stem).split()
+    if not expand_aliases or not tokens:
+        return tokens
+    out: list[str] = []
+    seen: set[str] = set()
+    for tok in tokens:
+        if tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+        for alias in _TOKEN_ALIASES.get(tok, ()):
+            if alias not in seen:
+                seen.add(alias)
+                out.append(alias)
+        for abbr in _REVERSE_ALIASES.get(tok, set()):
+            if abbr not in seen:
+                seen.add(abbr)
+                out.append(abbr)
+    return out
 
 
 def _joins_consecutive_tokens(compact_kw: str, tokens: list[str]) -> bool:
@@ -237,7 +336,9 @@ def _keyword_matches(filename: str, keyword: str) -> bool:
     norm_kw = _normalize_tokens(keyword)
     if not norm_kw:
         return False
-    norm_name = _normalize_tokens(Path(filename).stem)
+    raw_stem = Path(filename).stem
+    cleaned_stem = _COPY_SUFFIX_RE.sub("", raw_stem).strip() or raw_stem
+    norm_name = _normalize_tokens(cleaned_stem)
     if not norm_name:
         return False
     # Match whole phrase boundaries so e.g. 'cv' does not match inside 'opencv' or 'csv'.
@@ -252,10 +353,20 @@ def _keyword_matches(filename: str, keyword: str) -> bool:
     compact_kw = norm_kw.replace(" ", "")
     if len(compact_kw) >= 4 and _joins_consecutive_tokens(compact_kw, name_tokens):
         return True
-    # Support unordered multi-word token matching (e.g. "tax return" -> "2026_Return_Tax").
-    name_set = set(name_tokens)
-    if len(kw_tokens) > 1 and all(t in name_set for t in kw_tokens):
+    # Support unordered multi-word token matching (e.g. "tax return" -> "2026_Return_Tax"),
+    # including academic/engineering alias expansion (e.g. "hw" <-> "homework").
+    expanded_name_set = set(normalize_filename_tokens(filename, expand_aliases=True))
+    if len(kw_tokens) == 1 and kw_tokens[0] in expanded_name_set:
         return True
+    if len(kw_tokens) > 1:
+        all_found = True
+        for t in kw_tokens:
+            candidates = {t} | set(_TOKEN_ALIASES.get(t, ())) | _REVERSE_ALIASES.get(t, set())
+            if not (candidates & expanded_name_set):
+                all_found = False
+                break
+        if all_found:
+            return True
     # High-threshold fuzzy match for longer single-word keywords (>= 5 chars) to tolerate minor typos.
     # The first letter has to agree: a typo there is rare, and without it 'lecture'
     # matched 'electure' and similar words that merely contain the keyword.
@@ -414,12 +525,240 @@ def _evaluate_rule(
     return False, "; ".join(misses)
 
 
+_ZIP_3D_EXTS = frozenset({".stl", ".3mf", ".obj", ".step", ".stp", ".iges", ".igs", ".scad", ".blend"})
+_ZIP_GCODE_EXTS = frozenset({".nc", ".tap", ".ngc", ".gcode", ".bgcode", ".gco"})
+_ZIP_DOC_EXTS = frozenset({".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md"})
+_ZIP_CODE_EXTS = frozenset({".py", ".js", ".ts", ".c", ".cpp", ".h", ".hpp", ".rs", ".go", ".java", ".cs"})
+_ZIP_MEDIA_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".mov", ".mp3", ".wav"})
+
+_SCREENSHOT_RESOLUTIONS: frozenset[tuple[int, int]] = frozenset({
+    (1280, 720),
+    (1366, 768),
+    (1920, 1080),
+    (1920, 1200),
+    (2560, 1440),
+    (2560, 1600),
+    (3440, 1440),
+    (3840, 2160),
+    (1170, 2532),
+    (1290, 2796),
+})
+_CAD_SOFTWARE_HINTS = ("blender", "fusion", "solidworks", "keyshot", "bambu", "prusa", "orca", "cura", "rhino")
+_SCREENSHOT_HINTS = ("screenshot", "screen shot", "snip", "greenshot", "sharex", "flameshot", "lightshot")
+
+
+@dataclass(frozen=True)
+class ZipPeekResult:
+    """Summary of ZIP archive contents prior to extraction or routing."""
+
+    valid: bool
+    file_count: int
+    categories: dict[str, int] = field(default_factory=dict)
+    dominant_category: str = ""
+    suggested_destination: str = ""
+    matched_rule: str = ""
+    matched_trigger: str = ""
+    has_path_traversal: bool = False
+    sample_names: tuple[str, ...] = ()
+
+
+def _is_zip_slip_entry(entry_name: str) -> bool:
+    norm = entry_name.replace("\\", "/")
+    if norm.startswith("/") or (len(norm) >= 2 and norm[1] == ":"):
+        return True
+    parts = [p for p in norm.split("/") if p]
+    return ".." in parts
+
+
+def peek_zip_contents(
+    path: Path | None,
+    rules: list[Rule] | None = None,
+) -> ZipPeekResult:
+    """Inspect a ZIP archive's central directory without extracting any files."""
+    if path is None or not path.is_file():
+        return ZipPeekResult(valid=False, file_count=0)
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            raw_names = zf.namelist()
+    except (zipfile.BadZipFile, OSError, ValueError):
+        return ZipPeekResult(valid=False, file_count=0)
+
+    has_traversal = any(_is_zip_slip_entry(n) for n in raw_names)
+    files: list[str] = []
+    for name in raw_names:
+        norm = name.replace("\\", "/")
+        if norm.endswith("/"):
+            continue
+        lower = norm.lower()
+        if lower.startswith("__macosx/") or lower.endswith("/.ds_store") or lower == ".ds_store":
+            continue
+        files.append(norm)
+
+    if not files:
+        return ZipPeekResult(valid=True, file_count=0, has_path_traversal=has_traversal)
+
+    cats: dict[str, int] = {"3d": 0, "gcode": 0, "docs": 0, "code": 0, "media": 0, "other": 0}
+    for f in files:
+        f_ext = Path(f).suffix.lower()
+        if f_ext in _ZIP_3D_EXTS:
+            cats["3d"] += 1
+        elif f_ext in _ZIP_GCODE_EXTS:
+            cats["gcode"] += 1
+        elif f_ext in _ZIP_DOC_EXTS:
+            cats["docs"] += 1
+        elif f_ext in _ZIP_CODE_EXTS:
+            cats["code"] += 1
+        elif f_ext in _ZIP_MEDIA_EXTS:
+            cats["media"] += 1
+        else:
+            cats["other"] += 1
+
+    if rules:
+        for rule in rules:
+            if not rule.enabled or not rule.keywords:
+                continue
+            for inner in files:
+                inner_name = Path(inner).name
+                for kw in rule.keywords:
+                    if _keyword_matches(inner_name, kw):
+                        return ZipPeekResult(
+                            valid=True,
+                            file_count=len(files),
+                            categories=cats,
+                            dominant_category="keyword_match",
+                            suggested_destination=rule.destination,
+                            matched_rule=rule.name,
+                            matched_trigger=f"{inner_name} ~ {kw}",
+                            has_path_traversal=has_traversal,
+                            sample_names=tuple(files[:10]),
+                        )
+
+    total = len(files)
+    best_cat, best_count = max(cats.items(), key=lambda kv: kv[1])
+    suggested = ""
+    if cats["3d"] > 0 and (cats["3d"] / total >= 0.35 or best_cat == "3d"):
+        best_cat = "3d"
+        suggested = "3D Models"
+    elif cats["gcode"] > 0 and cats["gcode"] >= cats["3d"]:
+        best_cat = "gcode"
+        suggested = "Code/Gcode"
+    elif best_count / total >= 0.5:
+        suggested = {
+            "docs": "Documents",
+            "code": "Code",
+            "media": "Images",
+        }.get(best_cat, "")
+
+    return ZipPeekResult(
+        valid=True,
+        file_count=total,
+        categories=cats,
+        dominant_category=best_cat,
+        suggested_destination=suggested,
+        has_path_traversal=has_traversal,
+        sample_names=tuple(files[:10]),
+    )
+
+
+@dataclass(frozen=True)
+class ImageInspection:
+    """Result of Pillow-based image EXIF and dimension inspection."""
+
+    available: bool
+    category: str  # "camera_photo", "screenshot", "cad_render", "image", "error"
+    width: int = 0
+    height: int = 0
+    image_format: str = ""
+    camera_make: str = ""
+    camera_model: str = ""
+    software: str = ""
+    suggested_destination: str = ""
+
+
+def inspect_image_metadata(path: Path | None) -> ImageInspection:
+    """Inspect image EXIF and dimensions using Pillow to classify photos, screenshots, and renders."""
+    if _PilImage is None:
+        return ImageInspection(available=False, category="error")
+    if path is None or not path.is_file():
+        return ImageInspection(available=True, category="error")
+
+    try:
+        with _PilImage.open(path) as img:
+            width, height = img.size
+            fmt = (img.format or "").upper()
+            exif_dict: dict[str, str] = {}
+            try:
+                raw_exif = img.getexif()
+                if raw_exif and _PilExifTags is not None:
+                    for tag_id, val in raw_exif.items():
+                        tag_name = _PilExifTags.TAGS.get(tag_id, str(tag_id))
+                        exif_dict[str(tag_name)] = str(val).strip()
+            except Exception:
+                pass
+    except Exception:
+        return ImageInspection(available=True, category="error")
+
+    make = exif_dict.get("Make", "")
+    model = exif_dict.get("Model", "")
+    software = exif_dict.get("Software", "")
+    sw_lower = software.lower()
+    name_lower = path.name.lower()
+
+    if make or model:
+        return ImageInspection(
+            available=True,
+            category="camera_photo",
+            width=width,
+            height=height,
+            image_format=fmt,
+            camera_make=make,
+            camera_model=model,
+            software=software,
+            suggested_destination="Images/Photos",
+        )
+
+    if any(h in sw_lower or h in name_lower for h in _CAD_SOFTWARE_HINTS):
+        return ImageInspection(
+            available=True,
+            category="cad_render",
+            width=width,
+            height=height,
+            image_format=fmt,
+            software=software,
+            suggested_destination="Images/Renders",
+        )
+
+    if (
+        any(h in sw_lower or h in name_lower for h in _SCREENSHOT_HINTS)
+        or (fmt in {"PNG", "WEBP", "BMP"} and (width, height) in _SCREENSHOT_RESOLUTIONS)
+    ):
+        return ImageInspection(
+            available=True,
+            category="screenshot",
+            width=width,
+            height=height,
+            image_format=fmt,
+            software=software,
+            suggested_destination="Images/Screenshots",
+        )
+
+    return ImageInspection(
+        available=True,
+        category="image",
+        width=width,
+        height=height,
+        image_format=fmt,
+        software=software,
+        suggested_destination="Images",
+    )
+
+
 def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
     """Evaluate a file candidate strictly top-to-bottom in 4 predictable steps."""
     trace: list[RouteStep] = []
     name_lower = candidate.filename.lower()
     ext = candidate.extension
-    if ext in _GENERIC_SNIFF_EXTS and candidate.path is not None:
+    if ext in (_GENERIC_SNIFF_EXTS | {".zip"}) and candidate.path is not None:
         sniffed = sniff_magic_extension(candidate.path)
         if sniffed:
             ext = sniffed
@@ -468,6 +807,35 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
                 reason=f"Rule '{rule.name}': {detail}",
                 matched_rule=rule.name,
                 match_type="rule",
+                trace=trace,
+            )
+
+    # Step 2.5: Pre-routing ZIP content peek (when no explicit User Rule matched)
+    if ext == ".zip" and candidate.path is not None:
+        zip_peek = peek_zip_contents(candidate.path, rules=config.rules)
+        if zip_peek.has_path_traversal:
+            trace.append(RouteStep("Zip Peek", "Security check", True, "Zip Slip path traversal detected; falling back to archive rule"))
+        elif zip_peek.valid and zip_peek.suggested_destination:
+            expanded_zip_dest = resolve_destination_tokens(
+                zip_peek.suggested_destination,
+                host=effective_host,
+                ext=ext,
+                exif_date=exif_dt,
+            )
+            folder = Path(to_relative_dest(expanded_zip_dest))
+            dest_rel = folder / candidate.filename
+            detail = (
+                f"Archive inner match '{zip_peek.matched_trigger}' -> '{folder}'"
+                if zip_peek.matched_rule
+                else f"Archive contents ({zip_peek.dominant_category}) -> '{folder}'"
+            )
+            trace.append(RouteStep("Zip Peek", "Archive inspection", True, detail))
+            return RouteDecision(
+                action="move",
+                relative_dest=dest_rel,
+                reason=detail,
+                matched_rule=zip_peek.matched_rule or f"Zip Peek ({zip_peek.dominant_category})",
+                match_type="rule" if zip_peek.matched_rule else "extension",
                 trace=trace,
             )
 
