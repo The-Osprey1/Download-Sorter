@@ -1927,18 +1927,22 @@ class ReplaceRibbonPopup(SummaryRibbonPopup):
         import replace_offer
 
         try:
-            final = replace_offer.accept(self.offer_id)
+            final, status = replace_offer.accept(self.offer_id)
         except Exception as exc:
             logging.warning("Could not replace the older copy: %s", exc)
-            final = None
+            final, status = None, "error"
         self.close()
-        if final:
+        if status == "replaced" and final:
             notify_summary(
                 "Replaced",
-                f"{Path(final).name} is the new copy. The old one is in the Recycle Bin.",
+                f"{Path(final).name} is the new copy. The old one is in _Duplicates (Undo restores it).",
             )
+        elif status == "locked":
+            notify_summary("Kept both", "A file is open in another program. Close it and try again.")
+        elif status == "rename_failed":
+            notify_summary("Partially replaced", "Old copy moved to _Duplicates, but the new file could not be renamed.")
         else:
-            notify_summary("Kept both", "Couldn't replace it (a file changed or is open). Both copies kept.")
+            notify_summary("Kept both", "Couldn't replace it (a file changed or is missing). Both copies kept.")
 
     def keep_both(self) -> None:
         import replace_offer
