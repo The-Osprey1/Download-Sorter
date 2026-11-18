@@ -2,7 +2,7 @@
 ; Local-first automated file organizer for Windows
 
 #define MyAppName "Download Sorter"
-#define MyAppVersion "2.3.0"
+#define MyAppVersion "3.4.1"
 #define MyAppPublisher "Devyn Fidel"
 #define MyAppURL "https://github.com/The-Osprey1/Download-Sorter"
 #define MyAppExeName "DownloadSorter.exe"
