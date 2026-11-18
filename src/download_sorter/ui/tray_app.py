@@ -259,6 +259,9 @@ def run_app(
         # refreshes the window and reports what was (and was not) restored.
         on_undo=lambda _b: window._on_undo_last(),
         on_open_folder=_open_folder,
+        on_replace_old=window._on_toast_replace_old,
+        on_delete_locate_old=window._on_toast_delete_locate_old,
+        on_keep_both=window._on_toast_keep_both,
     )
 
     window.moves_received.connect(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import copy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1471,6 +1472,7 @@ def scan_folder_architecture(
     *,
     max_depth: int = 5,
     max_files_per_dir: int = 300,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Scan ``watch_root`` on disk and build an interactive ``FolderArchitecture`` root map."""
     from collections import Counter
@@ -1482,6 +1484,9 @@ def scan_folder_architecture(
     max_tiers = max(1, min(FolderArchitecture.MAX_TIERS, int(max_depth)))
     if not root.is_dir():
         return {"architecture": FolderArchitecture(tier_count=2, nodes=[]), "folder_count": 0, "file_count": 0}
+
+    if on_progress is not None:
+        on_progress(0, 0, f"Scanning folders inside {root.name}...")
 
     dir_records: list[dict[str, Any]] = []
     global_token_counts: Counter[str] = Counter()
@@ -1543,7 +1548,10 @@ def scan_folder_architecture(
 
     # Sort by tier so parents are always created before children
     dir_records.sort(key=lambda r: (r["tier"], tuple(p.lower() for p in r["rel_parts"])))
-    for rec in dir_records:
+    total_dirs = len(dir_records)
+    for idx, rec in enumerate(dir_records, start=1):
+        if on_progress is not None:
+            on_progress(idx, max(1, total_dirs), f"Analyzing {rec['name']} ({idx}/{total_dirs})...")
         parts: tuple[str, ...] = rec["rel_parts"]
         parent_id = path_to_id.get(parts[:-1]) if len(parts) > 1 else None
         fc = max(1, int(rec["file_count"]))
@@ -1579,6 +1587,8 @@ def scan_folder_architecture(
         )
 
     arch = FolderArchitecture(tier_count=max(2, max_tier_seen), nodes=nodes)
+    if on_progress is not None:
+        on_progress(max(1, total_dirs), max(1, total_dirs), f"Scanned {len(nodes)} folder(s)")
     return {
         "architecture": arch,
         "folder_count": len(nodes),

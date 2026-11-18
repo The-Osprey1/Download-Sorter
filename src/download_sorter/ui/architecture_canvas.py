@@ -170,10 +170,9 @@ class PremadeFolderDialog(QDialog):
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(10)
 
-        hdr = QLabel("Choose from 45+ premade folders & smart packs to place into your tier layout:")
-        hdr.setWordWrap(True)
-        hdr.setStyleSheet("color: #AEAEB2; font-size: 12.5px;")
-        root.addWidget(hdr)
+        hdr = QLabel("Choose from 45+ premade folders & smart packs to place into your tier layout:", self)
+        hdr.setVisible(False)
+        self.setToolTip("Choose premade folders & smart packs to add into your Download Sorter tier layout.")
 
         tier_row = QHBoxLayout()
         tier_row.setSpacing(6)
@@ -219,6 +218,10 @@ class PremadeFolderDialog(QDialog):
         if ok_btn is not None:
             ok_btn.setText("Add Checked Folders")
             ok_btn.setObjectName("PrimaryButton")
+            ok_btn.setToolTip("Add all checked premade folders into the selected tier and parent")
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn is not None:
+            cancel_btn.setToolTip("Close without adding folders")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         footer.addWidget(buttons)
@@ -400,12 +403,15 @@ class CustomFolderNodeDialog(QDialog):
 
         self.edit_exts = QLineEdit(", ".join(node.extensions) if node else "")
         self.edit_exts.setPlaceholderText("e.g. .pdf, .docx, .zip (leave blank for any file type)")
+        self.edit_exts.setToolTip("Comma-separated file extensions that belong in this folder (e.g. .pdf, .docx)")
 
         self.edit_keywords = QLineEdit(", ".join(node.keywords) if node else "")
         self.edit_keywords.setPlaceholderText("e.g. syllabus, lab_report, invoice (optional)")
+        self.edit_keywords.setToolTip("Comma-separated filename keywords to match (e.g. invoice, syllabus)")
 
         self.edit_domains = QLineEdit(", ".join(node.domains) if node else "")
         self.edit_domains.setPlaceholderText("e.g. canvas.edu, makerworld.com (optional)")
+        self.edit_domains.setToolTip("Comma-separated source website domains extracted from Windows Zone.Identifier")
 
         form.addRow("Folder Name:", self.edit_name)
         form.addRow("Layer / Tier:", tier_wrap)
@@ -422,6 +428,10 @@ class CustomFolderNodeDialog(QDialog):
         save_btn = buttons.button(QDialogButtonBox.StandardButton.Save)
         if save_btn is not None:
             save_btn.setObjectName("PrimaryButton")
+            save_btn.setToolTip("Save folder name, placement, and sorting rules")
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn is not None:
+            cancel_btn.setToolTip("Discard changes to this folder")
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -528,10 +538,13 @@ class ShiftConfirmDialog(QDialog):
         layout.addWidget(title)
 
         sub = QLabel(
-            "All file shifts are logged in SQLite as one Undoable batch. Empty old managed folders are tidied automatically."
+            "All file shifts are logged in SQLite as one Undoable batch. Empty old managed folders are tidied automatically.",
+            self,
         )
-        sub.setStyleSheet("color: #98989D; font-size: 12px;")
-        layout.addWidget(sub)
+        sub.setVisible(False)
+        self.setToolTip(
+            "All file shifts are logged in SQLite as one Undoable batch, and empty managed folders are tidied automatically."
+        )
 
         tbl = QTableWidget(len(planned), 3)
         tbl.setHorizontalHeaderLabels(["Current File Location", "New Expected Folder", "Matched By"])
@@ -560,6 +573,7 @@ class ShiftConfirmDialog(QDialog):
             "Also pre-create empty tier folders on disk right now"
         )
         self.chk_create_empty.setChecked(False)
+        self.chk_create_empty.setToolTip("Create all configured tier folders immediately even if they are currently empty")
         layout.addWidget(self.chk_create_empty)
 
         buttons = QDialogButtonBox(
@@ -569,6 +583,10 @@ class ShiftConfirmDialog(QDialog):
         if ok_btn is not None:
             ok_btn.setText(f"OK — Apply && Shift ({len(planned)})")
             ok_btn.setObjectName("PrimaryButton")
+            ok_btn.setToolTip("Apply this layout, update sorting rules, and shift the listed files as one undoable batch")
+        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn is not None:
+            cancel_btn.setToolTip("Return to canvas without applying or shifting files")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -744,10 +762,11 @@ class TemplateShelfWidget(QFrame):
         self.list_templates.template_double_clicked.connect(self.template_activated.emit)
         bl.addWidget(self.list_templates, 1)
 
-        tip = QLabel("Drag onto canvas or card")
-        tip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tip.setStyleSheet("color: #636366; font-size: 10px;")
-        bl.addWidget(tip)
+        tip = QLabel("Drag onto canvas or card", self)
+        tip.setVisible(False)
+        shelf_tip = "Drag any template pack onto the canvas or a folder card (or double-click) to insert it"
+        self.setToolTip(shelf_tip)
+        self.list_templates.setToolTip(shelf_tip)
 
         outer.addWidget(self._body, 1)
         self._set_tier_filter("all")
@@ -809,10 +828,10 @@ class FolderArchitectureCanvas(QWidget):
 
     MARGIN_X = 16
     MARGIN_Y = 14
-    TIER_GAP = 28
+    TIER_GAP = 34
     HEADER_H = 30
     CARD_W = 166
-    CARD_H = 62
+    CARD_H = 54
     CARD_GAP_X = 12
     CARD_GAP_Y = 12
     BAND_PAD_X = 12
@@ -823,6 +842,7 @@ class FolderArchitectureCanvas(QWidget):
         self._arch = FolderArchitecture()
         self._watch_label = "Downloads/"
         self._zoom = 1.0
+        self._show_all_connectors = False
         self._selected_id: str | None = None
         self._hovered_id: str | None = None
         self._hovered_delete_id: str | None = None
@@ -1020,14 +1040,62 @@ class FolderArchitectureCanvas(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
+    def show_all_connectors(self) -> bool:
+        return bool(self._show_all_connectors)
+
+    def set_show_all_connectors(self, show_all: bool) -> None:
+        self._show_all_connectors = bool(show_all)
+        self.update()
+
+    def _active_lineage_ids(self) -> tuple[str | None, set[str]]:
+        focus_id = self._dragging_id or self._hovered_id or self._selected_id
+        if not focus_id or focus_id == "__root__":
+            return None, set()
+        ancestors: set[str] = set()
+        cur = self._arch.get_node(focus_id)
+        guard = 0
+        while cur is not None and guard < FolderArchitecture.MAX_TIERS + 2:
+            ancestors.add(cur.id)
+            if not cur.parent_id:
+                break
+            cur = self._arch.get_node(cur.parent_id)
+            guard += 1
+        return focus_id, ancestors
+
+    def _node_tooltip(self, node: ArchNode) -> str:
+        rel = self._arch.node_relative_path(node.id)
+        lines = [f"{node.name} (Tier {node.tier})", f"Path: Downloads\\{rel}"]
+        if node.extensions:
+            lines.append("Extensions: " + ", ".join(node.extensions))
+        if node.keywords:
+            lines.append("Keywords: " + ", ".join(node.keywords))
+        if node.domains:
+            lines.append("Websites: " + ", ".join(node.domains))
+        child_count = len(self._arch.children_of(node.id))
+        if child_count:
+            lines.append(f"Subfolders: {child_count}")
+        lines.append("Drag card to reparent · Double-click title to rename · Double-click card for rules")
+        return "\n".join(lines)
+
     def _ordered_tier_nodes(self) -> dict[int, list[ArchNode]]:
         ordered: dict[int, list[ArchNode]] = {}
-        t1 = self._arch.nodes_in_tier(1)
+        t1 = list(self._arch.nodes_in_tier(1))
+        # Place leaf folders first and parent folders on the bottom row directly above the Tier 1->2 gutter
+        t1.sort(key=lambda n: 1 if self._arch.children_of(n.id) else 0)
         ordered[1] = t1
         for t in range(2, self._arch.tier_count + 1):
             parent_order = {n.id: idx for idx, n in enumerate(ordered.get(t - 1, []))}
             nodes_t = list(self._arch.nodes_in_tier(t))
-            nodes_t.sort(key=lambda n: (parent_order.get(n.parent_id or "", 999), n.name.lower()))
+            if t < self._arch.tier_count:
+                nodes_t.sort(
+                    key=lambda n: (
+                        1 if self._arch.children_of(n.id) else 0,
+                        parent_order.get(n.parent_id or "", 999),
+                        n.name.lower(),
+                    )
+                )
+            else:
+                nodes_t.sort(key=lambda n: (parent_order.get(n.parent_id or "", 999), n.name.lower()))
             ordered[t] = nodes_t
         return ordered
 
@@ -1170,36 +1238,75 @@ class FolderArchitectureCanvas(QWidget):
                 p.setPen(QColor("#F5F5F7"))
                 p.drawText(add_rect, Qt.AlignmentFlag.AlignCenter, "+ Add")
 
-        # Cubic Bezier Connectors (dim pass first, active/dragged highlights on top)
+        # Root Trunk (single vertical stem from Tier 0 Downloads to Tier 1 band)
         root_rect = self._display_rect("__root__")
+        t1_band = self._tier_band_rects.get(1)
+        if root_rect is not None and t1_band is not None and self._arch.nodes_in_tier(1):
+            trunk_x = root_rect.center().x()
+            p.setPen(QPen(QColor("#0A84FF"), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawLine(QPointF(trunk_x, root_rect.bottom()), QPointF(trunk_x, t1_band.top()))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor("#0A84FF"))
+            p.drawEllipse(QPointF(trunk_x, t1_band.top()), 3.2, 3.2)
+
+        # Tier 2+ Orthogonal Bus Connectors (focused active lineage by default, or all when toggled)
+        focus_id, ancestor_ids = self._active_lineage_ids()
         connector_items: list[tuple[bool, ArchNode, QRectF, QRectF]] = []
         for node in self._arch.nodes:
-            if node.tier > self._arch.tier_count:
+            if node.tier < 2 or node.tier > self._arch.tier_count:
                 continue
             dst_rect = self._display_rect(node.id)
             if dst_rect is None:
                 continue
-            src_rect = root_rect if node.tier == 1 else self._display_rect(node.parent_id or "")
+            src_rect = self._display_rect(node.parent_id or "")
             if src_rect is None:
                 continue
             is_hi = bool(
-                node.id == self._selected_id
-                or node.id == self._hovered_id
-                or node.id == self._dragging_id
-                or (node.parent_id and (node.parent_id == self._selected_id or node.parent_id == self._dragging_id))
+                focus_id is not None
+                and (
+                    node.id in ancestor_ids
+                    or (node.parent_id is not None and node.parent_id == focus_id)
+                )
             )
+            if not self._show_all_connectors and not is_hi:
+                continue
             connector_items.append((is_hi, node, src_rect, dst_rect))
+
+        # Assign distinct horizontal bus channels per (tier, parent) sorted by parent X
+        tier_parent_lanes: dict[tuple[int, str], float] = {}
+        parents_by_tier: dict[int, list[tuple[float, str]]] = {}
+        seen_pid: set[tuple[int, str]] = set()
+        for _hi, node, src_rect, _dst_rect in connector_items:
+            pid = node.parent_id or ""
+            key = (node.tier, pid)
+            if key not in seen_pid:
+                seen_pid.add(key)
+                parents_by_tier.setdefault(node.tier, []).append((src_rect.center().x(), pid))
+        for tier_num, plist in parents_by_tier.items():
+            plist.sort(key=lambda pair: (pair[0], pair[1]))
+            band_above = self._tier_band_rects.get(tier_num - 1)
+            band_below = self._tier_band_rects.get(tier_num)
+            if band_above is not None and band_below is not None:
+                gutter_top = band_above.bottom() + 5.0
+                gutter_bot = max(gutter_top + 4.0, band_below.top() - 5.0)
+            else:
+                gutter_top = 0.0
+                gutter_bot = 0.0
+            total_p = len(plist)
+            for idx, (_px, pid) in enumerate(plist):
+                frac = (idx + 1) / float(total_p + 1)
+                tier_parent_lanes[(tier_num, pid)] = gutter_top + frac * (gutter_bot - gutter_top)
 
         for want_hi in (False, True):
             for is_hi, node, src_rect, dst_rect in connector_items:
                 if is_hi != want_hi:
                     continue
                 col = QColor(node.accent_hex)
-                col.setAlpha(225 if is_hi else 52)
+                col.setAlpha(230 if is_hi else 72)
                 p.setPen(
                     QPen(
                         col,
-                        2.1 if is_hi else 1.2,
+                        2.2 if is_hi else 1.25,
                         Qt.PenStyle.SolidLine,
                         Qt.PenCapStyle.RoundCap,
                     )
@@ -1207,9 +1314,8 @@ class FolderArchitectureCanvas(QWidget):
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p1 = QPointF(src_rect.center().x(), src_rect.bottom())
                 p2 = QPointF(dst_rect.center().x(), dst_rect.top())
-                dy = max(16.0, abs(p2.y() - p1.y()) * 0.48)
-                path = QPainterPath(p1)
-                path.cubicTo(QPointF(p1.x(), p1.y() + dy), QPointF(p2.x(), p2.y() - dy), p2)
+                bus_y = tier_parent_lanes.get((node.tier, node.parent_id or ""), (p1.y() + p2.y()) * 0.5)
+                path = self._build_orthogonal_bus_path(p1, p2, bus_y)
                 p.drawPath(path)
 
         # Live '+' Handle Drag-to-Spawn Dashed Wire
@@ -1351,39 +1457,47 @@ class FolderArchitectureCanvas(QWidget):
             fm_name = QFontMetrics(p.font())
             title = fm_name.elidedText(node.name, Qt.TextElideMode.ElideRight, int(rect.width() - 36))
             p.drawText(
-                rect.adjusted(12, 7, -22, -32),
+                rect.adjusted(12, 6, -24, -22),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 title,
             )
 
-        # Rule/Ext Summary Line
-        parts: list[str] = []
-        if node.keywords:
-            parts.append(f"{len(node.keywords)} kw")
-        if node.domains:
-            parts.append(f"{len(node.domains)} site")
-        if node.extensions:
-            parts.append(", ".join(node.extensions[:2]) + ("+" if len(node.extensions) > 2 else ""))
-        sub_txt = " • ".join(parts) if parts else "Container folder"
-        p.setFont(QFont("Segoe UI", 8))
-        p.setPen(QColor("#8E8E93"))
-        fm_sub = QFontMetrics(p.font())
-        p.drawText(
-            rect.adjusted(12, 26, -10, -18),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            fm_sub.elidedText(sub_txt, Qt.TextElideMode.ElideRight, int(rect.width() - 22)),
-        )
-
-        # Child count + Tier micro-footer
+        # Parent badge pill (Tier 2+) + Tier micro-footer
         child_count = len(self._arch.children_of(node.id))
+        parent_node = self._arch.get_node(node.parent_id) if (node.tier >= 2 and node.parent_id) else None
         footer = f"T{node.tier}" + (f" · {child_count} sub" if child_count else "")
-        p.setFont(QFont("Segoe UI", 7.5))
-        p.setPen(QColor("#636366"))
-        p.drawText(
-            rect.adjusted(12, 42, -10, -4),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            footer,
-        )
+        if parent_node is not None:
+            p_col = QColor(parent_node.accent_hex)
+            p.setFont(QFont("Segoe UI", 7.2, QFont.Weight.DemiBold))
+            fm_pill = QFontMetrics(p.font())
+            pill_label = fm_pill.elidedText(f"↳ {parent_node.name}", Qt.TextElideMode.ElideRight, int(rect.width() - 56))
+            pill_w = min(rect.width() - 48.0, float(fm_pill.horizontalAdvance(pill_label)) + 12.0)
+            pill_rect = QRectF(rect.left() + 12.0, rect.bottom() - 21.0, pill_w, 16.0)
+            fill_col = QColor(p_col)
+            fill_col.setAlpha(36)
+            border_col = QColor(p_col)
+            border_col.setAlpha(135)
+            p.setPen(QPen(border_col, 0.9))
+            p.setBrush(fill_col)
+            p.drawRoundedRect(pill_rect, 4.5, 4.5)
+            p.setPen(QColor("#E5E5EA"))
+            p.drawText(pill_rect.adjusted(5, 0, -5, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, pill_label)
+
+            p.setFont(QFont("Segoe UI", 7.2))
+            p.setPen(QColor("#6E6E73"))
+            p.drawText(
+                rect.adjusted(12, 30, -10, -5),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                footer,
+            )
+        else:
+            p.setFont(QFont("Segoe UI", 7.5))
+            p.setPen(QColor("#6E6E73"))
+            p.drawText(
+                rect.adjusted(12, 30, -10, -5),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                footer,
+            )
 
         # Hover / Selected Delete '×' button
         if (hovered or selected) and not is_dragging:
@@ -1402,6 +1516,32 @@ class FolderArchitectureCanvas(QWidget):
         # '+' Spawn handle on bottom center
         if not is_dragging:
             self._paint_plus_handle(p, node.id, rect)
+
+    @staticmethod
+    def _build_orthogonal_bus_path(p1: QPointF, p2: QPointF, bus_y: float) -> QPainterPath:
+        """Build a clean rounded orthogonal bus connector between two cards."""
+        path = QPainterPath(p1)
+        dx = p2.x() - p1.x()
+        if p1.y() >= bus_y - 2.0 or p2.y() <= bus_y + 2.0:
+            dy = max(14.0, abs(p2.y() - p1.y()) * 0.45)
+            path.cubicTo(QPointF(p1.x(), p1.y() + dy), QPointF(p2.x(), p2.y() - dy), p2)
+            return path
+        if abs(dx) < 2.0:
+            path.lineTo(p2)
+            return path
+        sign_x = 1.0 if dx > 0.0 else -1.0
+        r = min(
+            7.0,
+            abs(dx) * 0.45,
+            max(1.0, (bus_y - p1.y()) * 0.45),
+            max(1.0, (p2.y() - bus_y) * 0.45),
+        )
+        path.lineTo(p1.x(), bus_y - r)
+        path.quadTo(QPointF(p1.x(), bus_y), QPointF(p1.x() + sign_x * r, bus_y))
+        path.lineTo(p2.x() - sign_x * r, bus_y)
+        path.quadTo(QPointF(p2.x(), bus_y), QPointF(p2.x(), bus_y + r))
+        path.lineTo(p2)
+        return path
 
     def _paint_plus_handle(self, p: QPainter, nid: str, rect: QRectF) -> None:
         plus_r = self._plus_rects.get(nid)
@@ -1498,6 +1638,7 @@ class FolderArchitectureCanvas(QWidget):
                 self._hovered_plus_id = nid
                 self._hovered_id = nid
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.setToolTip("Drag onto a child folder or click to spawn a subfolder")
                 self.update()
                 return
 
@@ -1505,6 +1646,7 @@ class FolderArchitectureCanvas(QWidget):
             if r.contains(pt):
                 self._hovered_tier_add = t
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.setToolTip(f"Add a new folder inside Tier {t}")
                 self.update()
                 return
 
@@ -1514,19 +1656,29 @@ class FolderArchitectureCanvas(QWidget):
                 self._hovered_delete_id = nid
                 self._hovered_id = nid
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.setToolTip("Remove this folder from the architecture")
                 self.update()
                 return
 
         for nid, rect in self._rendered_rects.items():
             if rect.contains(pt):
                 self._hovered_id = nid
-                self.setCursor(
-                    Qt.CursorShape.OpenHandCursor if nid != "__root__" else Qt.CursorShape.ArrowCursor
-                )
+                if nid == "__root__":
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
+                    self.setToolTip(
+                        f"{self._watch_label} (Tier 0 Root)\nAll top-level downloads start here before routing into subfolders."
+                    )
+                else:
+                    self.setCursor(Qt.CursorShape.OpenHandCursor)
+                    node = self._arch.get_node(nid)
+                    self.setToolTip(self._node_tooltip(node) if node is not None else "")
                 self.update()
                 return
 
         self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.setToolTip(
+            "Folder Architecture Canvas\nHover a card to highlight its connections · Drag cards to reparent · Ctrl+Wheel to zoom"
+        )
         self.update()
 
     def _evaluate_reparent_hover(self, pt: QPointF) -> None:
@@ -1929,6 +2081,9 @@ class ArchitectureTab(QWidget):
             make_vector_icon("bolt", "#FFFFFF", 14),
         )
         self.btn_apply_shift.setObjectName("PrimaryButton")
+        self.btn_apply_shift.setToolTip(
+            "Preview file shifts, save updated rules, and organize Downloads according to this folder tree"
+        )
         self.btn_apply_shift.clicked.connect(self._on_apply_and_shift)
         bar_row1.addWidget(self.btn_apply_shift)
         bar_outer.addLayout(bar_row1)
@@ -1938,6 +2093,7 @@ class ArchitectureTab(QWidget):
         bar_row2.setSpacing(6)
         lbl_bp = QLabel("Blueprint:")
         lbl_bp.setStyleSheet("color: #98989D; font-size: 11.5px; font-weight: 600;")
+        lbl_bp.setToolTip("Switch to a starter folder layout blueprint")
         bar_row2.addWidget(lbl_bp)
 
         self._blueprint_btns: dict[str, QPushButton] = {}
@@ -1948,12 +2104,23 @@ class ArchitectureTab(QWidget):
             bar_row2.addWidget(pill)
 
         layer_tip = ElidedLabel(
-            "Drag templates onto canvas/cards · Drag '+' handle to spawn · Drag cards to reparent · Double-click title to rename"
+            "Drag templates onto canvas/cards · Drag '+' handle to spawn · Drag cards to reparent · Double-click title to rename",
+            self,
         )
-        layer_tip.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        layer_tip.setStyleSheet("color: #6E6E73; font-size: 11px;")
-        bar_row2.addWidget(layer_tip, 1)
+        layer_tip.setVisible(False)
+        bar_row2.addStretch(1)
+
+        self.btn_toggle_lines = _make_pill_button(
+            "Lines: Focused",
+            checkable=True,
+            tooltip="Show only connections for the hovered or selected folder (Focused) or show all orthogonal bus lines (All)",
+        )
+        self.btn_toggle_lines.toggled.connect(self._on_toggle_lines)
+        bar_row2.addWidget(self.btn_toggle_lines)
         bar_outer.addLayout(bar_row2)
+        bar.setToolTip(
+            "Drag templates onto canvas or cards · Drag '+' handle to spawn · Drag cards to reparent · Double-click title to rename"
+        )
 
         root.addWidget(bar)
 
@@ -1981,10 +2148,8 @@ class ArchitectureTab(QWidget):
         self.lbl_zoom.setToolTip("Hold Ctrl + Mouse Wheel on canvas to zoom")
         hdr_row.addWidget(self.lbl_zoom)
 
-        hint = ElidedLabel("Click to inspect · Double-click title to rename · Double-click rules to edit")
-        hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        hint.setStyleSheet("color: #6E6E73; font-size: 11px;")
-        hdr_row.addWidget(hint, 2)
+        hint = ElidedLabel("Click to inspect · Double-click title to rename · Double-click rules to edit", self)
+        hint.setVisible(False)
         cc_layout.addLayout(hdr_row)
 
         self.scroll = QScrollArea()
@@ -2042,6 +2207,7 @@ class ArchitectureTab(QWidget):
         # Inline Name & Color Swatches
         self.edit_insp_name = QLineEdit()
         self.edit_insp_name.setPlaceholderText("Folder name...")
+        self.edit_insp_name.setToolTip("Rename the selected folder and press Enter")
         self.edit_insp_name.editingFinished.connect(self._on_inspector_fields_committed)
         il.addWidget(self.edit_insp_name)
 
@@ -2097,23 +2263,25 @@ class ArchitectureTab(QWidget):
         il.addWidget(lbl_dom)
         self.edit_insp_domains = QLineEdit()
         self.edit_insp_domains.setPlaceholderText("makerworld.com")
+        self.edit_insp_domains.setToolTip("Source website domains that route directly into this folder")
         self.edit_insp_domains.editingFinished.connect(self._on_inspector_fields_committed)
         il.addWidget(self.edit_insp_domains)
 
-        self.lbl_sel_rules = QLabel("")
-        self.lbl_sel_rules.setStyleSheet("color: #636366; font-size: 11px;")
-        self.lbl_sel_rules.setWordWrap(True)
-        il.addWidget(self.lbl_sel_rules)
+        self.lbl_sel_rules = QLabel("", self)
+        self.lbl_sel_rules.setVisible(False)
 
         self.btn_edit_node = InteractiveRibbonBtn("Edit Folder && Rules", make_vector_icon("edit", "#F5F5F7", 14))
+        self.btn_edit_node.setToolTip("Open the full folder & rule editor for the selected node")
         self.btn_edit_node.clicked.connect(lambda: self._edit_node_by_id(self.canvas.selected_node_id or ""))
         il.addWidget(self.btn_edit_node)
 
         self.btn_add_child = InteractiveRibbonBtn("Add Child Subfolder", make_vector_icon("plus", "#F5F5F7", 14))
+        self.btn_add_child.setToolTip("Add a nested subfolder under the selected folder")
         self.btn_add_child.clicked.connect(self._on_add_child_for_selected)
         il.addWidget(self.btn_add_child)
 
         self.btn_delete_node = InteractiveRibbonBtn("Remove Folder", make_vector_icon("delete", "#FF453A", 14))
+        self.btn_delete_node.setToolTip("Remove the selected folder node from your layout")
         self.btn_delete_node.clicked.connect(lambda: self._delete_node_by_id(self.canvas.selected_node_id or ""))
         il.addWidget(self.btn_delete_node)
 
@@ -2309,14 +2477,19 @@ class ArchitectureTab(QWidget):
                 sb.setChecked(k == node.kind)
 
             child_count = len(self._arch.children_of(node.id))
-            self.lbl_sel_rules.setText(
-                f"{child_count} subfolder{'s' if child_count != 1 else ''} · Press Enter to apply inline edits"
-            )
+            summary_tip = f"{child_count} subfolder{'s' if child_count != 1 else ''} · Press Enter to apply inline edits"
+            self.lbl_sel_rules.setText(summary_tip)
+            self.lbl_sel_name.setToolTip(summary_tip)
+            self.lbl_sel_path.setToolTip(f"Downloads\\{rel}\n{summary_tip}")
             self.btn_edit_node.setEnabled(True)
             self.btn_add_child.setEnabled(node.tier < FolderArchitecture.MAX_TIERS)
             self.btn_delete_node.setEnabled(True)
         finally:
             self._syncing_inspector = False
+
+    def _on_toggle_lines(self, checked: bool) -> None:
+        self.canvas.set_show_all_connectors(checked)
+        self.btn_toggle_lines.setText("Lines: All" if checked else "Lines: Focused")
 
     def _on_inspector_fields_committed(self) -> None:
         if self._syncing_inspector:
@@ -2468,21 +2641,33 @@ class ArchitectureTab(QWidget):
 
     def _on_scan_folders(self) -> None:
         watch_dir = self.service.watch_root
+        self.btn_scan_folders.setEnabled(False)
+        self.btn_scan_folders.setText("Scanning...")
 
-        def _work() -> dict[str, Any]:
-            return scan_folder_architecture(watch_dir)
+        def _restore_scan_btn(_msg: str = "") -> None:
+            self.btn_scan_folders.setEnabled(True)
+            self.btn_scan_folders.setText("Scan Folders")
+
+        def _work(progress) -> dict[str, Any]:  # noqa: ANN001
+            return scan_folder_architecture(watch_dir, on_progress=progress)
 
         def _done(result: dict[str, Any]) -> None:
+            _restore_scan_btn()
             scanned: FolderArchitecture = result["architecture"]
             folder_count = int(result.get("folder_count") or 0)
             file_count = int(result.get("file_count") or 0)
             if folder_count == 0:
+                self.architecture_applied.emit(f"Scanned {watch_dir.name} — 0 subfolders found.")
                 QMessageBox.information(
                     self,
                     "Scan Existing Folders",
                     f"No subfolders were found inside:\n{watch_dir}",
                 )
                 return
+
+            merged_preview = merge_architectures(self._arch, scanned)
+            new_count = max(0, len(merged_preview.nodes) - len(self._arch.nodes))
+            existing_count = max(0, folder_count - new_count)
 
             from download_sorter.ui.emblems import FolderScanRadarWidget
 
@@ -2497,8 +2682,8 @@ class ArchitectureTab(QWidget):
             hdr.setSpacing(12)
             radar = FolderScanRadarWidget(size=52, scanning=True)
             lbl = QLabel(
-                f"Discovered {folder_count} folder(s) across {result.get('max_tier', 1)} tier(s) "
-                f"(profiled {file_count} file(s) for extensions, distinctive keywords & sites)."
+                f"Found {folder_count} folder(s) ({new_count} new, {existing_count} already mapped) "
+                f"across {result.get('max_tier', 1)} tier(s) and {file_count} file(s)."
             )
             lbl.setWordWrap(True)
             hdr.addWidget(radar)
@@ -2527,6 +2712,7 @@ class ArchitectureTab(QWidget):
             btn_replace.setObjectName("PrimaryButton")
             btn_replace.setToolTip("Replace the current canvas with the scanned folder map")
             btn_cancel = QPushButton("Cancel")
+            btn_cancel.setToolTip("Close scan preview without modifying the canvas")
 
             def _pick(mode: str) -> None:
                 choice["mode"] = mode
@@ -2542,6 +2728,9 @@ class ArchitectureTab(QWidget):
             v.addLayout(btns)
 
             if dlg.exec() != QDialog.DialogCode.Accepted or not choice["mode"]:
+                self.architecture_applied.emit(
+                    f"Scanned {folder_count} folder(s) ({new_count} new, {existing_count} already mapped) — canvas unchanged."
+                )
                 return
 
             prev_rects = self.canvas.snapshot_rects()
@@ -2549,7 +2738,7 @@ class ArchitectureTab(QWidget):
             self._active_preset = "scanned"
             self._update_blueprint_pills()
             if choice["mode"] == "merge":
-                self._arch = merge_architectures(self._arch, scanned)
+                self._arch = merged_preview
             else:
                 self._arch = scanned
             self._dirty = True
@@ -2557,13 +2746,15 @@ class ArchitectureTab(QWidget):
             if self._arch.nodes:
                 self.canvas.select_node(self._arch.nodes[0].id)
             self.architecture_applied.emit(
-                f"Loaded {len(self._arch.nodes)} folder(s) from disk ({choice['mode']}) — click Apply & Shift Files to sync rules."
+                f"Scanned {folder_count} folder(s) ({new_count} new, {existing_count} existing) via {choice['mode']} — click Apply & Shift Files to sync rules."
             )
 
         self._run_background(
-            "Scanning existing folder architecture...",
             _work,
             _done,
+            title="Scanning existing folder architecture...",
+            pass_progress=True,
+            on_error=_restore_scan_btn,
         )
 
     def _open_snapshots_dialog(self) -> None:
@@ -2581,12 +2772,17 @@ class ArchitectureTab(QWidget):
         hdr.setSpacing(12)
         emblem = SnapshotEmblemWidget(size=48)
         hdr_text = QLabel(
-            "Save a named snapshot of your current Folder Architecture so you can experiment freely and restore any layout in 1 click."
+            "Save a named snapshot of your current Folder Architecture so you can experiment freely and restore any layout in 1 click.",
+            dlg,
         )
-        hdr_text.setWordWrap(True)
-        hdr_text.setObjectName("MutedText")
+        hdr_text.setVisible(False)
+        dlg.setToolTip(
+            "Save named snapshots of your Folder Architecture so you can experiment freely and restore any layout in 1 click."
+        )
+        hdr_title = QLabel("Architecture Snapshots")
+        hdr_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #F5F5F7;")
         hdr.addWidget(emblem)
-        hdr.addWidget(hdr_text, 1)
+        hdr.addWidget(hdr_title, 1)
         v.addLayout(hdr)
 
         save_row = QHBoxLayout()
@@ -2594,6 +2790,7 @@ class ArchitectureTab(QWidget):
         edit_name.setPlaceholderText("Snapshot name (e.g. Before School Cleanup)")
         btn_save_snap = QPushButton("Save Snapshot")
         btn_save_snap.setObjectName("PrimaryButton")
+        btn_save_snap.setToolTip("Save the current Folder Architecture layout under this name")
         save_row.addWidget(edit_name, 1)
         save_row.addWidget(btn_save_snap)
         v.addLayout(save_row)
@@ -2647,10 +2844,13 @@ class ArchitectureTab(QWidget):
         btn_row = QHBoxLayout()
         btn_restore = QPushButton("Restore Selected")
         btn_restore.setObjectName("PrimaryButton")
+        btn_restore.setToolTip("Load the highlighted snapshot onto the Folder Architecture canvas")
         btn_restore.clicked.connect(_on_restore)
         btn_del = QPushButton("Delete")
+        btn_del.setToolTip("Permanently remove the selected snapshot from disk")
         btn_del.clicked.connect(_on_delete)
         btn_close = QPushButton("Close")
+        btn_close.setToolTip("Close the snapshots manager")
         btn_close.clicked.connect(dlg.reject)
         btn_row.addWidget(btn_del)
         btn_row.addStretch(1)
@@ -2773,12 +2973,15 @@ class ArchitectureTab(QWidget):
         *,
         title: str = "Updating folders...",
         pass_progress: bool = False,
+        on_error=None,  # noqa: ANN001
     ) -> None:
         """Run a disk-heavy service call off the GUI thread, one at a time.
 
         Under pytest this is a plain synchronous call followed by ``on_done``.
         """
         if getattr(self, "_busy", False):
+            if on_error is not None:
+                on_error("Busy")
             return
         self._busy = True
         self.action_started.emit(title)
@@ -2791,6 +2994,8 @@ class ArchitectureTab(QWidget):
         def _failed(message: str) -> None:
             self._busy = False
             self.action_finished.emit(f"Failed: {message}", "warning")
+            if on_error is not None:
+                on_error(message)
             QMessageBox.warning(self, "Folder Architecture", f"That did not finish:\n{message}")
 
         def _progress(done: int, total: int, label: str) -> None:
@@ -2808,6 +3013,8 @@ class ArchitectureTab(QWidget):
         except Exception:
             self._busy = False
             self.action_finished.emit("Failed", "warning")
+            if on_error is not None:
+                on_error("Error")
             raise
 
     def _on_apply_and_shift(self) -> None:

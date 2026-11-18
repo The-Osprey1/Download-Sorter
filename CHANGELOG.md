@@ -9,7 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-11-17
+
+### Added
+- **Duplicate Download Resolution (`Replace Old`, `Delete New & Locate Old`, `Keep Both`) (`fs_ops.py`, `service.py`, `ui/toasts.py`, `ui/main_window.py`).** Duplicate downloads and browser-numbered copies (e.g. `report (1).pdf`) matched to sorted originals inside `Downloads` now offer one-click **Replace Old**, **Delete & Locate Old** (moves the new copy to the Recycle Bin and opens File Explorer highlighting the existing file), and **Keep Both** actions directly in both the top-right Side Ribbon notification and the **Manage Duplicate Files** dialog (`Original Copy` column).
+- **Focused Orthogonal Bus Routing & Parent Pills in Folder Architecture (`ui/architecture_canvas.py`).** Decluttered the Folder Architecture diagram with a single vertical Tier 0 trunk, bottom-row placement for Tier 1 parent folders, rounded orthogonal bus routing through a widened gutter (`Lines: Focused` by default with a `Lines: All` toggle pill), and color-tinted `↳ Parent` badges on Tier 2+ cards.
+- **Hover Tooltips Replacing Inline Subtitle Clutter (`ui/architecture_canvas.py`, `ui/main_window.py`, `ui/settings_widgets.py`).** Hid cluttered inline muted subtitle explanations across Settings, cards, toolbars, dialogs, and canvas node cards, surfacing clear descriptions on hover for canvas nodes and non-trivial buttons.
+
 ### Fixed
+- **Scan Folders Button Now Runs Live With Progress & Feedback (`architecture.py`, `ui/architecture_canvas.py`, `ui/main_window.py`).** Fixed a `TypeError` in `ArchitectureTab._on_scan_folders` caused by passing the status title positionally to `_run_background()`, and added live progress HUD reporting, `"Scanning..."` busy button feedback, new-vs-existing folder counts, and completion banners.
 - **Apply & Shift Files replaced your Custom Rules (`architecture.py`).** Applying the Folder Architecture rebuilt the rule list from the folder map, so every rule you made, added from a starter pack or carried over from 2.x was renamed after its folder and lost its regex, rename template, exclude words, size and age limits, PDF content words, ALL/ANY setting and auto-unzip. Your own rules are now kept exactly as they are, in their order, ahead of the rules the folder map makes. Words or websites you add on a folder card become a rule for just those words.
 - **An empty folder card caught every file (`architecture.py`).** A Tier 3 folder with no file types, words or websites became a rule with no conditions, so every download went into it. An empty folder now stays a plain folder.
 - **Keywords matched inside other words (`router.py`).** A keyword of four or more letters matched anywhere in a name: "resume" filed `presumed_dead.epub`, "school" filed `preschool_menu.pdf`, "bank" filed `Bankruptcy_notice.pdf`. A keyword now has to line up with whole words. `Resume2026`, `IME3311` and `lecture_notes` still match "resume", "ime 3311" and "lecturenotes", and the typo allowance needs the first letter to agree.

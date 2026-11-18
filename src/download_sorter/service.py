@@ -24,6 +24,9 @@ from download_sorter.fs_ops import (
     extract_zip_safely,
     is_slicer_running,
     prune_empty_folders,
+    resolve_duplicate_delete_new_locate_old,
+    resolve_duplicate_keep_both,
+    resolve_duplicate_replace_old,
     scan_detox_candidates,
     scan_duplicate_files,
     undo_batch,
@@ -324,7 +327,86 @@ class SorterService:
     def list_duplicate_files(self, root: Path | None = None) -> list[dict[str, Any]]:
         """Return quarantined duplicate files inside ``watch_root / '_Duplicates'``."""
         watch_dir = (root or self.watch_root).resolve()
-        return scan_duplicate_files(watch_dir)
+        return scan_duplicate_files(watch_dir, db=self.db)
+
+    def replace_duplicate_with_new(
+        self,
+        dup_path: Path | str,
+        existing_path: Path | str,
+        *,
+        root: Path | None = None,
+        use_recycle_bin: bool = True,
+    ) -> dict[str, Any]:
+        """Recycle the older existing file and replace it with the newly downloaded duplicate."""
+        watch_dir = (root or self.watch_root).resolve()
+        with self._lock:
+            result = resolve_duplicate_replace_old(
+                Path(dup_path),
+                Path(existing_path),
+                watch_dir,
+                db=self.db,
+                use_recycle_bin=use_recycle_bin,
+            )
+            if result.get("ok"):
+                self.db.checkpoint()
+                logging.info(
+                    "Replaced older copy %s with newer duplicate %s",
+                    result.get("existing_path"),
+                    Path(dup_path).name,
+                )
+            return result
+
+    def delete_duplicate_and_locate_old(
+        self,
+        dup_path: Path | str,
+        existing_path: Path | str,
+        *,
+        root: Path | None = None,
+        use_recycle_bin: bool = True,
+    ) -> dict[str, Any]:
+        """Delete the newly downloaded duplicate and return the verified path to the old copy."""
+        watch_dir = (root or self.watch_root).resolve()
+        with self._lock:
+            result = resolve_duplicate_delete_new_locate_old(
+                Path(dup_path),
+                Path(existing_path),
+                watch_dir,
+                db=self.db,
+                use_recycle_bin=use_recycle_bin,
+            )
+            if result.get("ok"):
+                self.db.checkpoint()
+                logging.info(
+                    "Deleted duplicate %s; locating older copy at %s",
+                    Path(dup_path).name,
+                    result.get("existing_path"),
+                )
+            return result
+
+    def keep_both_duplicate(
+        self,
+        dup_path: Path | str,
+        existing_path: Path | str,
+        *,
+        root: Path | None = None,
+    ) -> dict[str, Any]:
+        """Keep both files by moving the quarantined duplicate next to the older copy."""
+        watch_dir = (root or self.watch_root).resolve()
+        with self._lock:
+            result = resolve_duplicate_keep_both(
+                Path(dup_path),
+                Path(existing_path),
+                watch_dir,
+                db=self.db,
+            )
+            if result.get("ok"):
+                self.db.checkpoint()
+                logging.info(
+                    "Kept both files: %s alongside %s",
+                    result.get("final_path"),
+                    result.get("existing_path"),
+                )
+            return result
 
     def scan_detox_now(self, old_days: int = 30, root: Path | None = None) -> dict[str, Any]:
         """Scan ``watch_root`` for old installers and empty directories."""

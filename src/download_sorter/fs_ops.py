@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 import time
@@ -254,19 +255,62 @@ def _restored_name(target: Path) -> Path:
     return cand
 
 
+_BROWSER_COPY_RE = re.compile(r"^(?P<base>.+?)\s*\((?P<num>\d+)\)$")
+
+
+def strip_browser_copy_suffix(filename: str) -> str:
+    """Normalize browser-numbered duplicate names like ``report (1).pdf`` to ``report.pdf``."""
+    p = Path(filename)
+    stem = p.stem
+    while True:
+        match = _BROWSER_COPY_RE.match(stem)
+        if not match:
+            break
+        candidate = match.group("base").rstrip()
+        if not candidate:
+            break
+        stem = candidate
+    return f"{stem}{p.suffix}" if stem else p.name
+
+
+def find_existing_counterpart(src: Path, planned_dest: Path) -> Path | None:
+    """Return an existing file in ``planned_dest.parent`` matching ``src``, if any.
+
+    Matches both exact byte-identical files at ``planned_dest`` and browser-numbered
+    copies (e.g. ``report (1).pdf``) whose canonical name (``report.pdf``) already
+    exists in ``planned_dest.parent``.
+    """
+    if planned_dest.exists() and planned_dest.is_file() and files_are_identical(src, planned_dest):
+        return planned_dest
+
+    canonical_name = strip_browser_copy_suffix(planned_dest.name)
+    if canonical_name.lower() != planned_dest.name.lower():
+        canonical_dest = planned_dest.parent / canonical_name
+        if (
+            canonical_dest.exists()
+            and canonical_dest.is_file()
+            and not is_cloud_placeholder(canonical_dest)
+            and not is_cloud_placeholder(src)
+        ):
+            return canonical_dest
+    return None
+
+
 def resolve_destination(src: Path, planned_dest: Path, watch_root: Path) -> tuple[Path, bool]:
     """Never overwrite an existing destination.
 
-    If an exact byte-identical file already sits at ``planned_dest``, quarantine the
-    incoming duplicate to ``watch_root/_Duplicates/<YYYY-MM>/<name>``. Otherwise add
-    `` (2)`` / `` (3)`` numbering.
+    If an exact byte-identical file or a browser-numbered copy (e.g. ``report (1).pdf``)
+    matching an existing file in the destination already sits at ``planned_dest``,
+    quarantine the incoming duplicate to ``watch_root/_Duplicates/<YYYY-MM>/<name>``.
+    Otherwise add `` (2)`` / `` (3)`` numbering.
     """
-    if not planned_dest.exists():
-        return planned_dest, False
-    if files_are_identical(src, planned_dest):
+    counterpart = find_existing_counterpart(src, planned_dest)
+    if counterpart is not None:
         month_dir = datetime.now().strftime("%Y-%m")
         dup_target = watch_root / "_Duplicates" / month_dir / src.name
         return _next_available_name(dup_target), True
+    if not planned_dest.exists():
+        return planned_dest, False
     return _next_available_name(planned_dest), False
 
 
@@ -360,12 +404,13 @@ def execute_move(
         # this only trips on a hand-made decision. Never move a file out of the folder.
         logging.warning("Not moving %s: %s is outside the watched folder", src.name, planned_dest)
         return None
+    existing_counterpart = find_existing_counterpart(src, planned_dest)
     final_dest, is_dup = resolve_destination(src, planned_dest, watch_root)
     if final_dest == src_resolved:
         return None
     final_dest = final_dest.parent.resolve() / final_dest.name
 
-    reason = f"Exact duplicate -> _Duplicates ({decision.reason})" if is_dup else decision.reason
+    reason = f"Duplicate -> _Duplicates ({decision.reason})" if is_dup else decision.reason
     move_id = db.record_move_intent(
         batch_id=batch_id,
         filename=src.name,
@@ -395,6 +440,7 @@ def execute_move(
         "filename": src.name,
         "src_path": str(src_resolved),
         "dest_path": str(final_dest),
+        "existing_path": str(existing_counterpart.resolve()) if (is_dup and existing_counterpart is not None) else "",
         "reason": reason,
         "matched_rule": decision.matched_rule,
         "is_duplicate": is_dup,
@@ -577,12 +623,85 @@ def _send_to_recycle_bin_win32(paths: list[str]) -> bool:
     return result == 0 and not bool(op.fAnyOperationsAborted)
 
 
-def scan_duplicate_files(watch_root: Path) -> list[dict[str, Any]]:
+def _cleanup_empty_dup_dirs(dup_root: Path) -> None:
+    """Remove empty monthly subfolders and ``_Duplicates`` if no quarantined files remain."""
+    if not dup_root.is_dir():
+        return
+    try:
+        for child in sorted(dup_root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            if child.is_dir():
+                try:
+                    next(child.iterdir())
+                except StopIteration:
+                    child.rmdir()
+        try:
+            next(dup_root.iterdir())
+        except StopIteration:
+            dup_root.rmdir()
+    except OSError:
+        pass
+
+
+def _index_watch_files(root: Path) -> dict[str, list[Path]]:
+    """Map lower-cased canonical filename -> sorted candidate paths under ``root``."""
+    by_canonical: dict[str, list[Path]] = {}
+    for cur_dir, dirnames, filenames in os.walk(root):
+        dirnames[:] = [
+            d for d in dirnames
+            if not d.startswith(".") and d.lower() not in ("_duplicates", "_extracted")
+        ]
+        base = Path(cur_dir)
+        for fname in filenames:
+            if fname.startswith("."):
+                continue
+            cand = base / fname
+            key = strip_browser_copy_suffix(fname).lower()
+            by_canonical.setdefault(key, []).append(cand)
+    return by_canonical
+
+
+def _best_existing_counterpart(
+    dup_file: Path,
+    root: Path,
+    by_canonical: dict[str, list[Path]],
+) -> Path | None:
+    """Select the best matching existing file inside ``root`` for quarantined ``dup_file``."""
+    canonical_lower = strip_browser_copy_suffix(dup_file.name).lower()
+    exact_lower = dup_file.name.lower()
+    candidates = by_canonical.get(canonical_lower, [])
+    if not candidates:
+        return None
+
+    best_path: Path | None = None
+    best_score: tuple[int, int, int, float] = (-1, -1, -1, 0.0)
+    for cand in candidates:
+        if cand == dup_file or not cand.is_file():
+            continue
+        try:
+            rel_parts = cand.relative_to(root).parts
+            in_subfolder = 1 if len(rel_parts) > 1 else 0
+            st = cand.stat()
+            mtime = float(st.st_mtime)
+        except (OSError, ValueError):
+            continue
+        identical = 1 if (not is_cloud_placeholder(cand) and files_are_identical(dup_file, cand)) else 0
+        # Exact canonical name matches (e.g. report.pdf for report (1).pdf) outrank numbered copies
+        canonical_exact = 1 if cand.name.lower() == canonical_lower else (1 if cand.name.lower() == exact_lower else 0)
+        score = (identical, in_subfolder, canonical_exact, mtime)
+        if score > best_score:
+            best_score = score
+            best_path = cand
+    return best_path
+
+
+def scan_duplicate_files(watch_root: Path, *, db: StateDB | None = None) -> list[dict[str, Any]]:
     """Return quarantined files inside ``watch_root / '_Duplicates'``, newest first."""
+    _ = db
     root = watch_root.resolve()
     dup_root = root / "_Duplicates"
     if not dup_root.is_dir():
         return []
+    by_canonical = _index_watch_files(root)
     entries: list[dict[str, Any]] = []
     for fpath in dup_root.rglob("*"):
         if not fpath.is_file():
@@ -593,18 +712,175 @@ def scan_duplicate_files(watch_root: Path) -> list[dict[str, Any]]:
             rel_parent = str(fpath.parent.relative_to(root))
         except (OSError, ValueError):
             continue
+        existing = _best_existing_counterpart(fpath, root, by_canonical)
+        existing_rel = ""
+        if existing is not None:
+            try:
+                existing_rel = str(existing.relative_to(root))
+            except ValueError:
+                existing_rel = str(existing)
         entries.append(
             {
                 "path": str(fpath),
                 "name": fpath.name,
                 "rel_path": rel,
                 "subfolder": rel_parent,
+                "existing_path": str(existing) if existing is not None else "",
+                "existing_rel_path": existing_rel,
                 "size_bytes": int(st.st_size),
                 "mtime": float(st.st_mtime),
             }
         )
     entries.sort(key=lambda item: (-float(item["mtime"]), str(item["name"]).lower()))
     return entries
+
+
+def resolve_duplicate_replace_old(
+    dup_path: Path,
+    existing_path: Path,
+    watch_root: Path,
+    *,
+    db: StateDB | None = None,
+    use_recycle_bin: bool = True,
+) -> dict[str, Any]:
+    """Replace an existing file under ``watch_root`` with a quarantined duplicate copy."""
+    root = watch_root.resolve()
+    dup_root = (root / "_Duplicates").resolve()
+    dup = Path(dup_path).resolve()
+    existing = Path(existing_path).resolve()
+
+    if not dup.is_file() or not is_under_watch_root(dup, dup_root):
+        return {"ok": False, "action": "replace_old", "error": "Duplicate file is no longer in _Duplicates."}
+    if (
+        not existing.is_file()
+        or not is_under_watch_root(existing, root)
+        or is_under_watch_root(existing, dup_root)
+        or dup == existing
+    ):
+        return {"ok": False, "action": "replace_old", "error": "Original file could not be safely located inside Downloads."}
+    if is_file_locked(dup) or is_file_locked(existing):
+        return {"ok": False, "action": "replace_old", "error": "One of the files is currently open in another program."}
+
+    del_res = delete_files_safely(
+        [existing],
+        watch_root=root,
+        confine_dir=root,
+        use_recycle_bin=use_recycle_bin,
+    )
+    if existing.exists() or not del_res.get("deleted"):
+        return {
+            "ok": False,
+            "action": "replace_old",
+            "error": "Could not recycle the older copy before replacing it.",
+            "delete_result": del_res,
+        }
+
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    _move_with_retries(dup, existing)
+    if db is not None:
+        db.mark_orphaned_by_dest([str(dup)])
+    _invalidate_recent([str(dup)])
+    _cleanup_empty_dup_dirs(dup_root)
+    return {
+        "ok": True,
+        "action": "replace_old",
+        "dup_path": str(dup),
+        "existing_path": str(existing),
+        "final_path": str(existing),
+    }
+
+
+def resolve_duplicate_delete_new_locate_old(
+    dup_path: Path,
+    existing_path: Path,
+    watch_root: Path,
+    *,
+    db: StateDB | None = None,
+    use_recycle_bin: bool = True,
+) -> dict[str, Any]:
+    """Send the quarantined duplicate to Recycle Bin and return the verified old file path."""
+    root = watch_root.resolve()
+    dup_root = (root / "_Duplicates").resolve()
+    dup = Path(dup_path).resolve()
+    existing = Path(existing_path).resolve() if str(existing_path or "").strip() else None
+
+    if not dup.is_file() or not is_under_watch_root(dup, dup_root):
+        return {"ok": False, "action": "delete_locate_old", "error": "Duplicate file is no longer in _Duplicates."}
+    if is_file_locked(dup):
+        return {"ok": False, "action": "delete_locate_old", "error": "The duplicate file is open in another program."}
+
+    del_res = delete_files_safely(
+        [dup],
+        watch_root=root,
+        confine_dir=dup_root,
+        use_recycle_bin=use_recycle_bin,
+    )
+    if not del_res.get("deleted"):
+        return {
+            "ok": False,
+            "action": "delete_locate_old",
+            "error": "Could not delete the duplicate file.",
+            "delete_result": del_res,
+        }
+    if db is not None:
+        db.mark_orphaned_by_dest([str(dup)])
+    _invalidate_recent([str(dup)])
+    _cleanup_empty_dup_dirs(dup_root)
+
+    valid_existing = (
+        existing is not None
+        and existing.exists()
+        and is_under_watch_root(existing, root)
+        and not is_under_watch_root(existing, dup_root)
+    )
+    return {
+        "ok": True,
+        "action": "delete_locate_old",
+        "dup_path": str(dup),
+        "existing_path": str(existing) if valid_existing and existing is not None else "",
+        "existing_exists": bool(valid_existing),
+    }
+
+
+def resolve_duplicate_keep_both(
+    dup_path: Path,
+    existing_path: Path,
+    watch_root: Path,
+    *,
+    db: StateDB | None = None,
+) -> dict[str, Any]:
+    """Move a quarantined duplicate beside the original using numbered naming (e.g. `` (2)``)."""
+    root = watch_root.resolve()
+    dup_root = (root / "_Duplicates").resolve()
+    dup = Path(dup_path).resolve()
+    existing = Path(existing_path).resolve() if str(existing_path or "").strip() else None
+
+    if not dup.is_file() or not is_under_watch_root(dup, dup_root):
+        return {"ok": False, "action": "keep_both", "error": "Duplicate file is no longer in _Duplicates."}
+    if is_file_locked(dup):
+        return {"ok": False, "action": "keep_both", "error": "The duplicate file is open in another program."}
+
+    if existing is not None and is_under_watch_root(existing, root) and not is_under_watch_root(existing, dup_root):
+        dest_dir = existing.parent
+        canonical_base = strip_browser_copy_suffix(existing.name)
+    else:
+        dest_dir = root
+        canonical_base = strip_browser_copy_suffix(dup.name)
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target_dest = _next_available_name(dest_dir / canonical_base)
+    _move_with_retries(dup, target_dest)
+    if db is not None:
+        db.mark_orphaned_by_dest([str(dup)])
+    _invalidate_recent([str(dup)])
+    _cleanup_empty_dup_dirs(dup_root)
+    return {
+        "ok": True,
+        "action": "keep_both",
+        "dup_path": str(dup),
+        "existing_path": str(existing) if existing is not None else "",
+        "final_path": str(target_dest),
+    }
 
 
 def delete_files_safely(

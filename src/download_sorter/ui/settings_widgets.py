@@ -144,11 +144,12 @@ class SettingRow(QWidget):
         title_row.addStretch(1)
         left_col.addLayout(title_row)
 
+        self.lbl_subtitle = QLabel(subtitle, self)
+        self.lbl_subtitle.setObjectName("MutedText")
+        self.lbl_subtitle.setVisible(False)
         if subtitle:
-            self.lbl_subtitle = QLabel(subtitle)
-            self.lbl_subtitle.setWordWrap(True)
-            self.lbl_subtitle.setObjectName("MutedText")
-            left_col.addWidget(self.lbl_subtitle)
+            self.setToolTip(subtitle)
+            self.lbl_title.setToolTip(subtitle)
 
         outer.addLayout(left_col, stretch=1)
 
@@ -158,6 +159,8 @@ class SettingRow(QWidget):
             right_row.setContentsMargins(0, 0, 0, 0)
             right_row.setSpacing(8)
             for ctrl in ctrl_list:
+                if subtitle and not ctrl.toolTip():
+                    ctrl.setToolTip(subtitle)
                 right_row.addWidget(ctrl, 0, Qt.AlignmentFlag.AlignVCenter)
             outer.addLayout(right_row, stretch=0)
 
@@ -219,12 +222,14 @@ class SettingCard(QFrame):
 
         lbl_section = QLabel(title.upper())
         lbl_section.setObjectName("SectionEyebrow")
+        if subtitle:
+            lbl_section.setToolTip(subtitle)
+            self.setToolTip(subtitle)
         header_text_col.addWidget(lbl_section)
 
-        if subtitle:
-            lbl_sub = QLabel(subtitle)
-            lbl_sub.setObjectName("MutedText")
-            header_text_col.addWidget(lbl_sub)
+        self.lbl_sub = QLabel(subtitle, self)
+        self.lbl_sub.setObjectName("MutedText")
+        self.lbl_sub.setVisible(False)
 
         header_layout.addLayout(header_text_col, stretch=1)
 
