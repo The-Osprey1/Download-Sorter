@@ -37,8 +37,76 @@ MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # 200 MB
 MAX_ZIP_ENTRIES = 2000
 MAX_THUMBNAIL_BYTES = 5 * 1024 * 1024  # 5 MB
 MAX_THUMBNAIL_DIM = 1024
+MAX_CACHE_ENTRIES = 512
 
-_PARSED_3MF_CACHE: dict[tuple[str, int, float], dict] = {}
+_CACHE_LOCK = threading.Lock()
+_PARSED_3MF_CACHE: dict[tuple[str, int, int], dict] = {}
+_PARSED_GCODE_CACHE: dict[tuple[str, int, int], dict] = {}
+_SNIFF_CACHE: dict[tuple[str, int, int], dict] = {}
+
+
+def is_cloud_placeholder(path: Path) -> bool:
+    """Return True if ``path`` is an un-hydrated OneDrive/cloud placeholder."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        if attrs == 0xFFFFFFFF:
+            return False
+        FILE_ATTRIBUTE_OFFLINE = 0x00001000
+        FILE_ATTRIBUTE_PINNED = 0x00080000
+        FILE_ATTRIBUTE_UNPINNED = 0x00100000
+        FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x00040000
+        FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
+        if attrs & FILE_ATTRIBUTE_PINNED:
+            return False
+        return bool(
+            attrs
+            & (
+                FILE_ATTRIBUTE_OFFLINE
+                | FILE_ATTRIBUTE_UNPINNED
+                | FILE_ATTRIBUTE_RECALL_ON_OPEN
+                | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+            )
+        )
+    except Exception:
+        return False
+
+
+def _stat_cache_key(path: Path) -> tuple[str, int, int] | None:
+    try:
+        st = path.stat()
+        return (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _cache_get(cache: dict[tuple[str, int, int], dict], key: tuple[str, int, int] | None) -> dict | None:
+    if key is None:
+        return None
+    with _CACHE_LOCK:
+        hit = cache.get(key)
+        return dict(hit) if hit is not None else None
+
+
+def _cache_put(cache: dict[tuple[str, int, int], dict], key: tuple[str, int, int] | None, value: dict) -> None:
+    if key is None:
+        return
+    with _CACHE_LOCK:
+        if len(cache) >= MAX_CACHE_ENTRIES and key not in cache:
+            oldest = next(iter(cache))
+            cache.pop(oldest, None)
+        cache[key] = dict(value)
+
+
+def clear_caches() -> None:
+    """Clear all in-memory peek/sniffer caches (useful for tests)."""
+    with _CACHE_LOCK:
+        _PARSED_3MF_CACHE.clear()
+        _PARSED_GCODE_CACHE.clear()
+        _SNIFF_CACHE.clear()
 
 
 def _validate_zip_safety(z: zipfile.ZipFile) -> None:
@@ -281,13 +349,22 @@ def _parse_3mf_worker(path: Path) -> dict:
 
 def parse_3mf(path: Path) -> dict:
     resolved = Path(path).resolve()
-    try:
-        st = resolved.stat()
-        cache_key = (str(resolved), st.st_size, st.st_mtime)
-        if cache_key in _PARSED_3MF_CACHE:
-            return dict(_PARSED_3MF_CACHE[cache_key])
-    except OSError:
-        cache_key = None
+    if is_cloud_placeholder(resolved):
+        return {
+            "format": "3MF",
+            "file": resolved.name,
+            "path": str(resolved),
+            "error": "Cloud placeholder (not hydrated)",
+            "cloud_placeholder": True,
+            "is_makerworld": False,
+            "makerworld_meta": {},
+            "has_thumbnail": False,
+            "thumbnail_data": None,
+        }
+    cache_key = _stat_cache_key(resolved)
+    cached = _cache_get(_PARSED_3MF_CACHE, cache_key)
+    if cached is not None:
+        return cached
 
     worker_result: dict = {}
 
@@ -316,18 +393,43 @@ def parse_3mf(path: Path) -> dict:
     else:
         res = worker_result or {"format": "3MF", "file": resolved.name, "error": "Worker produced no result"}
 
-    if cache_key is not None:
-        _PARSED_3MF_CACHE[cache_key] = res
-
+    _cache_put(_PARSED_3MF_CACHE, cache_key, res)
     return dict(res)
 
 
 def parse_gcode(path: Path) -> dict:
+    resolved = Path(path).resolve()
+    if is_cloud_placeholder(resolved):
+        return {
+            "format": "GCODE",
+            "file": resolved.name,
+            "path": str(resolved),
+            "size_mb": 0.0,
+            "slicer": "Unknown Slicer",
+            "filament_type": None,
+            "filament_weight_g": None,
+            "filament_length_m": None,
+            "print_time": None,
+            "layer_height": None,
+            "nozzle_diameter": None,
+            "nozzle_temp": None,
+            "bed_temp": None,
+            "has_thumbnail": False,
+            "thumbnail_data": None,
+            "cloud_placeholder": True,
+            "error": "Cloud placeholder (not hydrated)",
+        }
+
+    cache_key = _stat_cache_key(resolved)
+    cached = _cache_get(_PARSED_GCODE_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
     meta: dict = {
         "format": "GCODE",
-        "file": path.name,
-        "path": str(path.resolve()),
-        "size_mb": round(path.stat().st_size / (1024 * 1024), 2),
+        "file": resolved.name,
+        "path": str(resolved),
+        "size_mb": round(resolved.stat().st_size / (1024 * 1024), 2) if resolved.exists() else 0.0,
         "slicer": "Unknown Slicer",
         "filament_type": None,
         "filament_weight_g": None,
@@ -428,7 +530,8 @@ def parse_gcode(path: Path) -> dict:
     except Exception as exc:
         meta["error"] = str(exc)
 
-    return meta
+    _cache_put(_PARSED_GCODE_CACHE, cache_key, meta)
+    return dict(meta)
 
 
 def sniff_machine_type(sample: str | list[str] | Path) -> dict:
@@ -446,6 +549,7 @@ def sniff_machine_type(sample: str | list[str] | Path) -> dict:
     }
     """
     content_lines: list[str] = []
+    sniff_cache_key: tuple[str, int, int] | None = None
     if isinstance(sample, Path):
         if not sample.exists() or not sample.is_file():
             return {
@@ -456,6 +560,21 @@ def sniff_machine_type(sample: str | list[str] | Path) -> dict:
                 "is_haas": False,
                 "is_3d_printer": False,
             }
+        resolved_sample = sample.resolve()
+        if is_cloud_placeholder(resolved_sample):
+            return {
+                "machine_type": "generic",
+                "confidence": 0.0,
+                "matched_signals": [],
+                "description": "Cloud placeholder (not hydrated)",
+                "is_haas": False,
+                "is_3d_printer": False,
+                "cloud_placeholder": True,
+            }
+        sniff_cache_key = _stat_cache_key(resolved_sample)
+        cached_sniff = _cache_get(_SNIFF_CACHE, sniff_cache_key)
+        if cached_sniff is not None:
+            return cached_sniff
         try:
             with open(sample, "r", encoding="utf-8", errors="ignore") as f:
                 for _ in range(50):
@@ -628,7 +747,7 @@ def sniff_machine_type(sample: str | list[str] | Path) -> dict:
 
     desc = ", ".join(matched_signals[:3]) if matched_signals else "No distinctive machine signatures detected"
 
-    return {
+    result = {
         "machine_type": machine_type,
         "confidence": confidence,
         "matched_signals": matched_signals,
@@ -636,6 +755,9 @@ def sniff_machine_type(sample: str | list[str] | Path) -> dict:
         "is_haas": machine_type == "haas_cnc",
         "is_3d_printer": machine_type == "3d_printer",
     }
+    if sniff_cache_key is not None:
+        _cache_put(_SNIFF_CACHE, sniff_cache_key, result)
+    return result
 
 
 def print_metadata(meta: dict) -> None:

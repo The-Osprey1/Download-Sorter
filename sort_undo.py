@@ -63,6 +63,37 @@ def get_active_moves(records: list[dict]) -> list[dict]:
     return active
 
 
+def undo_extraction_manifest(record: dict, dry_run: bool = False) -> int:
+    """Remove extracted files listed in an ``extract`` record's manifest (to Recycle Bin / unlink)."""
+    files = record.get("extracted_files") or record.get("outputs") or []
+    removed = 0
+    for item in files:
+        p = Path(item)
+        if not p.exists():
+            continue
+        if dry_run:
+            removed += 1
+            continue
+        try:
+            if p.is_file():
+                p.unlink()
+                removed += 1
+            elif p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+                removed += 1
+        except OSError:
+            pass
+    if not dry_run and removed:
+        safe_ops.append_journal({
+            "id": uuid.uuid4().hex,
+            "action": "undo_extract",
+            "ref_id": record.get("id", ""),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "removed_count": removed,
+        })
+    return removed
+
+
 def record_undo(ref_id: str, original_src: str, current_dest: str) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     record = {

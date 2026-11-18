@@ -36,6 +36,7 @@ Commands:
   --consolidate, --flatten Consolidate nested subfolders into official flat categories
   --remodel             Scan or safely remodel messy PC folder architectures
   --dialog <hwnd>       Spawn floating Quick Switcher pill for active File Dialog
+  --check-update        Check GitHub for newer versions of Download Sorter
   --quit                Ask a running Download Sorter (tray and windows) to close
   --version, -v         Display Download Sorter version
   --help, -h            Show this help message
@@ -170,6 +171,20 @@ def main(argv: list[str] | None = None) -> int:
                 pass
         return 0
 
+    if cmd in ("--check-update", "--check-updates"):
+        import update_check
+        print(f"Checking for updates (current version: {about.__version__})...")
+        rel = update_check.check(None, force=True)
+        if rel:
+            v = update_check.display_version(rel)
+            print(f"Download Sorter {v} is available!")
+            print(f"Release page: {rel.get('url')}")
+            if rel.get("installer_url"):
+                print(f"Installer: {rel.get('installer_url')}")
+            return 0
+        print(f"Download Sorter is up to date (version {about.__version__}).")
+        return 0
+
     orig_argv = sys.argv
     try:
         # For commands where the command name is itself an option argument (like --dialog),
@@ -264,6 +279,14 @@ def main(argv: list[str] | None = None) -> int:
             return remodel.main()
 
         if cmd in ("--watch", "-w"):
+            try:
+                import safe_ops
+                import sorter
+                cfg = sorter.load_config()
+                safe_ops.cleanup_orphaned_staging(sorter.watch_root(cfg))
+                safe_ops.rotate_journal()
+            except Exception:
+                pass
             import watch
             return watch.main()
 

@@ -350,3 +350,70 @@ def test_fetch_includes_the_installer_files(monkeypatch):
     release = update_check.fetch_latest()
     assert release["installer_name"] == "DownloadSorter-Setup-v9.0.0-windows-x64.exe"
     assert release["checksums_url"] == prefix + "checksums.txt"
+
+
+def test_force_checks_even_if_checked_recently(checks_on):
+    calls: list = []
+    fetch = _fake_fetch("v99.0.0", calls)
+    update_check.check({}, now=1_000_000, fetch=fetch)
+    assert calls == [1]
+    # A regular check 1 minute later is skipped due to cache:
+    update_check.check({}, now=1_000_060, fetch=fetch)
+    assert calls == [1]
+    # A forced check 1 minute later asks GitHub:
+    forced = update_check.check({}, now=1_000_060, fetch=fetch, force=True)
+    assert calls == [1, 1]
+    assert forced["version"] == "v99.0.0"
+
+
+def test_force_checks_even_if_disabled():
+    calls: list = []
+    fetch = _fake_fetch("v99.0.0", calls)
+    # Disabled check does nothing with force=False:
+    assert update_check.check({"update_check": {"enabled": False}}, now=1, fetch=fetch, force=False) is None
+    assert calls == []
+    # But manual check with force=True checks anyway:
+    forced = update_check.check({"update_check": {"enabled": False}}, now=1, fetch=fetch, force=True)
+    assert calls == [1]
+    assert forced["version"] == "v99.0.0"
+
+
+def test_settings_manual_check_finds_update(qapp, monkeypatch):
+    pytest.importorskip("PySide6")
+    import onboarding
+
+    widget = onboarding.SettingsWidget(config={})
+    widget.show()
+    try:
+        found_release = dict(_FULL_RELEASE)
+        widget._on_update_checked(found_release, "")
+        assert "Version 99.0.0 is available!" in widget._lbl_update_status.text()
+        assert not widget._btn_view_update.isHidden()
+        assert widget._btn_check_updates.isEnabled()
+    finally:
+        widget.close()
+
+
+def test_settings_manual_check_up_to_date(qapp, monkeypatch):
+    pytest.importorskip("PySide6")
+    import onboarding
+
+    widget = onboarding.SettingsWidget(config={})
+    try:
+        widget._on_update_checked(None, "")
+        assert "up to date" in widget._lbl_update_status.text()
+        assert not widget._btn_view_update.isVisible()
+        assert widget._btn_check_updates.isEnabled()
+    finally:
+        widget.close()
+
+
+def test_main_cli_check_update(capsys, monkeypatch):
+    import main
+
+    monkeypatch.setattr(update_check, "check", lambda config, force=False: dict(_FULL_RELEASE))
+    ret = main.main(["--check-update"])
+    out = capsys.readouterr().out
+    assert ret == 0
+    assert "Download Sorter 99.0.0 is available!" in out
+

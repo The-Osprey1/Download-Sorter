@@ -172,7 +172,7 @@ def check(
 ) -> Release | None:
     """The newer release, if there is one. Asks GitHub at most once a day;
     in between it answers from what the last check saw."""
-    if not is_enabled(config):
+    if not force and not is_enabled(config):
         return None
     now = time.time() if now is None else now
     state = load_state()

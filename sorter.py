@@ -78,6 +78,9 @@ V2_DEFAULTS: dict = {
     "photos": {"by_month": False},
     "pdf_text": {"enabled": False, "max_mb": 10},
     "rename": {"tidy": False, "add_date": False},
+    # When a download has the same name as a different file already filed, keep
+    # both and ask (ribbon) whether the new one should replace the old one.
+    "replace": {"offer": True},
     # Once a day, ask GitHub which version is newest (see update_check.py).
     "update_check": {"enabled": True},
     "remodel": {
@@ -122,8 +125,8 @@ DEFAULT_CONFIG: dict = {
     "auto_unzip": False,
     "extracted_destination": "Extracted",
     "gcode_sniffer_enabled": True,
-    "haas_destination": "3D Models",
-    "gcode_destination": "3D Models",
+    "haas_destination": "Code\\Haas",
+    "gcode_destination": "Code\\Gcode",
     # Moving 3D/CAD files out of Documents is a maker feature: it is off until the
     # user picks the "3D Printing, CAD & CNC Maker" profile (see MAKER_DOCUMENT_SOURCES).
     "document_sources": [],
@@ -152,36 +155,18 @@ DEFAULT_CONFIG: dict = {
     # profile the user picks.  Out of the box, files are sorted by extension only.
     "keyword_rules": [],
     "extension_rules": [
-        {
-            "name": "Documents",
-            "folder": "Documents",
-            "extensions": [
-                ".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md",
-                ".xls", ".xlsx", ".xlsm", ".csv", ".ods",
-                ".ppt", ".pptx", ".odp", ".key",
-                ".epub", ".mobi", ".tex", ".bib", ".pkpass",
-            ],
-            "enabled": True,
-        },
-        {
-            "name": "3D Models & Print Files",
-            "folder": "3D Models",
-            "extensions": [
-                ".stl", ".3mf", ".obj",
-                ".3ds", ".fbx", ".blend", ".glb", ".gltf",
-                ".gcode", ".bgcode", ".nc", ".tap", ".ngc", ".gco", ".g",
-            ],
-            "enabled": True,
-        },
-        {
-            "name": "CAD & Engineering",
-            "folder": "CAD",
-            "extensions": [
-                ".step", ".stp", ".iges", ".igs",
-                ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf",
-            ],
-            "enabled": True,
-        },
+        {"name": "3D STL", "folder": "3D Models\\STL", "extensions": [".stl"], "enabled": True},
+        {"name": "3D 3MF", "folder": "3D Models\\3MF", "extensions": [".3mf"], "enabled": True},
+        {"name": "3D OBJ", "folder": "3D Models\\OBJ", "extensions": [".obj"], "enabled": True},
+        {"name": "3D STEP", "folder": "3D Models\\STEP", "extensions": [".step", ".stp", ".iges", ".igs"], "enabled": True},
+        {"name": "3D Other", "folder": "3D Models\\Other", "extensions": [".3ds", ".fbx", ".blend", ".glb", ".gltf"], "enabled": True},
+        {"name": "3D CAD", "folder": "3D Models\\CAD", "extensions": [".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf"], "enabled": True},
+        {"name": "Haas / G-Code", "folder": "Code\\Gcode", "extensions": [".nc", ".tap", ".ngc", ".gcode", ".bgcode", ".gco", ".g"], "enabled": True},
+        {"name": "PDF Documents", "folder": "Documents\\PDFs", "extensions": [".pdf"], "enabled": True},
+        {"name": "Word Documents", "folder": "Documents\\Word", "extensions": [".doc", ".docx", ".odt", ".rtf"], "enabled": True},
+        {"name": "Text Documents", "folder": "Documents\\Text", "extensions": [".txt", ".md", ".tex", ".bib"], "enabled": True},
+        {"name": "Spreadsheets", "folder": "Spreadsheets", "extensions": [".xls", ".xlsx", ".xlsm", ".csv", ".ods"], "enabled": True},
+        {"name": "Presentations", "folder": "Documents\\Presentations", "extensions": [".ppt", ".pptx", ".odp", ".key"], "enabled": True},
         {
             "name": "Images",
             "folder": "Images",
@@ -401,14 +386,20 @@ def set_paused(paused: bool) -> None:
 
 
 def record_extraction(archive: Path, outputs: list[Path], batch_id: str = "") -> None:
-    """Note what an archive was extracted to.
-
-    This is bookkeeping, not a move: the zip's own trip to Archives is recorded as a
-    normal (undoable) move by safe_ops, and Undo restores the zip from there.  The
-    extracted copies are left in place for the user to keep or delete.
-    """
+    """Note what an archive was extracted to with full file manifest for Undo/audit."""
     try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        import safe_ops
+
+        manifest: list[str] = []
+        for out in outputs:
+            p = Path(out)
+            if p.is_dir():
+                for child in sorted(p.rglob("*")):
+                    if child.is_file():
+                        manifest.append(str(child))
+            else:
+                manifest.append(str(p))
+
         record = {
             "id": uuid.uuid4().hex,
             "action": "extract",
@@ -416,9 +407,9 @@ def record_extraction(archive: Path, outputs: list[Path], batch_id: str = "") ->
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "archive": str(Path(archive)),
             "outputs": [str(Path(o)) for o in outputs],
+            "extracted_files": manifest,
         }
-        with HISTORY_FILE.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
+        safe_ops.append_journal(record)
     except Exception as exc:
         logging.warning("Failed to write extraction record: %s", exc)
 
@@ -1166,6 +1157,7 @@ def evaluate_routing(
     file_path: Path | None = None,
     content_sample: str | None = None,
     routing_context: RoutingContext | None = None,
+    source_url: str | None = None,
 ) -> dict:
     """Evaluate routing chain for a file according to strict precedence:
     0. Incomplete / ignored check
@@ -1190,8 +1182,28 @@ def evaluate_routing(
     """
     rule_trace: list[dict] = []
     p = Path(filename)
-    ext = p.suffix.lower()
+    raw_ext = p.suffix.lower()
+    ext = raw_ext
     name_lower = p.name.lower()
+
+    # Optional magic-byte / ZIP container disambiguation for extensionless or .zip files
+    if file_path is not None:
+        fp = Path(file_path)
+        if fp.exists() and fp.is_file() and (not raw_ext or raw_ext == ".zip"):
+            try:
+                import classifiers
+                sniff = classifiers.sniff_magic(fp)
+                if sniff.detected_ext and (not raw_ext or (raw_ext == ".zip" and sniff.detected_ext != ".zip")):
+                    ext = sniff.detected_ext.lower()
+                    rule_trace.append({
+                        "tier": "magic_sniff",
+                        "status": "disambiguated",
+                        "original_ext": raw_ext,
+                        "detected_ext": ext,
+                        "mime": sniff.mime_type,
+                    })
+            except Exception as exc:
+                logging.debug("Magic sniff skipped for %s: %s", fp, exc)
 
     # --- Tier 0: Incomplete / Ignored Check ---
     ignore_exts = (
@@ -1363,10 +1375,19 @@ def evaluate_routing(
                 continue
 
         matched_token: str | None = None
+        fuzzy_enabled = bool(config.get("fuzzy_keyword_matching", False))
         for token in rule.get("match", []):
             if matches_keyword(filename, token):
                 matched_token = token
                 break
+            if fuzzy_enabled:
+                try:
+                    import classifiers
+                    if classifiers.fuzzy_matches_keyword(filename, token):
+                        matched_token = token
+                        break
+                except Exception:
+                    pass
         trigger = f"keyword '{matched_token}'" if matched_token else ""
         if not matched_token and rule.get("match") and head_of_pdf():
             for token in rule.get("match", []):
@@ -1374,6 +1395,15 @@ def evaluate_routing(
                     matched_token = token
                     trigger = f"the word '{token}' at the top of the PDF"
                     break
+        if not matched_token and rule.get("match") and file_path is not None and ext == ".pdf":
+            try:
+                import classifiers
+                pdf_hit = classifiers.match_pdf_keywords(Path(file_path), rule.get("match", []))
+                if pdf_hit:
+                    matched_token = pdf_hit
+                    trigger = f"the word '{pdf_hit}' on page 1 of the PDF"
+            except Exception:
+                pass
         if sites and matched_token:
             trigger += f" from {site_of_file()}"
         elif sites and not rule.get("match"):
@@ -1400,6 +1430,35 @@ def evaluate_routing(
             }
         else:
             rule_trace.append({"tier": "keyword", "rule": rule_name, "status": "no_keyword_match"})
+
+    # --- Tier 2.5: Zone.Identifier ADS / Source URL Domain Routing ---
+    if (source_url is not None or file_path is not None) and config.get("domain_routing_enabled", True):
+        try:
+            import classifiers
+            zone_info = classifiers.read_zone_identifier(file_path, source_url=source_url)
+            if zone_info.host_url or zone_info.referrer_url:
+                dom_match = classifiers.classify_source_domain(
+                    zone_info,
+                    domain_rules=config.get("domain_rules"),
+                )
+                if dom_match is not None:
+                    rule_trace.append({
+                        "tier": "source_domain",
+                        "status": "matched",
+                        "domain": dom_match.domain,
+                        "destination": dom_match.destination,
+                    })
+                    return {
+                        "destination": dom_match.destination,
+                        "match_type": "source_domain",
+                        "winning_rule": f"Source Domain ({dom_match.matched_rule})",
+                        "matched_trigger": f"downloaded from {dom_match.domain}",
+                        "is_active_project": False,
+                        "sniffer_details": None,
+                        "rule_trace": rule_trace,
+                    }
+        except Exception as exc:
+            logging.debug("Zone.Identifier domain routing skipped: %s", exc)
 
     # --- Tier 3: Smart G-code Machine Sniffer (R4) ---
     sniffer_enabled = config.get("gcode_sniffer_enabled", config.get("sniffer", {}).get("enabled", True))
@@ -1504,6 +1563,65 @@ def evaluate_routing(
             except Exception as exc:
                 logging.debug("MakerWorld 3MF check error: %s", exc)
 
+    # --- Tier 3.75: Pre-Routing ZIP Content Peek ---
+    if ext == ".zip" and file_path is not None and config.get("zip_content_routing", False):
+        p_zip = Path(file_path)
+        if p_zip.exists() and p_zip.is_file():
+            try:
+                import classifiers
+                zip_peek = classifiers.peek_zip_contents(
+                    p_zip,
+                    keyword_rules=config.get("keyword_rules"),
+                )
+                if zip_peek.has_path_traversal:
+                    rule_trace.append({
+                        "tier": "zip_peek",
+                        "status": "zip_slip_blocked",
+                        "destination": "Quarantine\\ZipSlip",
+                    })
+                    return {
+                        "destination": "Quarantine\\ZipSlip",
+                        "match_type": "zip_peek_quarantine",
+                        "winning_rule": "Zip Slip Defense",
+                        "matched_trigger": "zip archive contains path traversal",
+                        "is_active_project": False,
+                        "sniffer_details": None,
+                        "rule_trace": rule_trace,
+                    }
+                if zip_peek.matched_keyword_rule and zip_peek.suggested_destination:
+                    rule_trace.append({
+                        "tier": "zip_peek",
+                        "status": "matched_keyword",
+                        "destination": zip_peek.suggested_destination,
+                    })
+                    return {
+                        "destination": zip_peek.suggested_destination,
+                        "match_type": "zip_peek",
+                        "winning_rule": zip_peek.matched_keyword_rule,
+                        "matched_trigger": zip_peek.matched_trigger or "archive entry matched keyword",
+                        "is_active_project": False,
+                        "sniffer_details": None,
+                        "rule_trace": rule_trace,
+                    }
+                if zip_peek.suggested_destination:
+                    rule_trace.append({
+                        "tier": "zip_peek",
+                        "status": "matched_category",
+                        "category": zip_peek.dominant_category,
+                        "destination": zip_peek.suggested_destination,
+                    })
+                    return {
+                        "destination": zip_peek.suggested_destination,
+                        "match_type": "zip_peek",
+                        "winning_rule": f"ZIP Content ({zip_peek.dominant_category})",
+                        "matched_trigger": zip_peek.matched_trigger or f"archive contains {zip_peek.dominant_category} files",
+                        "is_active_project": False,
+                        "sniffer_details": None,
+                        "rule_trace": rule_trace,
+                    }
+            except Exception as exc:
+                logging.debug("ZIP peek routing skipped: %s", exc)
+
     # --- Tier 4: Extension Rules (R1) ---
     for rule_index, rule in enumerate(config.get("extension_rules", [])):
         rule_name = rule.get("name") or rule.get("folder", "Extension Rule")
@@ -1520,6 +1638,22 @@ def evaluate_routing(
             dest_folder = rule.get("folder", "")
             if str(rule.get("name", "")).lower() == "images" and _option(config, "photos", "by_month"):
                 dest_folder = f"{dest_folder}\\{photo_month(Path(file_path) if file_path else None)}"
+            elif (
+                str(rule.get("name", "")).lower() == "images"
+                and file_path is not None
+                and config.get("image_subfolders_by_type", False)
+            ):
+                try:
+                    import classifiers
+                    img_info = classifiers.inspect_image_metadata(Path(file_path))
+                    if img_info.classification == "screenshot":
+                        dest_folder = f"{dest_folder}\\Screenshots"
+                    elif img_info.classification == "camera_photo":
+                        dest_folder = f"{dest_folder}\\Camera"
+                    elif img_info.classification == "cad_render":
+                        dest_folder = f"{dest_folder}\\Renders"
+                except Exception:
+                    pass
             rule_trace.append({
                 "tier": "extension",
                 "rule": rule_name,
@@ -1799,6 +1933,34 @@ def duplicates_folder(downloads: Path) -> Path:
     return Path(downloads) / DUPLICATES_DIR_NAME / datetime.now().strftime("%Y-%m")
 
 
+_DEDUP_INDEX_CACHE: dict[str, object] = {}
+
+
+def get_dedup_index(config: dict | None = None):
+    """Return a cached DedupIndex instance when dedup indexing is enabled."""
+    if config is not None and not config.get("dedup_index_enabled", True):
+        return None
+    try:
+        import dedup_index
+        db_path = (config or {}).get("dedup_index_path")
+        if db_path is None:
+            db_path = Path(LOG_DIR) / "dedup_index.db"
+        key = str(Path(db_path).resolve())
+        idx = _DEDUP_INDEX_CACHE.get(key)
+        if idx is None:
+            idx = dedup_index.DedupIndex(db_path)
+            _DEDUP_INDEX_CACHE[key] = idx
+        return idx
+    except Exception as exc:
+        logging.debug("DedupIndex unavailable: %s", exc)
+        return None
+
+
+def _resolve_conflict_policy(config: dict, routing: dict) -> str:
+    policy = routing.get("conflict_policy") or config.get("conflict_policy") or "ask_ribbon"
+    return str(policy).strip().lower()
+
+
 def move_file(
     path: Path,
     config: dict,
@@ -1853,7 +2015,10 @@ def move_file(
 
     reason = routing["matched_trigger"]
     name = filed_name(path, config)
-    primary_target = destination_dir / name
+    import replace_offer
+    offer_replace = replace_offer.is_enabled(config)
+    base_name = replace_offer.original_name(name) if offer_replace else name
+    primary_target = destination_dir / base_name
     destination = unique_destination(destination_dir, name)
 
     # Retention first: "Keep here" and the grace-period hold win over everything
@@ -1861,30 +2026,68 @@ def move_file(
     if hold_in_place(path, config, destination, batch_id, dry_run, downloads=downloads):
         return None
 
-    # Exact duplicate of a file already filed: quarantine it (journaled, so Undo can
-    # bring it back) instead of deleting it.
+    # Exact duplicate of a file already filed (same-name or renamed via DedupIndex):
+    # quarantine it (journaled, so Undo can bring it back) instead of deleting it.
+    dedup_idx = None if dry_run else get_dedup_index(config)
+    dup_match: Path | None = None
     if primary_target.exists() and are_files_identical(path, primary_target):
+        dup_match = primary_target
+    elif dedup_idx is not None:
+        try:
+            min_bytes = int(config.get("dedup_index_min_bytes", 1024))
+            if path.stat().st_size >= min_bytes:
+                candidate_dup = dedup_idx.find_duplicate(path)
+                if candidate_dup is not None and is_under(candidate_dup, downloads):
+                    dup_match = candidate_dup
+        except Exception as exc:
+            logging.debug("DedupIndex lookup failed for %s: %s", path.name, exc)
+
+    if dup_match is not None:
         dup_dir = duplicates_folder(downloads)
         if dry_run:
             logging.info(
                 "[DRY-RUN] Exact duplicate already exists at %s; would move %s to %s",
-                primary_target, path.name, dup_dir,
+                dup_match, path.name, dup_dir,
             )
-            return primary_target
+            return dup_match
         import safe_ops
         try:
             parked = safe_ops.quarantine(path, dup_dir, batch_id=batch_id)
             logging.info(
                 "Exact duplicate already exists at %s; moved download %s to %s",
-                primary_target, path.name, parked,
+                dup_match, path.name, parked,
             )
-            return primary_target
+            return dup_match
         except safe_ops.Refused as refusal:
             logging.debug("Left duplicate %s alone: %s", path.name, refusal.reason)
             return None
         except OSError as exc:
             record_move_failure(path, exc)
             return None
+
+    # Configurable conflict policy when a different file with the same name exists
+    conflict_policy = _resolve_conflict_policy(config, routing)
+    if not dry_run and primary_target.exists() and primary_target.is_file():
+        if conflict_policy in ("keep_newest", "auto_replace_if_newer"):
+            try:
+                src_mtime = path.stat().st_mtime
+                dst_mtime = primary_target.stat().st_mtime
+            except OSError:
+                src_mtime, dst_mtime = 0.0, 0.0
+            if src_mtime > dst_mtime:
+                import safe_ops
+                try:
+                    safe_ops.quarantine(primary_target, duplicates_folder(downloads), batch_id=batch_id)
+                    destination = primary_target
+                except Exception as exc:
+                    logging.debug("Could not quarantine older copy %s: %s", primary_target, exc)
+            elif conflict_policy == "keep_newest":
+                import safe_ops
+                try:
+                    safe_ops.quarantine(path, duplicates_folder(downloads), batch_id=batch_id)
+                    return primary_target
+                except Exception as exc:
+                    logging.debug("Could not quarantine older incoming %s: %s", path, exc)
 
 
     auto_unpack = config.get("watch", {}).get("auto_unpack_3d_zips", config.get("auto_unpack_3d_zips", False))
@@ -1932,7 +2135,16 @@ def move_file(
     destination_dir.mkdir(parents=True, exist_ok=True)
     source = path.resolve()
     try:
-        destination = safe_ops.move(path, destination, batch_id=batch_id, settle_seconds=settle)
+        if safe_ops.same_volume(path, destination_dir):
+            destination = safe_ops.move(path, destination, batch_id=batch_id, settle_seconds=settle)
+        else:
+            destination = safe_ops.staged_move(
+                path,
+                destination,
+                batch_id=batch_id,
+                staging_root=destination_dir,
+                settle_seconds=settle,
+            )
     except safe_ops.Refused as refusal:
         logging.debug("Left %s alone: %s", path.name, refusal.reason)
         return None
@@ -1940,9 +2152,47 @@ def move_file(
         record_move_failure(path, exc)
         return None
     clear_failure(path)
+    if dedup_idx is not None:
+        try:
+            dedup_idx.record_file(destination)
+        except Exception:
+            pass
     dest_display = destination.relative_to(downloads) if is_under(destination, downloads) else str(destination)
     logging.info("Moved %s -> %s (%s)", source, dest_display, reason)
+    if (
+        offer_replace
+        and conflict_policy == "ask_ribbon"
+        and destination != primary_target
+        and primary_target.is_file()
+    ):
+        offer_name_conflict(destination, primary_target, config, downloads_root=downloads, batch_id=batch_id)
     return destination
+
+
+def offer_name_conflict(
+    new_path: Path,
+    old_path: Path,
+    config: dict,
+    *,
+    downloads_root: Path | None = None,
+    batch_id: str = "",
+) -> str | None:
+    """Save a replace offer and show the "Replace older copy?" ribbon."""
+    try:
+        import replace_offer
+        offer_id = replace_offer.record_offer(
+            new_path, old_path, downloads_root=downloads_root, batch_id=batch_id,
+        )
+    except Exception as err:
+        logging.debug("Could not record replace offer: %s", err)
+        return None
+    if config.get("ribbon_enabled", True) and config.get("notifications", True):
+        try:
+            from ribbon_popup import notify_replace
+            notify_replace(offer_id)
+        except Exception as err:
+            logging.debug("Replace ribbon skipped: %s", err)
+    return offer_id
 
 
 def relocate_from_documents(
@@ -2282,5 +2532,38 @@ def consolidate_downloads(
         include_held=include_held,
         remove_empty=remove_empty,
     )
+
+
+def idle_catchup_sweep(
+    config: dict | None = None,
+    routing_context: RoutingContext | None = None,
+    *,
+    batch_id: str = "",
+) -> dict[str, int]:
+    """Idempotent startup/idle sweep: expire stale active project, clean orphaned staging, and sort missed files."""
+    cfg = config or load_config()
+    active_proj = load_active_project()  # auto-expires stale active_project.json
+    ctx = routing_context or compile_routing(cfg, active_proj)
+    eff_batch = batch_id or uuid.uuid4().hex[:8]
+    cutoff = existing_files_cutoff(cfg)
+    root = watch_root(cfg)
+
+    cleaned_staging = 0
+    try:
+        import safe_ops
+        cleaned_staging = len(safe_ops.cleanup_orphaned_staging(root))
+        safe_ops.rotate_journal()
+    except Exception as exc:
+        logging.debug("Idle staging/journal maintenance skipped: %s", exc)
+
+    downloads_moved = sort_existing(cfg, batch_id=eff_batch, routing_context=ctx, skip_before=cutoff)
+    docs_moved = sort_existing_documents(cfg, batch_id=eff_batch, routing_context=ctx, skip_before=cutoff)
+    misplaced_moved = sort_existing_misplaced(cfg, batch_id=eff_batch, routing_context=ctx, skip_before=cutoff)
+    return {
+        "downloads_moved": downloads_moved,
+        "documents_moved": docs_moved,
+        "misplaced_moved": misplaced_moved,
+        "cleaned_staging": cleaned_staging,
+    }
 
 

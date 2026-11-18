@@ -7,8 +7,10 @@ import about
 import logging
 import os
 import math
+import shutil
 import sys
 import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -131,6 +133,10 @@ def unpack_3d_archive(
         target_root = downloads
         archive_dest_dir = folder_path(downloads, "Archives")
 
+    effective_batch = batch_id or uuid.uuid4().hex[:8]
+    stage_dir = None if dry_run else safe_ops.staging_dir_for(target_root, effective_batch)
+    staged_pairs: list[tuple[Path, Path]] = []
+
     try:
         with zipfile.ZipFile(archive_path, "r") as z:
             budget = [0]
@@ -142,7 +148,7 @@ def unpack_3d_archive(
                 except ArchiveLimitError as exc:
                     logging.warning("Not unpacking %s: %s", archive_path.name, exc)
                     return []
-            for zip_internal_path in model_files:
+            for idx_num, zip_internal_path in enumerate(model_files):
                 file_name = Path(zip_internal_path).name
 
                 if active_proj:
@@ -170,11 +176,26 @@ def unpack_3d_archive(
                     extracted_paths.append(target_file)
                     continue
 
-                dest_dir.mkdir(parents=True, exist_ok=True)
+                assert stage_dir is not None
                 from unzip_archive import copy_member_limited
-                extracted_paths.append(target_file)
-                copy_member_limited(z, z.getinfo(zip_internal_path), target_file, budget)
-                logging.info("Extracted %s -> %s", file_name, dest_display)
+                staged_file = stage_dir / f"{idx_num}_{file_name}"
+                copy_member_limited(z, z.getinfo(zip_internal_path), staged_file, budget)
+                staged_pairs.append((staged_file, target_file))
+
+        if not dry_run:
+            for staged_file, target_file in staged_pairs:
+                target_file.parent.mkdir(parents=True, exist_ok=True)
+                final_target = unique_destination(target_file.parent, target_file.name)
+                op_id = safe_ops._plan("extract_file", archive_path, final_target, effective_batch)
+                try:
+                    os.replace(str(staged_file), str(final_target))
+                except OSError:
+                    shutil.move(str(staged_file), str(final_target))
+                safe_ops.append_journal(
+                    safe_ops._done_record(op_id, effective_batch, str(archive_path), str(final_target), "extract_file", False)
+                )
+                extracted_paths.append(final_target)
+                logging.info("Extracted %s -> %s", final_target.name, final_target)
 
         # Move original zip to Archives
         if not dry_run:
@@ -186,7 +207,15 @@ def unpack_3d_archive(
                 else str(zip_destination)
             )
             try:
-                safe_ops.move(archive_path, zip_destination, batch_id=batch_id, settle_seconds=0.0, honor_keep=False, skip_preflight=True)
+                safe_ops.staged_move(
+                    archive_path,
+                    zip_destination,
+                    batch_id=effective_batch,
+                    staging_root=target_root,
+                    settle_seconds=0.0,
+                    honor_keep=False,
+                    skip_preflight=True,
+                )
                 logging.info("Moved original zip -> %s", zip_display)
             except (OSError, safe_ops.Refused) as exc:
                 logging.warning("Could not move zip %s: %s", archive_path.name, exc)
@@ -200,7 +229,16 @@ def unpack_3d_archive(
                     created.unlink()
                 except OSError:
                     pass
+            if stage_dir is not None and stage_dir.exists():
+                shutil.rmtree(stage_dir, ignore_errors=True)
             return []
+    finally:
+        if stage_dir is not None and stage_dir.exists():
+            try:
+                if not any(stage_dir.iterdir()):
+                    stage_dir.rmdir()
+            except OSError:
+                pass
 
     return extracted_paths
 

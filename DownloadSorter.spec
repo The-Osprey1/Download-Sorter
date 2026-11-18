@@ -48,6 +48,8 @@ hidden_imports = [
     'hold_manager',
     'remodel',
     'safe_ops',
+    'classifiers',
+    'dedup_index',
     'defusedxml',
     'pypdf',
     'onboarding',

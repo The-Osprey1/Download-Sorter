@@ -1401,3 +1401,192 @@ def storage_sense_downloads_days() -> int | None:
         return None  # Storage Sense is off
     days = read(winreg.HKEY_CURRENT_USER, user, "512")
     return days or None
+
+
+# =====================================================================
+# PRE-COMPILED RULES & LIVE CONFIG WATCHER
+# =====================================================================
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class CompiledKeywordRule:
+    """Pre-compiled keyword rule with normalized tokens and regex."""
+
+    name: str
+    folder: str
+    keywords: tuple[str, ...]
+    pattern: re.Pattern[str] | None
+
+
+@dataclass(frozen=True)
+class CompiledRules:
+    """Pre-compiled routing tables built once per config reload."""
+
+    keyword_rules: tuple[CompiledKeywordRule, ...] = ()
+    extension_map: dict[str, tuple[str, str]] = field(default_factory=dict)
+    category_folders: frozenset[str] = frozenset()
+    config_digest: str = ""
+
+
+def compile_rules(config: dict[str, Any]) -> CompiledRules:
+    """Compile active keyword and extension rules into fast lookup structures."""
+    compiled_keywords: list[CompiledKeywordRule] = []
+    categories: set[str] = set()
+
+    for rule in config.get("keyword_rules", []):
+        if not isinstance(rule, dict) or not rule.get("enabled", True):
+            continue
+        name = str(rule.get("name", "")).strip()
+        folder = str(rule.get("folder", "")).strip()
+        raw_kws = [str(k).strip().lower() for k in rule.get("keywords", []) if str(k).strip()]
+        if not folder or not raw_kws:
+            continue
+        categories.add(folder.replace("/", "\\").lower())
+        escaped = [re.escape(kw) for kw in raw_kws]
+        pattern = re.compile(r"(?<![a-z0-9])(?:" + "|".join(escaped) + r")(?![a-z0-9])", re.IGNORECASE)
+        compiled_keywords.append(
+            CompiledKeywordRule(name=name, folder=folder, keywords=tuple(raw_kws), pattern=pattern)
+        )
+
+    ext_map: dict[str, tuple[str, str]] = {}
+    for rule in config.get("extension_rules", []):
+        if not isinstance(rule, dict) or not rule.get("enabled", True):
+            continue
+        name = str(rule.get("name", "")).strip()
+        folder = str(rule.get("folder", "")).strip()
+        if not folder:
+            continue
+        categories.add(folder.replace("/", "\\").lower())
+        for ext in rule.get("extensions", []):
+            norm_ext = str(ext).strip().lower()
+            if not norm_ext:
+                continue
+            if not norm_ext.startswith("."):
+                norm_ext = f".{norm_ext}"
+            if norm_ext not in ext_map:
+                ext_map[norm_ext] = (name, folder)
+
+    default_folder = str(config.get("default_folder", "Other")).strip()
+    if default_folder:
+        categories.add(default_folder.replace("/", "\\").lower())
+
+    digest = f"{len(compiled_keywords)}:{len(ext_map)}:{hash(json.dumps(config, sort_keys=True, default=str))}"
+    return CompiledRules(
+        keyword_rules=tuple(compiled_keywords),
+        extension_map=ext_map,
+        category_folders=frozenset(categories),
+        config_digest=digest,
+    )
+
+
+class ConfigFileWatcher:
+    """Watches config.json with watchdog for instant, validated rule reloads."""
+
+    def __init__(
+        self,
+        config_path: Path | str | None = None,
+        on_reload: Callable[[dict[str, Any], CompiledRules], None] | None = None,
+    ) -> None:
+        self.config_path = Path(config_path).resolve() if config_path else SORTER_CONFIG_FILE.resolve()
+        self.on_reload = on_reload
+        self._lock = threading.RLock()
+        self._observer: Any = None
+        self._last_mtime_ns: int = self._stat_mtime_ns()
+        self._config: dict[str, Any] = load_sorter_config(self.config_path)
+        self._compiled: CompiledRules = compile_rules(self._config)
+
+    def _stat_mtime_ns(self) -> int:
+        try:
+            return self.config_path.stat().st_mtime_ns
+        except OSError:
+            return 0
+
+    @property
+    def config(self) -> dict[str, Any]:
+        with self._lock:
+            return self._config
+
+    @property
+    def compiled_rules(self) -> CompiledRules:
+        with self._lock:
+            return self._compiled
+
+    def reload_now(self, force: bool = False) -> bool:
+        """Reload and pre-compile rules if config.json changed on disk. Returns True if updated."""
+        with self._lock:
+            mtime_ns = self._stat_mtime_ns()
+            if not force and mtime_ns == self._last_mtime_ns:
+                return False
+            if not self.config_path.exists():
+                return False
+            try:
+                raw = self.config_path.read_text(encoding="utf-8")
+                data = json.loads(raw)
+                if not validate_sorter_config(data):
+                    return False
+                new_cfg = apply_v2_defaults(data)
+                new_compiled = compile_rules(new_cfg)
+            except Exception as exc:
+                logging.warning("ConfigFileWatcher ignored invalid config.json: %s", exc)
+                return False
+
+            self._last_mtime_ns = mtime_ns
+            self._config = new_cfg
+            self._compiled = new_compiled
+            cb = self.on_reload
+
+        if cb is not None:
+            cb(new_cfg, new_compiled)
+        return True
+
+    def start(self) -> None:
+        """Start background watchdog observer on config.json's parent directory."""
+        with self._lock:
+            if self._observer is not None:
+                return
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
+
+            watcher = self
+            target = self.config_path
+
+            class _Handler(FileSystemEventHandler):
+                def _maybe_reload(self, *paths: str) -> None:
+                    for p in paths:
+                        if not p:
+                            continue
+                        try:
+                            if Path(p).resolve() == target:
+                                watcher.reload_now(force=True)
+                                return
+                        except OSError:
+                            continue
+
+                def on_modified(self, event) -> None:  # type: ignore[no-untyped-def]
+                    if not event.is_directory:
+                        self._maybe_reload(event.src_path)
+
+                def on_created(self, event) -> None:  # type: ignore[no-untyped-def]
+                    if not event.is_directory:
+                        self._maybe_reload(event.src_path)
+
+                def on_moved(self, event) -> None:  # type: ignore[no-untyped-def]
+                    if not event.is_directory:
+                        self._maybe_reload(event.src_path, event.dest_path)
+
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            obs = Observer()
+            obs.schedule(_Handler(), str(self.config_path.parent), recursive=False)
+            obs.start()
+            self._observer = obs
+
+    def stop(self) -> None:
+        with self._lock:
+            obs = self._observer
+            self._observer = None
+        if obs is not None:
+            obs.stop()
+            obs.join(timeout=3.0)

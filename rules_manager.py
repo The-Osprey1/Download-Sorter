@@ -1641,6 +1641,7 @@ class RulesManagerDialog(QDialog):
 
         self._settings_widget = SettingsWidget(config=self._config, parent=self)
         self._settings_widget.persona_changed.connect(self._on_profile_changed)
+        self._settings_widget.update_ready.connect(self._home_widget._on_update_ready)
         self._view_stack.addWidget(self._padded(self._settings_widget))
 
         self._status_timer = QTimer(self)

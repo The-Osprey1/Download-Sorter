@@ -342,8 +342,9 @@ def test_settings_extra_options_save(qapp, monkeypatch):
     try:
         checks = widget._option_checks
         assert set(checks) == {("photos", "by_month"), ("pdf_text", "enabled"), ("rename", "tidy"),
-                               ("rename", "add_date"), ("cleanup", "enabled")}
-        assert not any(c.isChecked() for c in checks.values()), "all off by default"
+                               ("rename", "add_date"), ("cleanup", "enabled"), ("replace", "offer")}
+        assert checks[("replace", "offer")].isChecked(), "replace offer is on by default"
+        assert not any(c.isChecked() for k, c in checks.items() if k != ("replace", "offer")), "others off by default"
         checks[("photos", "by_month")].setChecked(True)
         assert saved[-1]["photos"]["by_month"] is True
         checks[("rename", "add_date")].setChecked(True)

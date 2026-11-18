@@ -1020,7 +1020,7 @@ class HomeDashboardWidget(QWidget):
         feed_header.addWidget(ui_style.label("Recently sorted", "section"))
         feed_header.addStretch()
         self._refresh_btn = ui_style.icon_button("refresh", "Refresh")
-        self._refresh_btn.clicked.connect(self.refresh_data)
+        self._refresh_btn.clicked.connect(self._manual_refresh)
         feed_header.addWidget(self._refresh_btn)
         layout.addLayout(feed_header)
 
@@ -1267,11 +1267,15 @@ class HomeDashboardWidget(QWidget):
             parts.append(f"{len(ordered) - shown} more")
         return ", ".join(parts) + "." if parts else ""
 
+    def _manual_refresh(self) -> None:
+        self.refresh_data()
+        self.refresh_update_notice(force=True)
+
     # ---- newer version -------------------------------------------------
 
-    def refresh_update_notice(self) -> None:
-        """Once per window: ask (in the background) whether a newer version exists."""
-        if self._update_checked or not update_check.is_enabled(self._config):
+    def refresh_update_notice(self, force: bool = False) -> None:
+        """Ask (in the background) whether a newer version exists."""
+        if (self._update_checked and not force) or not update_check.is_enabled(self._config):
             return
         self._update_checked = True
         config = copy.deepcopy(self._config)
@@ -1282,7 +1286,7 @@ class HomeDashboardWidget(QWidget):
             except Exception:
                 pass
             try:
-                release = update_check.check(config)
+                release = update_check.check(config, force=force)
             except Exception:
                 release = None
             try:
@@ -1666,12 +1670,17 @@ class SettingsWidget(QWidget):
     """Settings page: profile, Windows integration, zip handling, and About."""
 
     persona_changed = Signal(str)
+    update_ready = Signal(object)
+    _update_result = Signal(object, str)
 
     def __init__(self, config: dict[str, Any] | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = copy.deepcopy(config) if config is not None else (
             suite_data.load_sorter_config() if hasattr(suite_data, "load_sorter_config") else {}
         )
+        self._checking_updates = False
+        self._latest_release: dict[str, Any] | None = None
+        self._update_result.connect(self._on_update_checked)
         self._init_ui()
         self.refresh_data()
 
@@ -1756,6 +1765,8 @@ class SettingsWidget(QWidget):
                                       "“document (3).pdf” that says Invoice still goes to Invoices"),
             (("rename", "tidy"), "Tidy file names: “My_File (1).pdf” becomes “My File.pdf”"),
             (("rename", "add_date"), "Put the date in front of file names: “2026-11-09 Invoice.pdf”"),
+            (("replace", "offer"), "When a download has the same name as an older, different file, "
+                                   "ask whether to replace it (the old one goes to the Recycle Bin)"),
             (("cleanup", "enabled"), "Move installers and zip files older than 30 days to the Recycle Bin, "
                                      "once a day"),
         ):
@@ -1792,6 +1803,25 @@ class SettingsWidget(QWidget):
             "Asks GitHub which version is newest. Nothing about you or your files is sent.")
         self._chk_updates.toggled.connect(self._on_updates_toggled)
         info.addWidget(self._chk_updates)
+
+        update_row = QHBoxLayout()
+        update_row.setSpacing(8)
+        self._btn_check_updates = ui_style.button("Check for updates")
+        self._btn_check_updates.setToolTip("Ask GitHub now whether a newer version is available.")
+        self._btn_check_updates.clicked.connect(self.check_for_updates_now)
+        update_row.addWidget(self._btn_check_updates)
+
+        self._btn_view_update = ui_style.button("View update on Home", "primary")
+        self._btn_view_update.setToolTip("Go to the Home tab to download and install this update.")
+        self._btn_view_update.setVisible(False)
+        self._btn_view_update.clicked.connect(self._on_view_update_clicked)
+        update_row.addWidget(self._btn_view_update)
+
+        self._lbl_update_status = ui_style.label("", "muted")
+        update_row.addWidget(self._lbl_update_status)
+        update_row.addStretch()
+        info.addLayout(update_row)
+
         info.addWidget(ui_style.label(about.CREDIT, "muted"))
         link = ui_style.label(
             f'<a href="{about.REPO_URL}" style="color: {COLORS["info"]}; text-decoration: none;">'
@@ -1841,7 +1871,8 @@ class SettingsWidget(QWidget):
         for (block_name, key), chk in self._option_checks.items():
             block = self._config.get(block_name)
             chk.blockSignals(True)
-            chk.setChecked(bool(block.get(key)) if isinstance(block, dict) else False)
+            default = (block_name, key) == ("replace", "offer")  # on unless turned off
+            chk.setChecked(bool(block.get(key, default)) if isinstance(block, dict) else default)
             chk.blockSignals(False)
         days = _storage_sense_days()
         if days:
@@ -1914,6 +1945,73 @@ class SettingsWidget(QWidget):
 
     def _on_updates_toggled(self, checked: bool) -> None:
         self._update_config(lambda cfg: self._set_option(cfg, "update_check", "enabled", bool(checked)))
+
+    def check_for_updates_now(self) -> None:
+        """Manually query GitHub for a newer version immediately."""
+        if self._checking_updates:
+            return
+        self._checking_updates = True
+        self._btn_check_updates.setEnabled(False)
+        self._btn_check_updates.setText("Checking...")
+        self._btn_view_update.setVisible(False)
+        self._lbl_update_status.setText("Checking GitHub for updates...")
+        self._lbl_update_status.setStyleSheet(f"color: {COLORS['textMuted']};")
+        config = copy.deepcopy(self._config)
+
+        def work() -> None:
+            rel, err = None, ""
+            try:
+                rel = update_check.check(config, force=True)
+            except Exception as exc:
+                err = str(exc) or "Check failed."
+            try:
+                self._update_result.emit(rel, err)
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=work, name="settings-update-check", daemon=True).start()
+
+    def _on_update_checked(self, release: Any, error: str) -> None:
+        self._checking_updates = False
+        self._btn_check_updates.setEnabled(True)
+        self._btn_check_updates.setText("Check for updates")
+        self._latest_release = dict(release) if release else None
+        if release:
+            version = update_check.display_version(release)
+            self._lbl_update_status.setText(f"Version {version} is available!")
+            self._lbl_update_status.setStyleSheet(f"color: {COLORS['success']};")
+            if updater.can_self_update():
+                self._btn_view_update.setText("View update on Home")
+                self._btn_view_update.setToolTip("Go to the Home tab to download and install this update.")
+            else:
+                self._btn_view_update.setText("Open download page")
+                self._btn_view_update.setToolTip("Open GitHub releases in your web browser.")
+            self._btn_view_update.setVisible(True)
+            self.update_ready.emit(release)
+            parent_dialog = self.window()
+            if hasattr(parent_dialog, "_home_widget") and hasattr(parent_dialog._home_widget, "_on_update_ready"):
+                parent_dialog._home_widget._on_update_ready(release)
+        elif error:
+            self._lbl_update_status.setText("Could not reach GitHub. Try again later.")
+            self._lbl_update_status.setStyleSheet(f"color: {COLORS['critical']};")
+            self._btn_view_update.setVisible(False)
+        else:
+            self._lbl_update_status.setText(f"You're up to date (version {about.__version__}).")
+            self._lbl_update_status.setStyleSheet(f"color: {COLORS['textMuted']};")
+            self._btn_view_update.setVisible(False)
+
+    def _on_view_update_clicked(self) -> None:
+        if not self._latest_release:
+            return
+        if updater.can_self_update():
+            parent_dialog = self.window()
+            if hasattr(parent_dialog, "switch_view"):
+                parent_dialog.switch_view("home")
+                return
+        url = str(self._latest_release.get("url") or update_check.RELEASES_PAGE)
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(url))
 
     def _on_learning_toggled(self, checked: bool) -> None:
         def change(cfg: dict[str, Any]) -> None:

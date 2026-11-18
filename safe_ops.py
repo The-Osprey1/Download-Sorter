@@ -54,6 +54,9 @@ TEMP_SAVE_PATTERNS: tuple[str, ...] = (
 )
 
 _JOURNAL_LOCK = threading.RLock()
+DEFAULT_MAX_JOURNAL_BYTES = 5 * 1024 * 1024  # 5 MB
+DEFAULT_JOURNAL_KEEP = 3
+STAGING_DIR_NAME = ".staging"
 
 # Archive types the sorter extracts; used to recognise old extraction records.
 ARCHIVE_SUFFIXES: frozenset[str] = frozenset({".zip"})
@@ -84,11 +87,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def append_journal(record: dict[str, Any]) -> None:
+def append_journal(record: dict[str, Any], *, auto_rotate: bool = True) -> None:
     """Append one JSON line to history.jsonl and force it to disk."""
     with _JOURNAL_LOCK:
         target = history_file()
         target.parent.mkdir(parents=True, exist_ok=True)
+        if auto_rotate and target.exists():
+            try:
+                if target.stat().st_size >= DEFAULT_MAX_JOURNAL_BYTES:
+                    rotate_journal()
+            except OSError:
+                pass
         with target.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record) + "\n")
             handle.flush()
@@ -96,6 +105,52 @@ def append_journal(record: dict[str, Any]) -> None:
                 os.fsync(handle.fileno())
             except OSError:  # pragma: no cover - fsync unsupported on odd filesystems
                 pass
+
+
+def rotate_journal(
+    max_bytes: int = DEFAULT_MAX_JOURNAL_BYTES,
+    keep_files: int = DEFAULT_JOURNAL_KEEP,
+) -> Path | None:
+    """Rotate history.jsonl when it reaches ``max_bytes``, preserving unresolved PENDING records."""
+    with _JOURNAL_LOCK:
+        target = history_file()
+        if not target.exists():
+            return None
+        try:
+            if target.stat().st_size < max_bytes:
+                return None
+        except OSError:
+            return None
+
+        unresolved = pending_planned(min_age_seconds=0.0)
+        if keep_files >= 1:
+            oldest = target.with_name(f"{target.name}.{keep_files}")
+            if oldest.exists():
+                try:
+                    oldest.unlink()
+                except OSError:
+                    pass
+            for idx in range(keep_files - 1, 0, -1):
+                src_rot = target.with_name(f"{target.name}.{idx}")
+                dst_rot = target.with_name(f"{target.name}.{idx + 1}")
+                if src_rot.exists():
+                    os.replace(src_rot, dst_rot)
+            rotated = target.with_name(f"{target.name}.1")
+            os.replace(target, rotated)
+        else:
+            rotated = None
+            target.unlink()
+
+        if unresolved:
+            with target.open("w", encoding="utf-8") as handle:
+                for rec in unresolved:
+                    handle.write(json.dumps(rec) + "\n")
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except OSError:
+                    pass
+        return rotated
 
 
 def read_journal() -> list[dict[str, Any]]:
@@ -123,6 +178,7 @@ def _plan(op: str, src: Path, dest: Path, batch_id: str) -> str:
     append_journal({
         "id": op_id,
         "action": "planned",
+        "phase": "PENDING",
         "op": op,
         "batch_id": batch_id or "",
         "timestamp": _now(),
@@ -136,6 +192,7 @@ def _abort(op_id: str, detail: str) -> None:
     append_journal({
         "id": uuid.uuid4().hex,
         "action": "aborted",
+        "phase": "ABORTED",
         "planned_id": op_id,
         "timestamp": _now(),
         "detail": detail,
@@ -265,6 +322,7 @@ def _done_record(op_id: str, batch_id: str, src: str, dest: str, op: str, undoab
         "src": src,
         "dest": dest,
         "planned_id": op_id,
+        "phase": "COMMITTED",
     }
     if op != "move":
         record["op"] = op
@@ -446,7 +504,8 @@ def pending_planned(min_age_seconds: float = 30.0) -> list[dict[str, Any]]:
     now = time.time()
     pending: list[dict[str, Any]] = []
     for rec in records:
-        if rec.get("action") != "planned" or str(rec.get("id")) in finished:
+        is_pending = rec.get("action") == "planned" or rec.get("phase") == "PENDING"
+        if not is_pending or str(rec.get("id")) in finished:
             continue
         try:
             age = now - datetime.fromisoformat(str(rec.get("timestamp"))).timestamp()
@@ -505,3 +564,94 @@ def recover_pending_journal(min_age_seconds: float = 30.0) -> list[dict[str, Any
         logging.info("Journal recovery: %s %s -> %s (%s)", op, src, dest, outcome)
         outcomes.append({"planned_id": op_id, "op": op, "src": str(src), "dest": str(dest), "outcome": outcome})
     return outcomes
+
+
+# ---------------------------------------------------------------------------
+# crash-safe .staging\<batch_id>\ helpers
+# ---------------------------------------------------------------------------
+
+def staging_dir_for(dest_root: Path | str, batch_id: str) -> Path:
+    """Create and return ``<dest_root>\\.staging\\<batch_id>``, hiding ``.staging`` on Windows."""
+    root = Path(dest_root)
+    staging_root = root / STAGING_DIR_NAME
+    staging_root.mkdir(parents=True, exist_ok=True)
+    make_hidden(staging_root)
+    batch_dir = staging_root / (batch_id or uuid.uuid4().hex[:8])
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    return batch_dir
+
+
+def staged_move(
+    src: Path | str,
+    dst: Path | str,
+    *,
+    batch_id: str = "",
+    staging_root: Path | str | None = None,
+    settle_seconds: float | None = None,
+    undoable: bool = True,
+    honor_keep: bool = True,
+    skip_preflight: bool = False,
+    op: str = "move",
+    extra_patterns: Iterable[str] = (),
+) -> Path:
+    """Move ``src`` to ``dst`` via ``.staging\\<batch_id>\\`` with PENDING -> COMMITTED journaling."""
+    src = Path(src)
+    if not skip_preflight:
+        why = preflight(src, settle_seconds, honor_keep, extra_patterns)
+        if why:
+            raise Refused(why, src)
+
+    effective_batch = batch_id or uuid.uuid4().hex[:8]
+    final = _resolve_dest(Path(dst))
+    stage_base = Path(staging_root) if staging_root is not None else final.parent
+    batch_dir = staging_dir_for(stage_base, effective_batch)
+    staged_file = batch_dir / final.name
+
+    src_abs = str(src.resolve())
+    dest_abs = str(final.resolve())
+    op_id = _plan(op, Path(src_abs), Path(dest_abs), effective_batch)
+
+    try:
+        shutil.move(str(src), str(staged_file))
+        os.replace(str(staged_file), str(final))
+    except BaseException as exc:
+        if staged_file.exists() and not src.exists():
+            try:
+                shutil.move(str(staged_file), str(src))
+            except OSError:
+                pass
+        if not final.exists():
+            _abort(op_id, f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        try:
+            if batch_dir.exists() and not any(batch_dir.iterdir()):
+                batch_dir.rmdir()
+        except OSError:
+            pass
+
+    append_journal(_done_record(op_id, effective_batch, src_abs, dest_abs, op, undoable))
+    return final
+
+
+def cleanup_orphaned_staging(staging_root: Path | str, max_age_seconds: float = 300.0) -> list[Path]:
+    """Remove abandoned ``.staging\\<batch_id>`` directories older than ``max_age_seconds``."""
+    root = Path(staging_root) / STAGING_DIR_NAME
+    if not root.exists() or not root.is_dir():
+        return []
+    now = time.time()
+    removed: list[Path] = []
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            age = now - entry.stat().st_mtime
+        except OSError:
+            continue
+        if age >= max_age_seconds:
+            try:
+                shutil.rmtree(entry)
+                removed.append(entry)
+            except OSError:
+                pass
+    return removed

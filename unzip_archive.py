@@ -354,7 +354,15 @@ def unpack_archive(
                 else str(zip_destination)
             )
             try:
-                safe_ops.move(archive_path, zip_destination, batch_id=batch_id, settle_seconds=0.0, honor_keep=False, skip_preflight=True)
+                safe_ops.staged_move(
+                    archive_path,
+                    zip_destination,
+                    batch_id=batch_id,
+                    staging_root=archive_dest_dir,
+                    settle_seconds=0.0,
+                    honor_keep=False,
+                    skip_preflight=True,
+                )
                 logging.info("Moved original zip -> %s", zip_display)
             except (OSError, safe_ops.Refused) as exc:
                 logging.warning("Could not move original zip %s: %s", archive_path.name, exc)

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+import heapq
 import json
 import logging
 from pathlib import Path
@@ -50,6 +51,141 @@ from sorter import (
     write_runtime_state,
 )
 
+KIND_PRIORITY: dict[str, int] = {
+    "download": 0,
+    "document": 1,
+    "misplaced": 2,
+}
+
+
+class DebouncedPriorityQueue:
+    """Thread-safe debounced priority queue with exponential backoff for retries."""
+
+    def __init__(self, base_retry_delay: float = 0.5, max_retry_delay: float = 16.0) -> None:
+        self._lock = threading.Lock()
+        self._heaps: dict[str, list[tuple[float, int, int, Path]]] = {}
+        self._latest: dict[tuple[str, Path], tuple[float, int, int]] = {}
+        self._attempts: dict[tuple[str, Path], int] = {}
+        self._seq = 0
+        self.base_retry_delay = max(0.01, float(base_retry_delay))
+        self.max_retry_delay = max(self.base_retry_delay, float(max_retry_delay))
+
+    def _push_locked(self, kind: str, path: Path, delay: float, priority: int | None = None) -> float:
+        prio = KIND_PRIORITY.get(kind, 10) if priority is None else priority
+        deadline = time.monotonic() + max(0.0, float(delay))
+        self._seq += 1
+        seq = self._seq
+        self._latest[(kind, path)] = (deadline, prio, seq)
+        heap = self._heaps.setdefault(kind, [])
+        heapq.heappush(heap, (deadline, prio, seq, path))
+        return deadline
+
+    def enqueue(self, kind: str, path: Path, delay: float, *, priority: int | None = None) -> float:
+        """Schedule or debounce ``path``; resets any prior retry backoff."""
+        with self._lock:
+            self._attempts.pop((kind, path), None)
+            return self._push_locked(kind, path, delay, priority=priority)
+
+    def retry(
+        self,
+        kind: str,
+        path: Path,
+        base_delay: float | None = None,
+        max_delay: float | None = None,
+        *,
+        priority: int | None = None,
+    ) -> float:
+        """Re-schedule ``path`` with exponential backoff; returns the delay used."""
+        base = self.base_retry_delay if base_delay is None else max(0.01, float(base_delay))
+        cap = self.max_retry_delay if max_delay is None else max(base, float(max_delay))
+        with self._lock:
+            key = (kind, path)
+            attempt = self._attempts.get(key, 0) + 1
+            self._attempts[key] = attempt
+            delay = min(cap, base * (2 ** (attempt - 1)))
+            self._push_locked(kind, path, delay, priority=priority)
+            return delay
+
+    def attempts(self, kind: str, path: Path) -> int:
+        with self._lock:
+            return self._attempts.get((kind, path), 0)
+
+    def reset_attempts(self, kind: str, path: Path) -> None:
+        with self._lock:
+            self._attempts.pop((kind, path), None)
+
+    def take_due(self, kind: str, now: float | None = None) -> list[Path]:
+        """Pop all due items for ``kind`` ordered by (deadline, priority, seq)."""
+        ts = time.monotonic() if now is None else now
+        due: list[Path] = []
+        with self._lock:
+            heap = self._heaps.get(kind)
+            if not heap:
+                return due
+            while heap:
+                deadline, prio, seq, path = heap[0]
+                latest = self._latest.get((kind, path))
+                if latest is None or latest[2] != seq:
+                    heapq.heappop(heap)
+                    continue
+                if deadline > ts:
+                    break
+                heapq.heappop(heap)
+                self._latest.pop((kind, path), None)
+                due.append(path)
+        return due
+
+    def take_all_due(self, now: float | None = None) -> list[tuple[str, Path]]:
+        """Pop all due items across all kinds ordered by (priority, deadline, seq)."""
+        ts = time.monotonic() if now is None else now
+        items: list[tuple[int, float, int, str, Path]] = []
+        with self._lock:
+            for kind, heap in self._heaps.items():
+                while heap:
+                    deadline, prio, seq, path = heap[0]
+                    latest = self._latest.get((kind, path))
+                    if latest is None or latest[2] != seq:
+                        heapq.heappop(heap)
+                        continue
+                    if deadline > ts:
+                        break
+                    heapq.heappop(heap)
+                    self._latest.pop((kind, path), None)
+                    items.append((prio, deadline, seq, kind, path))
+        items.sort(key=lambda row: (row[0], row[1], row[2]))
+        return [(kind, path) for _, _, _, kind, path in items]
+
+    def next_delay(self, kinds: Iterable[str] | None = None, now: float | None = None) -> float | None:
+        """Return seconds until the earliest pending deadline, or None if empty."""
+        ts = time.monotonic() if now is None else now
+        earliest: float | None = None
+        with self._lock:
+            target_kinds = list(kinds) if kinds is not None else list(self._heaps.keys())
+            for kind in target_kinds:
+                heap = self._heaps.get(kind)
+                if not heap:
+                    continue
+                while heap:
+                    deadline, _prio, seq, path = heap[0]
+                    latest = self._latest.get((kind, path))
+                    if latest is None or latest[2] != seq:
+                        heapq.heappop(heap)
+                        continue
+                    if earliest is None or deadline < earliest:
+                        earliest = deadline
+                    break
+        if earliest is None:
+            return None
+        return max(0.0, earliest - ts)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._heaps.clear()
+            self._latest.clear()
+            self._attempts.clear()
+
+
+PRIORITY_QUEUE = DebouncedPriorityQueue()
 PENDING_DOWNLOADS: set[Path] = set()
 PENDING_DOCUMENTS: set[Path] = set()
 PENDING_MISPLACED: set[Path] = set()
@@ -69,43 +205,60 @@ def _settle_seconds(config: dict) -> float:
 
 def _enqueue(kind: str, bucket: set[Path], path: Path, config: dict) -> None:
     """Debounce repeated filesystem events and wake the coordinator."""
+    delay = _settle_seconds(config)
+    deadline = PRIORITY_QUEUE.enqueue(kind, path, delay)
     with QUEUE_LOCK:
         bucket.add(path)
-        PENDING_DEADLINES[(kind, path)] = time.monotonic() + _settle_seconds(config)
+        PENDING_DEADLINES[(kind, path)] = deadline
     WAKE_EVENT.set()
 
 
 def _take_due(kind: str, bucket: set[Path]) -> list[Path]:
     now = time.monotonic()
+    due = PRIORITY_QUEUE.take_due(kind, now=now)
+    seen = set(due)
     with QUEUE_LOCK:
-        due = [path for path in bucket if PENDING_DEADLINES.get((kind, path), 0.0) <= now]
         for path in due:
             bucket.discard(path)
             PENDING_DEADLINES.pop((kind, path), None)
+        # Support tests/callers that mutate PENDING_* and PENDING_DEADLINES directly.
+        direct_due = [
+            path
+            for path in bucket
+            if path not in seen and PENDING_DEADLINES.get((kind, path), 0.0) <= now
+        ]
+        for path in direct_due:
+            bucket.discard(path)
+            PENDING_DEADLINES.pop((kind, path), None)
+        due.extend(direct_due)
     return due
 
 
-def _retry(kind: str, bucket: set[Path], path: Path, delay: float = 0.5) -> None:
+def _retry(kind: str, bucket: set[Path], path: Path, delay: float | None = None) -> float:
+    used_delay = PRIORITY_QUEUE.retry(kind, path, base_delay=delay)
     with QUEUE_LOCK:
         bucket.add(path)
-        PENDING_DEADLINES[(kind, path)] = time.monotonic() + delay
+        PENDING_DEADLINES[(kind, path)] = time.monotonic() + used_delay
     WAKE_EVENT.set()
+    return used_delay
 
 
 def _next_pending_delay() -> float | None:
+    pq_delay = PRIORITY_QUEUE.next_delay(("download", "document", "misplaced"))
     with QUEUE_LOCK:
-        if not PENDING_DOWNLOADS and not PENDING_DOCUMENTS and not PENDING_MISPLACED:
-            return None
-        deadlines = [
+        direct_deadlines = [
             deadline
             for (kind, path), deadline in PENDING_DEADLINES.items()
             if (kind == "download" and path in PENDING_DOWNLOADS)
             or (kind == "document" and path in PENDING_DOCUMENTS)
             or (kind == "misplaced" and path in PENDING_MISPLACED)
         ]
-    if not deadlines:
-        return 0.0
-    return max(0.0, min(deadlines) - time.monotonic())
+    if not direct_deadlines:
+        return pq_delay
+    direct_delay = max(0.0, min(direct_deadlines) - time.monotonic())
+    if pq_delay is None:
+        return direct_delay
+    return min(pq_delay, direct_delay)
 
 
 def acquire_single_instance_lock(name: str = "DownloadSorter_SingleInstance") -> object:
@@ -338,6 +491,7 @@ def drain(
                     routing_context=routing_context,
                 )
                 if dest is not None:
+                    PRIORITY_QUEUE.reset_attempts("download", path)
                     moved_count += 1
                     _handle_post_move(dest, target_root, config, batch_id=batch_id)
                 elif (
@@ -379,6 +533,7 @@ def drain(
                     routing_context=routing_context,
                 )
                 if dest is not None:
+                    PRIORITY_QUEUE.reset_attempts("download", path)
                     moved_count += 1
                     _handle_post_move(dest, target_root, config, batch_id=batch_id)
             except Exception:
@@ -402,6 +557,7 @@ def drain(
                     routing_context=routing_context,
                 )
                 if dest is not None:
+                    PRIORITY_QUEUE.reset_attempts("download", path)
                     moved_count += 1
                     _handle_post_move(dest, target_root, config, batch_id=batch_id)
             except Exception:
@@ -695,6 +851,7 @@ class FolderWatches:
                 logging.debug("Unschedule failed: %s", exc)
         # Pending events belong to the old folders; the sweep after a retarget
         # picks up anything that is in the new ones.
+        PRIORITY_QUEUE.clear()
         with QUEUE_LOCK:
             PENDING_DOWNLOADS.clear()
             PENDING_DOCUMENTS.clear()

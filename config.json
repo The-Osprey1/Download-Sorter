@@ -12,8 +12,12 @@
   "auto_unzip": false,
   "extracted_destination": "Extracted",
   "gcode_sniffer_enabled": true,
-  "haas_destination": "3D Models",
-  "gcode_destination": "3D Models",
+  "fuzzy_keyword_matching": false,
+  "dedup_index_enabled": true,
+  "zip_content_routing": false,
+  "conflict_policy": "ask_ribbon",
+  "haas_destination": "Code\\Haas",
+  "gcode_destination": "Code\\Gcode",
   "document_sources": [],
   "documents_keep_extensions": [
     ".pdf",
@@ -90,49 +94,56 @@
   "keyword_rules": [],
   "extension_rules": [
     {
-      "name": "Documents",
-      "folder": "Documents",
+      "name": "3D STL",
+      "folder": "3D Models\\STL",
       "extensions": [
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".odt",
-        ".rtf",
-        ".txt",
-        ".md",
-        ".xls",
-        ".xlsx",
-        ".xlsm",
-        ".csv",
-        ".ods",
-        ".ppt",
-        ".pptx",
-        ".odp",
-        ".key",
-        ".epub",
-        ".mobi",
-        ".tex",
-        ".bib",
-        ".pkpass"
+        ".stl"
       ],
       "enabled": true
     },
     {
-      "name": "3D Models & Print Files",
-      "folder": "3D Models",
+      "name": "3D 3MF",
+      "folder": "3D Models\\3MF",
       "extensions": [
-        ".stl",
-        ".3mf",
-        ".obj",
+        ".3mf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D OBJ",
+      "folder": "3D Models\\OBJ",
+      "extensions": [
+        ".obj"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D STEP",
+      "folder": "3D Models\\STEP",
+      "extensions": [
         ".step",
         ".stp",
         ".iges",
-        ".igs",
+        ".igs"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D Other",
+      "folder": "3D Models\\Other",
+      "extensions": [
         ".3ds",
         ".fbx",
         ".blend",
         ".glb",
-        ".gltf",
+        ".gltf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "3D CAD",
+      "folder": "3D Models\\CAD",
+      "extensions": [
         ".f3d",
         ".f3z",
         ".ipt",
@@ -141,14 +152,74 @@
         ".sldasm",
         ".slddrw",
         ".dwg",
-        ".dxf",
-        ".gcode",
-        ".bgcode",
+        ".dxf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Haas / G-Code",
+      "folder": "Code\\Gcode",
+      "extensions": [
         ".nc",
         ".tap",
         ".ngc",
+        ".gcode",
+        ".bgcode",
         ".gco",
         ".g"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "PDF Documents",
+      "folder": "Documents\\PDFs",
+      "extensions": [
+        ".pdf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Word Documents",
+      "folder": "Documents\\Word",
+      "extensions": [
+        ".doc",
+        ".docx",
+        ".odt",
+        ".rtf"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Text Documents",
+      "folder": "Documents\\Text",
+      "extensions": [
+        ".txt",
+        ".md",
+        ".tex",
+        ".bib"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Spreadsheets",
+      "folder": "Spreadsheets",
+      "extensions": [
+        ".xls",
+        ".xlsx",
+        ".xlsm",
+        ".csv",
+        ".ods"
+      ],
+      "enabled": true
+    },
+    {
+      "name": "Presentations",
+      "folder": "Documents\\Presentations",
+      "extensions": [
+        ".ppt",
+        ".pptx",
+        ".odp",
+        ".key"
       ],
       "enabled": true
     },
@@ -301,5 +372,5 @@
     "active_folder_days": 14,
     "desktop_min_age_days": 30
   },
-  "makerworld_destination": "3D Models"
+  "makerworld_destination": "3D Models\\MakerWorld"
 }
