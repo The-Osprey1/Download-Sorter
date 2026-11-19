@@ -282,7 +282,7 @@ def test_scan_folders_button_runs_and_gives_feedback(
 # ---------------------------------------------------------------------------
 
 def test_subtitles_hidden_and_tooltips_present(v3_qapp, app_paths: AppPaths) -> None:  # noqa: ANN001
-    assert about.__version__ == "3.5.0"
+    assert about.__version__ == "3.5.1"
 
     row = SettingRow("Demo Row", "Explanation moved into hover tooltip")
     assert row.lbl_subtitle.isVisible() is False

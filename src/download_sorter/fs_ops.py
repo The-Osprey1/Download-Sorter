@@ -17,7 +17,7 @@ import time
 from typing import Any
 import uuid
 
-from download_sorter.db import StateDB
+from download_sorter.db import STAGING_DIR_NAME, StateDB
 from download_sorter.dest import is_under_watch_root
 from download_sorter.router import RouteDecision
 
@@ -42,7 +42,6 @@ _CLOUD_PLACEHOLDER_MASK = (
     | FILE_ATTRIBUTE_UNPINNED
     | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
 )
-STAGING_DIR_NAME = ".staging"
 SPARSE_DEDUP_MIN_BYTES = 1024
 
 # Slicers read a .3mf into memory and close the file, so a lock check cannot tell
@@ -251,6 +250,14 @@ def _hide_dir_win32(path: Path) -> None:
         pass
 
 
+def _remove_dir_if_empty(path: Path) -> None:
+    try:
+        if path.is_dir() and not any(path.iterdir()):
+            path.rmdir()
+    except OSError:
+        pass
+
+
 def staging_dir_for(base_dir: Path, batch_id: str) -> Path:
     """Create and return ``<base_dir>\\.staging\\<batch_id>``."""
     staging_root = Path(base_dir) / STAGING_DIR_NAME
@@ -281,6 +288,7 @@ def cleanup_orphaned_staging(watch_root: Path, max_age_seconds: float = 300.0) -
                 removed.append(entry)
             except OSError:
                 pass
+    _remove_dir_if_empty(root)
     return removed
 
 
@@ -463,7 +471,7 @@ def _move_with_retries(src: Path, dest: Path) -> None:
             except OSError as replace_err:
                 # Cross-volume move stages into .staging\<batch_id>\ on destination volume first.
                 if getattr(replace_err, "winerror", None) == 17 or getattr(replace_err, "errno", None) == 18:
-                    stage_dir = staging_dir_for(dest.parent, "xvol")
+                    stage_dir = staging_dir_for(dest.parent, f"xvol-{uuid.uuid4().hex[:8]}")
                     staged_file = stage_dir / dest.name
                     try:
                         shutil.copy2(str(src), str(staged_file))
@@ -477,11 +485,8 @@ def _move_with_retries(src: Path, dest: Path) -> None:
                             pass
                         raise
                     finally:
-                        try:
-                            if stage_dir.exists() and not any(stage_dir.iterdir()):
-                                stage_dir.rmdir()
-                        except OSError:
-                            pass
+                        _remove_dir_if_empty(stage_dir)
+                        _remove_dir_if_empty(stage_dir.parent)
                 else:
                     raise
             return
@@ -1213,12 +1218,16 @@ def extract_zip_safely(
     if extract_root.exists():
         extract_root = _next_available_name(extract_root)
 
-    effective_batch = batch_id or f"unzip-{uuid.uuid4().hex[:8]}"
-    stage_dir = staging_dir_for(target_dir, effective_batch)
+    # Stage under the watch root's own .staging folder (same volume as the target,
+    # and the folder startup cleanup checks), one folder per extraction.
+    stage_name = f"{batch_id or 'unzip'}-{uuid.uuid4().hex[:8]}"
+    stage_dir = root / STAGING_DIR_NAME / stage_name
     staged_files: list[str] = []
     extracted: list[str] = []
     total_extracted_bytes = 0
+    promoted = False
     try:
+        stage_dir = staging_dir_for(root, stage_name)
         with zipfile.ZipFile(src, "r") as zf:
             infos = [info for info in zf.infolist() if not info.is_dir()]
             if len(infos) > max_files:
@@ -1278,10 +1287,15 @@ def extract_zip_safely(
 
         extract_root.parent.mkdir(parents=True, exist_ok=True)
         os.replace(stage_dir, extract_root)
+        promoted = True
         extracted = [str((extract_root / rel).resolve()) for rel in staged_files]
+        _remove_dir_if_empty(root / STAGING_DIR_NAME)
     except (ZipBombError, zipfile.BadZipFile, OSError, RuntimeError) as exc:
         shutil.rmtree(stage_dir, ignore_errors=True)
-        shutil.rmtree(extract_root, ignore_errors=True)
+        if promoted:
+            # Only a folder this call created; never one that was already there.
+            shutil.rmtree(extract_root, ignore_errors=True)
+        _remove_dir_if_empty(root / STAGING_DIR_NAME)
         logging.warning("Zip extraction aborted for %s: %s", src.name, exc)
         return {
             "ok": False,
