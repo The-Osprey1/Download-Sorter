@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import zipfile
 import zlib
 
-from download_sorter.config import Config, Rule
+from download_sorter.config import DEFAULT_CATEGORY_MAP, Config, Rule
 from download_sorter.dest import apply_rename_template, read_exif_date, resolve_destination_tokens, to_relative_dest
 
 _NON_WORD_RE = re.compile(r"[^a-z0-9]+")
@@ -100,14 +100,17 @@ def sniff_magic_extension(path: Path | None) -> str:
     if head.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
         try:
             with zipfile.ZipFile(path, "r") as zf:
-                names = {n.replace("\\", "/").lstrip("/").lower() for n in zf.namelist()[:128]}
-                if "3d/3dmodel.model" in names or any(n.startswith("3d/") and n.endswith(".model") for n in names):
+                # Case-sensitive part names that real 3MF and Office files always carry.
+                # Folder names alone are not enough: an ordinary zip of a "Word" or
+                # "PPT" folder is still an archive.
+                names = {n.replace("\\", "/").lstrip("/") for n in zf.namelist()}
+                if "3D/3dmodel.model" in names:
                     return ".3mf"
-                if "word/document.xml" in names or any(n.startswith("word/") for n in names):
+                if "word/document.xml" in names:
                     return ".docx"
-                if "xl/workbook.xml" in names or any(n.startswith("xl/") for n in names):
+                if "xl/workbook.xml" in names:
                     return ".xlsx"
-                if "ppt/presentation.xml" in names or any(n.startswith("ppt/") for n in names):
+                if "ppt/presentation.xml" in names:
                     return ".pptx"
         except (zipfile.BadZipFile, OSError):
             pass
@@ -252,26 +255,26 @@ def candidate_from_path(path: Path) -> FileCandidate:
     return FileCandidate(filename=path.name, path=path, source_url=read_zone_url(path))
 
 
+# Each abbreviation stands for one meaning. Abbreviations that commonly mean
+# something else ("rev" as review, "sol" as solar, "calc" as calculator, "mech"
+# as a mechanical keyboard) are left out: they filed unrelated files.
 _TOKEN_ALIASES: dict[str, tuple[str, ...]] = {
     "hw": ("homework",),
     "hmk": ("homework",),
     "syl": ("syllabus",),
     "syll": ("syllabus",),
     "lec": ("lecture",),
-    "sol": ("solution", "solutions"),
     "soln": ("solution", "solutions"),
     "proj": ("project",),
     "sched": ("schedule",),
     "lab": ("laboratory",),
     "assn": ("assignment",),
     "asgmt": ("assignment",),
-    "calc": ("calculus",),
     "thermo": ("thermodynamics",),
-    "mech": ("mechanics", "mechanical"),
     "mfg": ("manufacturing",),
     "dwg": ("drawing",),
     "spec": ("specification",),
-    "rev": ("review", "revision"),
+    "rev": ("revision",),
 }
 
 _REVERSE_ALIASES: dict[str, set[str]] = {}
@@ -355,18 +358,11 @@ def _keyword_matches(filename: str, keyword: str) -> bool:
         return True
     # Support unordered multi-word token matching (e.g. "tax return" -> "2026_Return_Tax"),
     # including academic/engineering alias expansion (e.g. "hw" <-> "homework").
+    # The filename's tokens are widened by one step (abbreviation <-> full word);
+    # the keyword is not, so two words that only share an abbreviation never match.
     expanded_name_set = set(normalize_filename_tokens(filename, expand_aliases=True))
-    if len(kw_tokens) == 1 and kw_tokens[0] in expanded_name_set:
+    if kw_tokens and all(t in expanded_name_set for t in kw_tokens):
         return True
-    if len(kw_tokens) > 1:
-        all_found = True
-        for t in kw_tokens:
-            candidates = {t} | set(_TOKEN_ALIASES.get(t, ())) | _REVERSE_ALIASES.get(t, set())
-            if not (candidates & expanded_name_set):
-                all_found = False
-                break
-        if all_found:
-            return True
     # High-threshold fuzzy match for longer single-word keywords (>= 5 chars) to tolerate minor typos.
     # The first letter has to agree: a typo there is rare, and without it 'lecture'
     # matched 'electure' and similar words that merely contain the keyword.
@@ -570,11 +566,54 @@ def _is_zip_slip_entry(entry_name: str) -> bool:
     return ".." in parts
 
 
+def _inner_rule_match(
+    rule: Rule,
+    inner_name: str,
+    outer: FileCandidate | None,
+    outer_stats: tuple[int | None, float | None],
+) -> tuple[bool, str, str, dict[str, str]]:
+    """Check one rule against a file inside an archive.
+
+    Only rules with keywords are considered, and a keyword has to name the inner
+    file. The rule's other conditions (file types, exclude words, size and age,
+    websites, regex, ALL/ANY) are then checked as usual, with the archive's own
+    size, age and download source standing in for the inner file's. Exclude words
+    also apply to the archive's own name.
+    """
+    if not rule.enabled or not rule.keywords:
+        return False, "", "", {}
+    kw_hit = next((kw for kw in rule.keywords if _keyword_matches(inner_name, kw)), None)
+    if kw_hit is None:
+        return False, "", "", {}
+    if outer is not None and any(_keyword_matches(outer.stem, ex) for ex in rule.exclude_keywords):
+        return False, "", "", {}
+    size, age = outer_stats
+    inner = FileCandidate(
+        filename=inner_name,
+        source_url=outer.source_url if outer else "",
+        tab_url=outer.tab_url if outer else "",
+        tab_title=outer.tab_title if outer else "",
+        size_bytes=size,
+        age_days=age,
+    )
+    captured: dict[str, str] = {}
+    ok, detail = _evaluate_rule(rule, inner, captured_groups=captured)
+    return ok, kw_hit, detail, captured
+
+
 def peek_zip_contents(
     path: Path | None,
     rules: list[Rule] | None = None,
+    *,
+    candidate: FileCandidate | None = None,
+    category_map: dict[str, str] | None = None,
 ) -> ZipPeekResult:
-    """Inspect a ZIP archive's central directory without extracting any files."""
+    """Inspect a ZIP archive's central directory without extracting any files.
+
+    ``suggested_destination`` comes from ``category_map`` (the user's file-type
+    folders; the built-in map when omitted), using the most common file type of
+    the archive's dominant kind. It is empty when that map has no folder for it.
+    """
     if path is None or not path.is_file():
         return ZipPeekResult(valid=False, file_count=0)
     try:
@@ -598,56 +637,62 @@ def peek_zip_contents(
         return ZipPeekResult(valid=True, file_count=0, has_path_traversal=has_traversal)
 
     cats: dict[str, int] = {"3d": 0, "gcode": 0, "docs": 0, "code": 0, "media": 0, "other": 0}
+    ext_counts: dict[str, dict[str, int]] = {k: {} for k in cats}
     for f in files:
         f_ext = Path(f).suffix.lower()
         if f_ext in _ZIP_3D_EXTS:
-            cats["3d"] += 1
+            cat = "3d"
         elif f_ext in _ZIP_GCODE_EXTS:
-            cats["gcode"] += 1
+            cat = "gcode"
         elif f_ext in _ZIP_DOC_EXTS:
-            cats["docs"] += 1
+            cat = "docs"
         elif f_ext in _ZIP_CODE_EXTS:
-            cats["code"] += 1
+            cat = "code"
         elif f_ext in _ZIP_MEDIA_EXTS:
-            cats["media"] += 1
+            cat = "media"
         else:
-            cats["other"] += 1
+            cat = "other"
+        cats[cat] += 1
+        ext_counts[cat][f_ext] = ext_counts[cat].get(f_ext, 0) + 1
 
-    if rules:
+    if rules and not has_traversal:
+        outer_stats = _candidate_stats(candidate) if candidate is not None else (None, None)
         for rule in rules:
-            if not rule.enabled or not rule.keywords:
-                continue
             for inner in files:
                 inner_name = Path(inner).name
-                for kw in rule.keywords:
-                    if _keyword_matches(inner_name, kw):
-                        return ZipPeekResult(
-                            valid=True,
-                            file_count=len(files),
-                            categories=cats,
-                            dominant_category="keyword_match",
-                            suggested_destination=rule.destination,
-                            matched_rule=rule.name,
-                            matched_trigger=f"{inner_name} ~ {kw}",
-                            has_path_traversal=has_traversal,
-                            sample_names=tuple(files[:10]),
-                        )
+                ok, kw, _detail, captured = _inner_rule_match(rule, inner_name, candidate, outer_stats)
+                if not ok:
+                    continue
+                dest = rule.destination
+                for gk, gv in captured.items():
+                    dest = dest.replace(f"{{{gk}}}", gv)
+                return ZipPeekResult(
+                    valid=True,
+                    file_count=len(files),
+                    categories=cats,
+                    dominant_category="keyword_match",
+                    suggested_destination=dest,
+                    matched_rule=rule.name,
+                    matched_trigger=f"{inner_name} ~ {kw}",
+                    has_path_traversal=has_traversal,
+                    sample_names=tuple(files[:10]),
+                )
 
     total = len(files)
     best_cat, best_count = max(cats.items(), key=lambda kv: kv[1])
-    suggested = ""
     if cats["3d"] > 0 and (cats["3d"] / total >= 0.35 or best_cat == "3d"):
         best_cat = "3d"
-        suggested = "3D Models"
     elif cats["gcode"] > 0 and cats["gcode"] >= cats["3d"]:
         best_cat = "gcode"
-        suggested = "Code/Gcode"
-    elif best_count / total >= 0.5:
-        suggested = {
-            "docs": "Documents",
-            "code": "Code",
-            "media": "Images",
-        }.get(best_cat, "")
+    elif best_count / total < 0.5 or best_cat == "other":
+        best_cat = ""
+
+    suggested = ""
+    if best_cat:
+        if category_map is None:
+            category_map = DEFAULT_CATEGORY_MAP
+        by_count = sorted(ext_counts[best_cat].items(), key=lambda kv: (-kv[1], kv[0]))
+        suggested = next((category_map[e] for e, _n in by_count if category_map.get(e)), "")
 
     return ZipPeekResult(
         valid=True,
@@ -812,7 +857,12 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
 
     # Step 2.5: Pre-routing ZIP content peek (when no explicit User Rule matched)
     if ext == ".zip" and candidate.path is not None:
-        zip_peek = peek_zip_contents(candidate.path, rules=config.rules)
+        zip_peek = peek_zip_contents(
+            candidate.path,
+            rules=config.rules,
+            candidate=candidate,
+            category_map=config.category_map,
+        )
         if zip_peek.has_path_traversal:
             trace.append(RouteStep("Zip Peek", "Security check", True, "Zip Slip path traversal detected; falling back to archive rule"))
         elif zip_peek.valid and zip_peek.suggested_destination:

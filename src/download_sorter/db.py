@@ -47,6 +47,43 @@ CREATE TABLE IF NOT EXISTS file_hashes (
 CREATE INDEX IF NOT EXISTS idx_file_hashes_size_sparse ON file_hashes(size_bytes, sparse_hash);
 """
 
+# Hidden folder that holds partial copies while a cross-volume move or a ZIP
+# extraction is in progress (``<folder>\\.staging\\<id>\\``).
+STAGING_DIR_NAME = ".staging"
+
+
+def _remove_staged_copies(dest: Path) -> int:
+    """Delete partial copies of ``dest`` left in ``dest.parent/.staging`` by a crash.
+
+    Everything under ``.staging`` is written by Download Sorter itself, never by
+    the user, and the move it belonged to never finished.
+    """
+    staging_root = dest.parent / STAGING_DIR_NAME
+    if not staging_root.is_dir():
+        return 0
+    removed = 0
+    try:
+        batch_dirs = [d for d in staging_root.iterdir() if d.is_dir()]
+    except OSError:
+        return 0
+    for batch_dir in batch_dirs:
+        staged = batch_dir / dest.name
+        try:
+            if staged.is_file():
+                staged.unlink()
+                removed += 1
+            if not any(batch_dir.iterdir()):
+                batch_dir.rmdir()
+        except OSError as exc:
+            logging.warning("Could not remove staged copy %s: %s", staged, exc)
+    try:
+        if not any(staging_root.iterdir()):
+            staging_root.rmdir()
+    except OSError:
+        pass
+    return removed
+
+
 # Move lifecycle. A row is written as PENDING before the file is touched and
 # becomes COMPLETED once the file is at its destination, so a crash between the
 # two never leaves a moved file without history. ROLLED_BACK rows are moves that
@@ -230,6 +267,7 @@ class StateDB:
             move_id = int(rec["id"])
             src = Path(str(rec["src_path"]))
             dest = Path(str(rec["dest_path"]))
+            summary["partials_removed"] += _remove_staged_copies(dest)
             src_exists = os.path.lexists(src)
             dest_exists = os.path.lexists(dest)
             if dest_exists and not src_exists:

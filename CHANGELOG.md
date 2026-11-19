@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-11-19
+
+### Fixed
+- **Keyword shortcuts filed unrelated files (`router.py`).** The 3.5.0 shortcuts that let "hw" match "homework" also let "review" match `PCB_rev3.zip`, "solution" match `sol_system_map.png`, "calculus" match `calc_mortgage.xlsx` and "fluid mechanics" match `fluid_mechanical_pump.pdf`. A shortcut now only connects an abbreviation with its own full word, and the abbreviations that usually mean something else ("sol", "calc", "mech", and "rev" as review) are gone. "rev" still means revision.
+- **Zipped folders were taken for Office files (`router.py`).** A zip holding a folder named `Word`, `PPT` or `XL` was filed as a Word, PowerPoint or Excel file. A zip now counts as an Office or 3MF file only when it has the parts those files always contain.
+- **Zips went to folders you never made (`router.py`).** Sorting a zip by what is inside it used fixed folder names ("Documents", "Images", "Code", "3D Models", "Code/Gcode") ahead of your own file-type folders. It now uses your folder for the main file type inside, and when you have none, the zip goes where your zips normally go.
+- **A word inside a zip skipped the rest of the rule (`router.py`).** When a rule's keyword named a file inside a zip, the rule's file types, exclude words, websites, size and age limits and ALL/ANY setting were ignored. They are all checked now, and exclude words also apply to the zip's own name.
+- **A failed unzip could delete a folder it did not make (`fs_ops.py`).** If a folder with the zip's name appeared just before unzipping finished, the cleanup after the failure removed it. Only folders the unzip itself made are removed now.
+- **Hidden `.staging` folders were left behind (`fs_ops.py`, `db.py`).** Unzipping now works inside `Downloads\.staging`, which startup cleanup checks, and every `.staging` folder is removed once it is empty. A copy left in a destination's `.staging` folder by a move to another drive that was cut short is removed when Download Sorter next starts.
+
 ## [3.5.0] - 2026-11-18
 
 ### Added
