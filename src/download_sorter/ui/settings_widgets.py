@@ -14,6 +14,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QCheckBox,
     QFrame,
     QHBoxLayout,
@@ -162,6 +163,20 @@ class SettingRow(QWidget):
                 if subtitle and not ctrl.toolTip():
                     ctrl.setToolTip(subtitle)
                 right_row.addWidget(ctrl, 0, Qt.AlignmentFlag.AlignVCenter)
+            # Screen readers announce the switch or box by the row's title; a button
+            # with its own label ("Browse...") keeps that.
+            for ctrl in ctrl_list:
+                labelled = isinstance(ctrl, QAbstractButton) and not isinstance(ctrl, QCheckBox) and any(
+                    ch.isalnum() for ch in ctrl.text()
+                )
+                if labelled:
+                    continue
+                if not ctrl.accessibleName():
+                    ctrl.setAccessibleName(title)
+                if subtitle and not ctrl.accessibleDescription():
+                    ctrl.setAccessibleDescription(subtitle)
+                if self.lbl_title.buddy() is None:
+                    self.lbl_title.setBuddy(ctrl)
             outer.addLayout(right_row, stretch=0)
 
 

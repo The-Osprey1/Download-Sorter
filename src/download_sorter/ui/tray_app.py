@@ -22,6 +22,7 @@ from download_sorter.dest import is_under_watch_root
 from download_sorter.ipc import DEFAULT_IPC_NAME, DeferredReply, IPCServer, send_ipc_command
 from download_sorter.paths import AppPaths
 from download_sorter.service import SorterService
+from download_sorter.ui.accessibility import install_screen_reader_names
 from download_sorter.ui.main_window import MainWindow
 from download_sorter.ui.toasts import ToastManager
 from download_sorter.ui.workers import run_async
@@ -266,6 +267,7 @@ def run_app(
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    install_screen_reader_names(app)
     icon = _build_default_icon()
     app.setWindowIcon(icon)
 

@@ -74,6 +74,7 @@ from download_sorter.paths import AppPaths
 from download_sorter.quick_switcher import normalize_hotkey, parse_hotkey
 from download_sorter.service import SorterService
 from download_sorter import update_check, updater
+from download_sorter.ui.accessibility import name_controls_for_screen_readers
 from download_sorter.ui.architecture_canvas import ArchitectureTab
 from download_sorter.ui.chrome_walkthrough import ChromeExtensionWalkthroughDialog
 from download_sorter.ui.motion import (
@@ -1077,6 +1078,7 @@ class DuplicateManagerDialog(QDialog):
 
         for idx, entry in enumerate(self._entries):
             chk = QCheckBox()
+            chk.setAccessibleName(f"Select {entry.get('name') or 'this duplicate'}")
             chk.stateChanged.connect(lambda _s: self._update_summary())
             holder = QWidget()
             hl = QHBoxLayout(holder)
@@ -1436,6 +1438,8 @@ class MainWindow(QMainWindow):
         self.moves_received.connect(self._on_background_moves_received)
         self.refresh_all()
         install_global_button_feedback(self, self.lbl_footer)
+        # Before a narrow window drops the header buttons' text.
+        name_controls_for_screen_readers(self)
 
     # ------------------------------------------------------------------
     # Single-Row Apple Toolbar
@@ -2746,6 +2750,8 @@ class MainWindow(QMainWindow):
         self.tbl_rules.setRowCount(len(rules))
         for idx, rule in enumerate(rules):
             chk = QCheckBox()
+            chk.setAccessibleName(f"Rule {rule.name} is on")
+            chk.setToolTip(f"Turn the rule '{rule.name}' on or off")
             chk.setChecked(rule.enabled)
             chk.toggled.connect(lambda checked, i=idx: self._toggle_rule_enabled(i, checked))
             holder = QWidget()
