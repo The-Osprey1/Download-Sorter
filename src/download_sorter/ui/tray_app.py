@@ -16,6 +16,7 @@ from PySide6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from download_sorter import quiet_time
+from download_sorter.diagnostics import configure_file_logging, install_crash_logging
 from download_sorter.db import STATUS_COMPLETED
 from download_sorter.dest import is_under_watch_root
 from download_sorter.ipc import DEFAULT_IPC_NAME, DeferredReply, IPCServer, send_ipc_command
@@ -246,11 +247,8 @@ def run_app(
     """Start the single-process Download Sorter v3 tray + window + watcher."""
     app_paths = paths or AppPaths.default()
     app_paths.ensure_dirs()
-    logging.basicConfig(
-        filename=str(app_paths.log_file),
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    configure_file_logging(app_paths.log_file)
+    install_crash_logging()
 
     hello = "show_window" if show_window else "ping"
     if send_ipc_command(hello, server_name=ipc_name) is not None:
