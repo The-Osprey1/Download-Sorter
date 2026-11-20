@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Pick what you download in the welcome steps.** The second welcome step now asks what you download most and adds rules for the ones you tick: School, Job hunting, Bills & receipts, Travel, Contracts or 3D printing. It used to be about holding 3D-print files for a slicer.
+- **Three everyday rule packs:** Bills & receipts (invoices, receipts, bank statements, tax forms, also in German, Spanish, French, Italian, Portuguese, Russian, Japanese and Chinese), Travel (boarding passes, itineraries, bookings) and Contracts (agreements, leases, signed documents). The Custom Rules page offers every pack from one **+ Rule Pack** menu.
+- **Screen readers can name every button.** Narrator, NVDA and JAWS read icon-only buttons as "button", the × close button as "multiplication sign" and the Settings switches with no label. Every button, switch and text box now has a name taken from its label, tooltip or Settings row.
+
+### Changed
+- **New installs start with file-type sorting only.** Every new install used to get the School, Career and 3D printing rules. **Return to Defaults** uses the same starting point. People upgrading from 2.x still get the three original packs.
+- **Ribbons wait out full-screen apps.** The top-right ribbon no longer slides over a game, a full-screen video, a presentation or the lock screen. The files are still sorted and listed on Home with **Undo**. (Windows' own Do Not Disturb switch isn't reported to apps this way, so it isn't covered yet.)
+- **The log stays small.** `sorter_v3.log` starts a new file at 2 MB and keeps two older ones (about 6 MB in all) instead of growing for as long as the app is installed. Unexpected errors are written to it with the details a fix needs.
+
+### Fixed
+- **Rules didn't work for file names in many languages.** A rule word in Russian, Greek, Arabic, Chinese or Japanese never matched, and an accented word lost its accented letters, so "über" matched `ber_report.pdf`. Words now work in any language, accents on Latin letters are optional (`resume` matches `Résumé.pdf`), and words in languages written without spaces are found inside longer names (`請求書` in `2026年4月請求書.pdf`). Renaming with `{stem_slug}` keeps non-English letters instead of turning the name into `file`.
+- **The wrong folder was watched if Downloads had been moved.** Download Sorter always watched `%USERPROFILE%\Downloads`. If you moved Downloads to another drive, or OneDrive moved it, your real downloads were never sorted. It now asks Windows where Downloads is, and Settings shows that folder.
+- **The window could read gigabytes on every refresh.** Each refresh paired every file in `_Duplicates` with its original by reading both in full, so one 4 GB duplicate meant 8 GB of reading after every sort. The answer is now remembered until either file changes.
+
 ## [3.5.1] - 2026-11-19
 
 ### Fixed

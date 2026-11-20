@@ -21,6 +21,7 @@ Tick these off as you go. You don't have to do them all, and anything that surpr
 **First day**
 
 - [ ] The three welcome steps made sense. Nothing was sorted until you finished or skipped them.
+- [ ] On the second welcome step you ticked what you download most, and those rules showed up on **Custom Rules**.
 - [ ] On **Home**, the preview of what is in Downloads showed where each file would go and why, before anything moved.
 - [ ] **Undo** on a row (and **Undo Last Batch** from the tray icon) put the file back where it was.
 - [ ] Download a PDF, a picture and a zip from your browser. Each one was filed a few seconds after it finished, and a ribbon showed where it went.
