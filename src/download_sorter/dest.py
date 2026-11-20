@@ -190,7 +190,9 @@ def to_relative_dest(
 
     if path.drive or path.root:  # C:\..., \\server\share\..., or \...
         if watch_root is None:
-            watch_root = Path.home() / "Downloads"
+            from download_sorter.paths import default_downloads_dir
+
+            watch_root = default_downloads_dir()
         rel = _relative_to(path, watch_root)
         if rel is None:
             rel = _relative_to(path, Path.home())

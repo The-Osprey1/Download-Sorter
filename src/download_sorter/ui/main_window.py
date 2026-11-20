@@ -63,9 +63,9 @@ from download_sorter.config import (
     Rule,
     carry_over_setup,
     export_setup_file,
+    display_watch_folder,
     import_v2_config,
-    portable_path,
-    readable_path,
+    stored_watch_folder,
 )
 from download_sorter.learning import dismiss_suggestion, get_rule_suggestions
 from download_sorter.paths import AppPaths
@@ -246,7 +246,7 @@ class UpgradeCarryOverDialog(QDialog):
                 f"Detected {schema_txt} · {summary['rules_imported']} custom rule(s) · "
                 f"{summary['categories_imported']} extension rule(s) · "
                 f"{summary['subfolders_imported']} type subfolder(s)\n"
-                f"Protected .3MF Hold: {hold_txt} · Watch folder: {readable_path(str(summary['watch_folder']))}\n"
+                f"Protected .3MF Hold: {hold_txt} · Watch folder: {display_watch_folder(str(summary['watch_folder']))}\n"
                 f"Resulting Folder Architecture: {summary['tier_count']} tier(s), "
                 f"{summary['arch_nodes']} folder node(s)."
             )
@@ -2810,7 +2810,7 @@ class MainWindow(QMainWindow):
     def _refresh_settings_fields(self) -> None:
         cfg = self.service.config
         self.chk_auto_sort.setChecked(not cfg.paused)
-        self.edit_watch_folder.setText(readable_path(cfg.watch_folder))
+        self.edit_watch_folder.setText(display_watch_folder(cfg.watch_folder))
         self.spin_settle.setValue(cfg.settle_seconds)
         idx = self.combo_fallback.findData(cfg.fallback_mode)
         self.combo_fallback.setCurrentIndex(max(0, idx))
@@ -3397,7 +3397,7 @@ class MainWindow(QMainWindow):
         cfg = copy.deepcopy(self.service.config)
         cfg.paused = not self.chk_auto_sort.isChecked()
         typed = self.edit_watch_folder.text().strip()
-        cfg.watch_folder = portable_path(typed) if typed else r"${USERPROFILE}\Downloads"
+        cfg.watch_folder = stored_watch_folder(typed)
         cfg.settle_seconds = float(self.spin_settle.value())
         cfg.fallback_mode = str(self.combo_fallback.currentData() or "other")
         cfg.use_type_subfolders = self.chk_type_subfolders.isChecked()

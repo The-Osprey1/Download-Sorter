@@ -13,7 +13,8 @@ import uuid
 from typing import Any
 
 from download_sorter.dest import to_relative_dest
-from download_sorter.paths import AppPaths
+from download_sorter import paths as _paths
+from download_sorter.paths import DEFAULT_WATCH_FOLDER, AppPaths, is_default_watch_folder
 
 DEFAULT_IGNORE_EXTENSIONS: list[str] = [
     ".crdownload",
@@ -389,7 +390,7 @@ class Config:
     """Validated Download Sorter v3 configuration."""
 
     schema_version: int = 3
-    watch_folder: str = r"${USERPROFILE}\Downloads"
+    watch_folder: str = DEFAULT_WATCH_FOLDER
     settle_seconds: float = 3.0
     fallback_mode: str = "other"  # "other" or "leave"
     default_folder: str = "Other"
@@ -418,7 +419,7 @@ class Config:
 
     def __post_init__(self) -> None:
         self.schema_version = 3
-        self.watch_folder = str(self.watch_folder or r"${USERPROFILE}\Downloads")
+        self.watch_folder = str(self.watch_folder or DEFAULT_WATCH_FOLDER)
         self.settle_seconds = max(0.0, float(self.settle_seconds))
         self.fallback_mode = self.fallback_mode if self.fallback_mode in ("other", "leave") else "other"
         self.default_folder = str(self.default_folder or "Other").strip().strip("\\") or "Other"
@@ -489,6 +490,10 @@ class Config:
     def resolved_watch_folder(self, paths: AppPaths | None = None) -> Path:
         if paths is not None and paths.downloads_dir is not None:
             return paths.downloads_dir.resolve()
+        if is_default_watch_folder(self.watch_folder):
+            known = _paths.known_downloads_dir()
+            if known is not None:
+                return known.resolve()
         expanded = os.path.expandvars(os.path.expanduser(self.watch_folder))
         return Path(expanded).resolve()
 
@@ -539,7 +544,7 @@ class Config:
         if not isinstance(data, dict):
             raise TypeError("Config payload must be a JSON object")
         return cls(
-            watch_folder=data.get("watch_folder", r"${USERPROFILE}\Downloads"),
+            watch_folder=data.get("watch_folder", DEFAULT_WATCH_FOLDER),
             settle_seconds=data.get("settle_seconds", 3.0),
             fallback_mode=data.get("fallback_mode", "other"),
             default_folder=data.get("default_folder", "Other"),
@@ -653,6 +658,34 @@ def readable_path(text: str) -> str:
     return str(PureWindowsPath(os.path.expandvars(expanded)))
 
 
+def display_watch_folder(stored: str) -> str:
+    """The watched folder as Settings shows it: the real Downloads folder for the default."""
+    if is_default_watch_folder(stored):
+        known = _paths.known_downloads_dir()
+        if known is not None:
+            return str(known)
+    return readable_path(stored)
+
+
+def stored_watch_folder(typed: str) -> str:
+    """What Settings saves for a typed folder.
+
+    Leaving the field empty, or leaving it on the real Downloads folder, saves the
+    default, so the app keeps following Downloads if Windows moves it later.
+    """
+    text = str(typed or "").strip()
+    if not text or is_default_watch_folder(text):
+        return DEFAULT_WATCH_FOLDER
+    known = _paths.known_downloads_dir()
+    if known is not None:
+        try:
+            if Path(text).resolve() == known.resolve():
+                return DEFAULT_WATCH_FOLDER
+        except (OSError, ValueError):
+            pass
+    return portable_path(text)
+
+
 def import_v2_config(v2_path: Path) -> Config:
     """Convert a Download Sorter v2.x (or v3/exported) ``config.json`` into a complete v3 ``Config``."""
     raw = json.loads(Path(v2_path).read_text(encoding="utf-8"))
@@ -673,7 +706,7 @@ def import_v2_config(v2_path: Path) -> Config:
 
     watch_block = raw.get("watch") if isinstance(raw.get("watch"), dict) else {}
     watch_folder = _normalize_profile_vars(
-        str(watch_block.get("folder") or raw.get("downloads_dir") or r"${USERPROFILE}\Downloads")
+        str(watch_block.get("folder") or raw.get("downloads_dir") or DEFAULT_WATCH_FOLDER)
     )
     settle_seconds = float(watch_block.get("settle_seconds", 3.0))
     type_folders = raw.get("type_folders") if isinstance(raw.get("type_folders"), dict) else {}
