@@ -21,6 +21,8 @@ DEFAULT_FALLBACK = "Other"
 _VAR_PART_RE = re.compile(r"^(\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[^%]*%)$")
 _BAD_CHARS = set('<>:"|?*')
 _UNSAFE_TOKEN_CHARS_RE = re.compile(r'[^A-Za-z0-9._-]+')
+# Like the above, but keeps letters and digits from every language (for name text).
+_UNSAFE_NAME_CHARS_RE = re.compile(r"[^\w.-]+")
 _EXIF_DATE_RE = re.compile(rb"(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})")
 
 
@@ -93,7 +95,7 @@ def apply_rename_template(
     ext = p.suffix.lstrip(".")
     now = when or datetime.now()
     photo_dt = exif_date or now
-    slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "file"
+    slug = re.sub(r"[\W_]+", "-", stem.lower()).strip("-") or "file"
     clean_host = _UNSAFE_TOKEN_CHARS_RE.sub("-", (host or "").strip().lower()).strip(".-") or "unknown-site"
 
     tokens = {
@@ -110,7 +112,7 @@ def apply_rename_template(
     }
     if regex_groups:
         for k, v in regex_groups.items():
-            safe_val = _UNSAFE_TOKEN_CHARS_RE.sub("_", str(v or "")).strip("_")
+            safe_val = _UNSAFE_NAME_CHARS_RE.sub("_", str(v or "")).strip("_")
             if k:
                 tokens[f"{{{k}}}"] = safe_val
 

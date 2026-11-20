@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 import re
 import time
+import unicodedata
 from urllib.parse import urlparse
 import zipfile
 import zlib
@@ -14,9 +15,20 @@ import zlib
 from download_sorter.config import DEFAULT_CATEGORY_MAP, Config, Rule
 from download_sorter.dest import apply_rename_template, read_exif_date, resolve_destination_tokens, to_relative_dest
 
-_NON_WORD_RE = re.compile(r"[^a-z0-9]+")
-_CAMEL_SPLIT_RE = re.compile(r"([a-z0-9])([A-Z])")
-_LETTER_DIGIT_RE = re.compile(r"(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])")
+# Anything that is not a letter or digit in any language (underscore counts as a separator).
+_NON_WORD_RE = re.compile(r"[\W_]+")
+# Scripts written without spaces between words: a keyword can sit inside a longer run.
+_UNSPACED_SCRIPT_RANGES: tuple[tuple[int, int], ...] = (
+    (0x0E00, 0x0EFF),  # Thai, Lao
+    (0x1000, 0x109F),  # Myanmar
+    (0x1780, 0x17FF),  # Khmer
+    (0x3040, 0x30FF),  # Hiragana, Katakana
+    (0x31F0, 0x31FF),  # Katakana extensions
+    (0x3400, 0x4DBF),  # Han extension A
+    (0x4E00, 0x9FFF),  # Han
+    (0xF900, 0xFAFF),  # Han compatibility
+    (0x20000, 0x2FA1F),  # Han extensions B and later
+)
 _COPY_SUFFIX_RE = re.compile(r"(?:\s*-\s*copy)?(?:\s*\(\d{1,3}\))+$|\s*-\s*copy$", re.IGNORECASE)
 _GENERIC_SNIFF_EXTS = {"", ".bin", ".tmp", ".dat", ".jfif", ".download"}
 
@@ -283,15 +295,61 @@ for _abbr, _expansions in _TOKEN_ALIASES.items():
         _REVERSE_ALIASES.setdefault(_exp, set()).add(_abbr)
 
 
+def _is_latin_letter(ch: str) -> bool:
+    code = ord(ch)
+    return code < 0x0250 or 0x1E00 <= code <= 0x1EFF
+
+
+def _fold_latin_accents(text: str) -> str:
+    """Drop accents from Latin letters only (``résumé`` -> ``resume``).
+
+    Marks in other scripts are part of the letter (Japanese ``が``, Cyrillic ``й``)
+    and are kept.
+    """
+    out: list[str] = []
+    base = ""
+    for ch in unicodedata.normalize("NFKD", text):
+        if 0x0300 <= ord(ch) <= 0x036F and base and _is_latin_letter(base):
+            continue
+        if not unicodedata.combining(ch):
+            base = ch
+        out.append(ch)
+    return unicodedata.normalize("NFC", "".join(out))
+
+
+def _split_word_edges(text: str) -> str:
+    """Put a space at CamelCase edges and between letters and digits, in any script."""
+    out: list[str] = []
+    prev = ""
+    for ch in text:
+        if prev and (
+            ((prev.islower() or prev.isdigit()) and ch.isupper())
+            or (prev.isalpha() and ch.isdigit())
+            or (prev.isdigit() and ch.isalpha())
+        ):
+            out.append(" ")
+        out.append(ch)
+        prev = ch
+    return "".join(out)
+
+
 def _normalize_tokens(text: str) -> str:
     """Split CamelCase, letter/digit runs and separators into lowercase space-separated tokens.
 
     ``Resume2026`` becomes ``resume 2026`` and ``IME3311`` becomes ``ime 3311``, so a
-    keyword still matches a word that has a number stuck to it.
+    keyword still matches a word that has a number stuck to it. Letters from every
+    language are kept, and accents on Latin letters are ignored.
     """
-    camel_split = _CAMEL_SPLIT_RE.sub(r"\1 \2", text)
-    split = _LETTER_DIGIT_RE.sub(" ", camel_split.lower())
-    return " ".join(_NON_WORD_RE.sub(" ", split).split())
+    folded = _fold_latin_accents(_split_word_edges(text).casefold())
+    return " ".join(_NON_WORD_RE.sub(" ", folded).split())
+
+
+def _has_unspaced_script(text: str) -> bool:
+    for ch in text:
+        code = ord(ch)
+        if any(lo <= code <= hi for lo, hi in _UNSPACED_SCRIPT_RANGES):
+            return True
+    return False
 
 
 def normalize_filename_tokens(filename: str, *, expand_aliases: bool = True) -> list[str]:
@@ -355,6 +413,10 @@ def _keyword_matches(filename: str, keyword: str) -> bool:
     # only along word edges: a plain substring check made 'resume' match 'presumed'.
     compact_kw = norm_kw.replace(" ", "")
     if len(compact_kw) >= 4 and _joins_consecutive_tokens(compact_kw, name_tokens):
+        return True
+    # Chinese, Japanese, Thai and similar languages don't separate words with spaces,
+    # so "請求書" has to be found inside "2026年4月請求書".
+    if _has_unspaced_script(compact_kw) and compact_kw in norm_name.replace(" ", ""):
         return True
     # Support unordered multi-word token matching (e.g. "tax return" -> "2026_Return_Tax"),
     # including academic/engineering alias expansion (e.g. "hw" <-> "homework").
