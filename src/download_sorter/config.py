@@ -382,7 +382,101 @@ STARTER_TEMPLATES: dict[str, list[Rule]] = {
             extensions=[".3mf", ".stl", ".step", ".stp"],
         ),
     ],
+    "finance": [
+        Rule(
+            id="tpl-finance-keywords",
+            name="Bills & Receipts",
+            destination=r"Documents\Bills & Receipts",
+            keywords=[
+                "invoice",
+                "receipt",
+                "bank statement",
+                "account statement",
+                "credit card statement",
+                "estatement",
+                "utility bill",
+                "phone bill",
+                "electric bill",
+                "tax return",
+                "tax",
+                "w2",
+                "1099",
+                "paystub",
+                "pay stub",
+                "payslip",
+                # The same words in other languages.
+                "rechnung",
+                "quittung",
+                "factura",
+                "facture",
+                "fattura",
+                "recibo",
+                "reçu",
+                "счёт",
+                "счет",
+                "請求書",
+                "領収書",
+                "发票",
+            ],
+            extensions=[".pdf", ".jpg", ".jpeg", ".png", ".heic", ".doc", ".docx", ".xls", ".xlsx", ".csv"],
+        ),
+    ],
+    "travel": [
+        Rule(
+            id="tpl-travel-keywords",
+            name="Travel documents",
+            destination=r"Documents\Travel",
+            keywords=[
+                "boarding pass",
+                "itinerary",
+                "eticket",
+                "e ticket",
+                "booking confirmation",
+                "reservation",
+                "travel insurance",
+            ],
+            extensions=[".pdf", ".pkpass", ".jpg", ".jpeg", ".png"],
+        ),
+        Rule(
+            id="tpl-travel-sites",
+            name="Travel websites",
+            destination=r"Documents\Travel",
+            domains=[
+                "booking.com",
+                "expedia.com",
+                "airbnb.com",
+                "hotels.com",
+                "kayak.com",
+                "trainline.com",
+            ],
+            extensions=[".pdf", ".pkpass"],
+        ),
+    ],
+    "contracts": [
+        Rule(
+            id="tpl-contracts-keywords",
+            name="Contracts & Agreements",
+            destination=r"Documents\Contracts",
+            keywords=["contract", "agreement", "lease", "nda", "non disclosure", "signed", "vertrag", "contrato", "contrat"],
+            domains=["docusign.net", "docusign.com", "echosign.com", "hellosign.com"],
+            extensions=[".pdf", ".doc", ".docx"],
+        ),
+    ],
 }
+
+# What the welcome and the Rules page call each pack, in the order they are offered.
+STARTER_PACK_LABELS: dict[str, tuple[str, str]] = {
+    "school": ("School", "Syllabi, lecture notes, homework and files from class websites"),
+    "career": ("Job hunting", "Résumés, cover letters and offer letters"),
+    "finance": ("Bills & receipts", "Invoices, receipts, bank statements and tax forms"),
+    "travel": ("Travel", "Boarding passes, itineraries and bookings"),
+    "contracts": ("Contracts", "Agreements, leases and signed documents"),
+    "3d_printing": ("3D printing", "Models from MakerWorld, Printables and Thingiverse"),
+}
+
+# Rule packs a new install starts with. None: files are sorted by type until the
+# person picks packs in the welcome or on the Rules page.
+NEW_INSTALL_TEMPLATES: tuple[str, ...] = ()
 
 
 @dataclass
@@ -486,6 +580,11 @@ class Config:
             for tpl in STARTER_TEMPLATES.get(key, ()):
                 rules.append(Rule.from_dict(tpl.to_dict()))
         return cls(rules=rules)
+
+    @classmethod
+    def new_install(cls) -> Config:
+        """The settings a new install (or Return to Defaults) starts from."""
+        return cls.with_starter_defaults(NEW_INSTALL_TEMPLATES)
 
     def resolved_watch_folder(self, paths: AppPaths | None = None) -> Path:
         if paths is not None and paths.downloads_dir is not None:
@@ -627,9 +726,9 @@ def load_config(paths: AppPaths) -> Config:
             for tpl in ("school", "career", "3d_printing"):
                 cfg.apply_template(tpl)
         except Exception:
-            cfg = Config.with_starter_defaults()
+            cfg = Config.new_install()
     else:
-        cfg = Config.with_starter_defaults()
+        cfg = Config.new_install()
     save_config(cfg, paths)
     return cfg
 

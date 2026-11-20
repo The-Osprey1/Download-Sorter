@@ -75,6 +75,19 @@ def _no_live_slicer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(service_module, "is_slicer_running", lambda *a, **k: False)
 
 
+@pytest.fixture(autouse=True)
+def _legacy_new_install_packs(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most tests were written when a new install started with the School, Career and
+    3D printing rule packs, and lean on those rules. New installs now start with none;
+    tests marked ``shipped_defaults`` check that real behaviour.
+    """
+    if request.node.get_closest_marker("shipped_defaults") is not None:
+        return
+    import download_sorter.config as config_module
+
+    monkeypatch.setattr(config_module, "NEW_INSTALL_TEMPLATES", ("school", "career", "3d_printing"))
+
+
 @pytest.fixture
 def fake_desktop(monkeypatch: pytest.MonkeyPatch) -> FakeWin32Desktop:
     """Provides an isolated in-memory Win32 headless desktop harness for E2E tests."""

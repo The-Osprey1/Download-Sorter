@@ -86,4 +86,5 @@ timeout_method = "thread"
 markers = [
     "desktop: needs a live interactive Windows desktop (real dialogs/windows); deselect with -m \"not desktop\"",
     "ntfs: needs a real NTFS volume (hardlinks, file indexes, cloud attributes)",
+    "shipped_defaults: use the rule packs a new install really starts with (other tests get the School, Career and 3D printing packs they were written for)",
 ]

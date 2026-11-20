@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -59,6 +60,7 @@ from download_sorter.chrome_bridge import (
     is_chrome_host_registered,
 )
 from download_sorter.config import (
+    STARTER_PACK_LABELS,
     Config,
     Rule,
     carry_over_setup,
@@ -666,10 +668,15 @@ class WalkthroughDialog(QDialog):
         header_row.addLayout(header_text, 1)
         layout.addLayout(header_row)
 
-        # Calm Recessed Diagram Stage
+        # Calm Recessed Diagram Stage; step 2 shows the rule pack chooser in its place.
         self.stage_canvas = WalkthroughDiagramCanvas(container)
         self.stage_canvas.setMinimumSize(500, 148)
-        layout.addWidget(self.stage_canvas)
+        self.packs_panel = self._build_packs_panel()
+        self.stage = QStackedWidget()
+        self.stage.setFixedHeight(148)
+        self.stage.addWidget(self.stage_canvas)
+        self.stage.addWidget(self.packs_panel)
+        layout.addWidget(self.stage)
 
         # Concise 1-line footnote per step (unboxed, zero nested border clutter)
         self.pages = QStackedWidget()
@@ -677,7 +684,7 @@ class WalkthroughDialog(QDialog):
         self.pages.addWidget(self._build_page(f"Watching top-level only: {watch_root}"))
         self.pages.addWidget(
             self._build_page(
-                f".3MF files wait {hold_days} days by default · Every move has 1-Click Undo"
+                "Everything else is still sorted by file type · Every move can be undone"
             )
         )
         self.pages.addWidget(
@@ -738,8 +745,8 @@ class WalkthroughDialog(QDialog):
             ),
             (
                 "STEP 2 OF 3",
-                "Safe Slicer Hold & Instant Undo",
-                f"New .3MF print files stay in Downloads for {hold_days} days so you can slice first, and every sort is 1-click reversible.",
+                "What Do You Download Most?",
+                "Tick any that fit and I'll add rules for them. You can add or remove rule packs later on the Custom Rules page.",
             ),
             (
                 "STEP 3 OF 3",
@@ -748,6 +755,27 @@ class WalkthroughDialog(QDialog):
             ),
         ]
         self._go(0)
+
+    def _build_packs_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("WalkthroughPacks")
+        grid = QGridLayout(panel)
+        grid.setContentsMargins(4, 6, 4, 6)
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(10)
+        self.pack_boxes: dict[str, QCheckBox] = {}
+        for index, (key, (label, description)) in enumerate(STARTER_PACK_LABELS.items()):
+            box = QCheckBox(label.replace("&", "&&"))  # a single & would mark a shortcut key
+            box.setAccessibleName(label)
+            box.setToolTip(description)
+            box.setAccessibleDescription(description)
+            self.pack_boxes[key] = box
+            grid.addWidget(box, index // 2, index % 2)
+        return panel
+
+    def selected_packs(self) -> list[str]:
+        """The rule packs ticked on step 2, in the order they are offered."""
+        return [key for key, box in self.pack_boxes.items() if box.isChecked()]
 
     def _build_page(self, highlight_text: str) -> QWidget:
         page = QWidget()
@@ -764,6 +792,7 @@ class WalkthroughDialog(QDialog):
         idx = max(0, min(2, index))
         self.pages.setCurrentIndex(idx)
         self.stage_canvas.set_step(idx)
+        self.stage.setCurrentWidget(self.packs_panel if idx == 1 else self.stage_canvas)
         self.mascot_widget.set_step(idx)
 
         badge_txt, title_txt, speech_txt = self._step_meta[idx]
@@ -1736,15 +1765,19 @@ class MainWindow(QMainWindow):
         packs_row = QHBoxLayout(packs_wrap)
         packs_row.setContentsMargins(0, 0, 0, 0)
         packs_row.setSpacing(6)
-        for label, tpl_key in (
-            ("+ School", "school"),
-            ("+ Career", "career"),
-            ("+ 3D Printing", "3d_printing"),
-        ):
-            btn = InteractiveRibbonBtn(label)
-            btn.setToolTip(f"Add starter pack: {label.lstrip('+ ')}")
-            btn.clicked.connect(lambda _=False, k=tpl_key: self._apply_template(k))
-            packs_row.addWidget(btn)
+        self.btn_rule_packs = InteractiveRibbonBtn("+ Rule Pack")
+        self.btn_rule_packs.setToolTip("Add a ready-made set of rules for School, Bills & receipts, Travel and more")
+        self.menu_rule_packs = QMenu(self.btn_rule_packs)
+        for tpl_key, (label, description) in STARTER_PACK_LABELS.items():
+            action = self.menu_rule_packs.addAction(f"{label} — {description}".replace("&", "&&"))
+            action.setData(tpl_key)
+            action.triggered.connect(lambda _=False, k=tpl_key: self._apply_template(k))
+        self.btn_rule_packs.clicked.connect(
+            lambda: self.menu_rule_packs.exec(
+                self.btn_rule_packs.mapToGlobal(self.btn_rule_packs.rect().bottomLeft())
+            )
+        )
+        packs_row.addWidget(self.btn_rule_packs)
         btn_import = InteractiveRibbonBtn("Carry Over v2.8 / Setup...")
         btn_import.setObjectName("GhostButton")
         btn_import.setToolTip("Import rules, overrides, or folder layouts from Download Sorter v2.8 or an exported v3 JSON file")
@@ -3250,11 +3283,14 @@ class MainWindow(QMainWindow):
         cfg = copy.deepcopy(self.service.config)
         added = cfg.apply_template(template_key)
         self._commit_config(cfg)
-        self.banner.show_message(
-            f"Added starter rule pack '{template_key}': {added} new rule(s).",
-            kind="success" if added else "info",
+        label = STARTER_PACK_LABELS.get(template_key, (template_key, ""))[0]
+        message = (
+            f"Added the {label} rule pack: {added} new rule(s)."
+            if added
+            else f"The {label} rule pack is already in your rules."
         )
-        self.lbl_footer.setText(f"Added starter rule pack '{template_key}': {added} new rule(s).")
+        self.banner.show_message(message, kind="success" if added else "info")
+        self.lbl_footer.setText(message)
 
     def _on_sorty_clicked(self, tip: str) -> None:
         if "SECRET UNLOCKED" in tip or "PARTY MODE" in tip.upper():
@@ -3654,6 +3690,12 @@ class MainWindow(QMainWindow):
         """Launch the interactive 3-step onboarding walkthrough modal."""
         dlg = WalkthroughDialog(self.service.watch_root, self.service.config.hold_3mf_days, self)
         dlg.exec()
+        chosen = dlg.selected_packs()
+        if chosen:
+            cfg = copy.deepcopy(self.service.config)
+            added = sum(cfg.apply_template(key) for key in chosen)
+            if added:
+                self._commit_config(cfg)
         # Finished, skipped or closed with Esc: the tour has been seen either way.
         # Automatic sorting waits for this, so it must not stay pending forever.
         self.complete_walkthrough()

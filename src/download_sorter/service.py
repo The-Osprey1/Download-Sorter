@@ -686,10 +686,10 @@ class SorterService:
         shift_files: bool = True,
         create_empty_folders: bool = False,
     ) -> dict[str, Any]:
-        """Reset architecture & rules back to starter defaults and shift files back if requested."""
+        """Reset architecture & rules to what a new install starts with, and shift files back if requested."""
         with self._lock:
             cur = self.config
-            default_cfg = Config.with_starter_defaults()
+            default_cfg = Config.new_install()
             default_cfg.watch_folder = cur.watch_folder
             default_cfg.tutorial_completed = cur.tutorial_completed
             default_cfg.notifications_enabled = cur.notifications_enabled
