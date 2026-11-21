@@ -7,7 +7,7 @@ import uuid
 import about
 from download_sorter import cli
 from download_sorter.config import Config, save_config
-from download_sorter.ipc import IPCServer, send_ipc_command
+from download_sorter.ipc import IPCServer
 from download_sorter.paths import AppPaths
 from download_sorter.service import SorterService
 from download_sorter.ui.main_window import MainWindow

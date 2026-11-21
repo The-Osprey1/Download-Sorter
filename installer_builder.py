@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import platform
 import shutil
 import subprocess
 import sys
@@ -22,7 +21,6 @@ import zipfile
 from PIL import Image, ImageDraw
 
 import about
-from suite_theme import ACCENTS, COLORS
 
 REPO_ROOT = Path(__file__).resolve().parent
 

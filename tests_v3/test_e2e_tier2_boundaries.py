@@ -16,37 +16,22 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
-import sys
 import time
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from download_sorter.quick_switcher import (
-    ADMIN_WARNING,
-    DEFAULT_RECENCY_TTL,
-    THREE_D_EXTENSIONS,
-    THREE_D_MAX_AGE_SEC,
     TOO_MANY_WARNING,
-    QuickSwitcherMonitor,
-    blocked_by_uipi,
     clear_recent_file,
-    consume_items,
-    copy_files_to_clipboard,
     find_dialog_edit_control,
-    get_recent_batch,
     get_recent_file,
     inject_file_into_dialog,
     inject_files_into_dialog,
-    invalidate_recent_file,
     is_file_dialog,
     plan_injection,
-    prune_stages,
-    read_clipboard_files,
     record_recent_file,
     resolve_state_file,
-    stage_batch,
 )
 
 from download_sorter.ui.quick_switcher_pill import QuickSwitcherPill
@@ -448,7 +433,7 @@ def test_t2_f5_02_file_locked_by_browser_download_skipped(
 ) -> None:
     """T2-F5-02: Verify locked download files (.crdownload in-flight) are safely skipped."""
     clear_recent_file(data_dir=app_paths.data_dir)
-    f = create_test_file("in_flight.pdf")
+    create_test_file("in_flight.pdf")
 
     with patch("download_sorter.fs_ops.is_file_locked", return_value=True):
         summary = service_instance.scan_top_level_now(settle_seconds=0.0)
@@ -472,7 +457,7 @@ def test_t2_f5_04_concurrent_sqlite_database_access_retry(
 ) -> None:
     """T2-F5-04: Verify StateDB operations retry gracefully on transient SQLite locks."""
     clear_recent_file(data_dir=app_paths.data_dir)
-    f = create_test_file("db_lock_test.pdf")
+    create_test_file("db_lock_test.pdf")
 
     original_execute = service_instance.db.record_move
     calls = [0]

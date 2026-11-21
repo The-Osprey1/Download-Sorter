@@ -3,36 +3,28 @@
 from __future__ import annotations
 
 import ctypes
-from dataclasses import asdict
 import json
 import os
 from pathlib import Path
 import sys
 import threading
 import time
-from unittest.mock import MagicMock, patch
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from download_sorter.config import Config, import_v2_config, load_config, save_config
-from download_sorter.fs_ops import undo_batch, undo_move
 from download_sorter.paths import AppPaths
 from download_sorter.quick_switcher import (
-    DEFAULT_RECENCY_TTL,
     IDCANCEL,
-    IDOK,
-    THREE_D_EXTENSIONS,
-    THREE_D_MAX_AGE_SEC,
-    WM_CLOSE,
     WM_COMMAND,
     QuickSwitcherMonitor,
     blocked_by_uipi,
     build_dropfiles,
     clear_recent_file,
-    consume_items,
     copy_files_to_clipboard,
     dismiss_dialog,
     find_dialog_edit_control,
@@ -48,7 +40,7 @@ from download_sorter.quick_switcher import (
     stage_batch,
     window_is_elevated,
 )
-from download_sorter.router import FileCandidate, RouteDecision
+from tests_v3.mock_win32 import FakeWin32Desktop
 from download_sorter.service import SorterService
 from download_sorter.ui.quick_switcher_pill import QuickSwitcherPill
 
@@ -665,7 +657,6 @@ def test_clipboard_64bit_allocation_and_roundtrip(tmp_path: Path) -> None:
         pytest.skip("Windows clipboard test")
 
     import ctypes
-    from ctypes import wintypes
     k32 = ctypes.windll.kernel32
 
     # Verify ctypes configuration does not truncate 64-bit pointers

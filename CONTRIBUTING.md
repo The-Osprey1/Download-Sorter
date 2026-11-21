@@ -39,6 +39,8 @@ python -m pytest tests_v3 -v
 
 All tests should pass with 0 errors.
 
+GitHub also runs a quick code check that catches misspelled names, leftover imports and unused variables. Run it yourself with `pip install ruff` and `ruff check .`; `ruff check . --fix` fixes most of what it finds.
+
 The tests leave a Download Sorter that is installed or running on your PC alone: each test uses its own temporary data and Downloads folders (`tests_v3/conftest.py`), and tests that talk to the single-instance socket use a pipe name of their own. A test that starts the setup program runs it in another process, so it must pass `/NO-REGISTRY` (and `/NO-SHORTCUTS`).
 
 Tests marked `desktop` open real Windows dialogs and need an unlocked desktop session; skip them with `pytest -m "not desktop"`. A test that runs for more than 5 minutes is stopped and the run shows where it was stuck (this needs `pytest-timeout`, installed above).

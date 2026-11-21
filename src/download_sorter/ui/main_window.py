@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -95,7 +94,6 @@ from download_sorter.ui.motion import (
     flash_rows,
     make_badge as _make_badge,
     make_vector_icon,
-    refresh_style as _refresh_style,
     slide_toggle,
 )
 from download_sorter.ui.theme import STYLESHEET

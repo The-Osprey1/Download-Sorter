@@ -7,7 +7,6 @@ import gc
 import os
 from pathlib import Path
 import sys
-from typing import Any
 
 import pytest
 

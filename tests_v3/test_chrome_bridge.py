@@ -6,8 +6,6 @@ import base64
 import hashlib
 import io
 import json
-from pathlib import Path
-import time
 
 from download_sorter import chrome_bridge
 from download_sorter.config import Config, Rule, save_config

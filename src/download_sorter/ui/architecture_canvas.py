@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 import os
-from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import (
@@ -1804,7 +1803,6 @@ class FolderArchitectureCanvas(QWidget):
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pt = self._to_canvas(event.position())
 
         # Complete '+' handle spawn or wire-reparent
         if self._spawning_from_id is not None:

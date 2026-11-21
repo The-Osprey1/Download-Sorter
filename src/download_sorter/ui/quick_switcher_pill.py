@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 import sys
 import time
@@ -14,7 +13,7 @@ if sys.platform == "win32":
     from ctypes import wintypes
 
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
-from PySide6.QtGui import QCursor, QFont, QGuiApplication, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QCursor, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import (
-    QAbstractAnimation,
     QEasingCurve,
     QElapsedTimer,
     QObject,

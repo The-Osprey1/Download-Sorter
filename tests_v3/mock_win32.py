@@ -8,13 +8,10 @@ without requiring an interactive desktop session.
 from __future__ import annotations
 
 import ctypes
-from ctypes import wintypes
 from dataclasses import dataclass, field
 from pathlib import Path
 import struct
-import sys
 from typing import Any, Callable
-from unittest.mock import MagicMock
 
 
 @dataclass
