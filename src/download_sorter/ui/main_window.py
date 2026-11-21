@@ -76,6 +76,7 @@ from download_sorter.service import SorterService
 from download_sorter import update_check, updater
 from download_sorter.ui.accessibility import name_controls_for_screen_readers
 from download_sorter.ui.architecture_canvas import ArchitectureTab
+from download_sorter.ui.text_scale import scaled_px
 from download_sorter.ui.chrome_walkthrough import ChromeExtensionWalkthroughDialog
 from download_sorter.ui.motion import (
     AnimatedBanner,
@@ -603,7 +604,7 @@ def _style_table(table: QTableWidget) -> None:
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     table.verticalHeader().setVisible(False)
-    table.verticalHeader().setDefaultSectionSize(40)
+    table.verticalHeader().setDefaultSectionSize(scaled_px(40))
     table.horizontalHeader().setHighlightSections(False)
 
 
@@ -992,10 +993,10 @@ class DuplicateManagerDialog(QDialog):
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.tbl_dups.setColumnWidth(0, 38)
-        self.tbl_dups.setColumnWidth(3, 136)
-        self.tbl_dups.setColumnWidth(4, 126)
-        self.tbl_dups.setColumnWidth(5, 84)
+        self.tbl_dups.setColumnWidth(0, scaled_px(38))
+        self.tbl_dups.setColumnWidth(3, scaled_px(136))
+        self.tbl_dups.setColumnWidth(4, scaled_px(126))
+        self.tbl_dups.setColumnWidth(5, scaled_px(84))
         self.tbl_dups.cellClicked.connect(self._on_cell_clicked)
         self.tbl_dups.itemSelectionChanged.connect(self._update_summary)
         self.tbl_dups.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1720,8 +1721,8 @@ class MainWindow(QMainWindow):
         s_hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         s_hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         s_hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.tbl_sim.setColumnWidth(0, 240)
-        self.tbl_sim.setColumnWidth(1, 148)
+        self.tbl_sim.setColumnWidth(0, scaled_px(240))
+        self.tbl_sim.setColumnWidth(1, scaled_px(148))
         sim_layout.addWidget(self.tbl_sim, 1)
         layout.addWidget(sim_card, 3)
 
@@ -1751,7 +1752,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.tbl_activity.setColumnWidth(1, 220)
+        self.tbl_activity.setColumnWidth(1, scaled_px(220))
         act_layout.addWidget(self.tbl_activity, 1)
         layout.addWidget(act_card, 2)
         return tab
@@ -1869,10 +1870,10 @@ class MainWindow(QMainWindow):
         r_hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         r_hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
         r_hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
-        self.tbl_rules.setColumnWidth(1, 180)
-        self.tbl_rules.setColumnWidth(2, 175)
-        self.tbl_rules.setColumnWidth(4, 140)
-        self.tbl_rules.setColumnWidth(5, 120)
+        self.tbl_rules.setColumnWidth(1, scaled_px(180))
+        self.tbl_rules.setColumnWidth(2, scaled_px(175))
+        self.tbl_rules.setColumnWidth(4, scaled_px(140))
+        self.tbl_rules.setColumnWidth(5, scaled_px(120))
         rules_layout.addWidget(self.tbl_rules, 1)
         layout.addWidget(rules_card, 1)
 
@@ -3536,7 +3537,7 @@ class MainWindow(QMainWindow):
             hl.setContentsMargins(6, 0, 6, 0)
             hl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge = _make_badge(what, badge_variant)
-            badge.setMinimumWidth(108)
+            badge.setMinimumWidth(scaled_px(108))
             hl.addWidget(badge)
             self.tbl_sim.setCellWidget(idx, 1, holder)
 
@@ -3735,14 +3736,16 @@ class MainWindow(QMainWindow):
     def _fit_to_window(self) -> None:
         width, height = self.width(), self.height()
         if hasattr(self, "lbl_status_badge"):
-            self.lbl_status_badge.setVisible(width >= self.HEADER_COMPACT_WIDTH)
+            self.lbl_status_badge.setVisible(width >= scaled_px(self.HEADER_COMPACT_WIDTH))
+            # The widths were tuned for 100% text; bigger text needs room sooner.
+            compact, tight = scaled_px(self.HEADER_COMPACT_WIDTH), scaled_px(self.HEADER_TIGHT_WIDTH)
             for btn in (self.btn_undo_last, self.btn_open_downloads, self.btn_walkthrough):
-                btn.set_collapsed(width < self.HEADER_COMPACT_WIDTH)
+                btn.set_collapsed(width < compact)
             for btn in (self.btn_pause, self.btn_file_held):
-                btn.set_collapsed(width < self.HEADER_TIGHT_WIDTH)
+                btn.set_collapsed(width < tight)
             for btn in (getattr(self, "btn_detox", None), getattr(self, "btn_quick_search", None)):
                 if btn is not None:
-                    btn.set_collapsed(width < 1200)
+                    btn.set_collapsed(width < scaled_px(1200))
         if hasattr(self, "list_test_trace"):
             show_trace = height >= self.TESTER_TRACE_MIN_HEIGHT
             if self.list_test_trace.isHidden() == show_trace:
