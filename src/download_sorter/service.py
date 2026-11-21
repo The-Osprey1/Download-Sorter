@@ -694,6 +694,7 @@ class SorterService:
             default_cfg.tutorial_completed = cur.tutorial_completed
             default_cfg.notifications_enabled = cur.notifications_enabled
             default_cfg.check_for_updates = cur.check_for_updates
+            default_cfg.show_advanced_tools = cur.show_advanced_tools
             default_cfg.ribbon_timeout_seconds = cur.ribbon_timeout_seconds
             default_cfg.paused = cur.paused
             default_cfg.architecture = architecture_from_config(default_cfg).to_dict()

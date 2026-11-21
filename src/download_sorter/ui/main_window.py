@@ -2264,6 +2264,15 @@ class MainWindow(QMainWindow):
             "Windows integration, release checks, and portable configuration backup.",
         )
 
+        self.chk_show_advanced = MacToggle()
+        card_sys.add_row(
+            SettingRow(
+                "Show Advanced Tools",
+                "The Folder Architecture page and Sort Lower Tiers, for designing your own folder layout.",
+                controls=self.chk_show_advanced,
+            )
+        )
+
         self.chk_startup = MacToggle()
         card_sys.add_row(
             SettingRow(
@@ -2338,6 +2347,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Refresh & Actions
     # ------------------------------------------------------------------
+    def _apply_advanced_tools_visibility(self, show: bool) -> None:
+        """The simpler window (new installs) hides Folder Architecture and Sort Lower Tiers."""
+        arch_index = self.tabs.indexOf(self.arch_tab)
+        if not show and self.tabs.currentIndex() == arch_index:
+            self.tabs.setCurrentIndex(0)
+        self.tabs.setTabVisible(arch_index, show)
+        self.btn_sort_tiers.setVisible(show)
+
     def _on_tab_changed(self, index: int) -> None:
         for i, icon_name in enumerate(self._tab_icon_names):
             col = "#F5F5F7" if i == index else "#8E8E93"
@@ -2857,6 +2874,8 @@ class MainWindow(QMainWindow):
         self.chk_type_subfolders.setChecked(cfg.use_type_subfolders)
         self.chk_notifications.setChecked(cfg.notifications_enabled)
         self.chk_check_updates.setChecked(cfg.check_for_updates)
+        self.chk_show_advanced.setChecked(cfg.show_advanced_tools)
+        self._apply_advanced_tools_visibility(cfg.show_advanced_tools)
         self.spin_ribbon_timeout.setValue(max(1.0, min(30.0, float(cfg.ribbon_timeout_seconds))))
         self.spin_ribbon_timeout.setEnabled(cfg.notifications_enabled)
         self.chk_quick_switcher.setChecked(cfg.quick_switcher_enabled)
@@ -3446,6 +3465,7 @@ class MainWindow(QMainWindow):
         cfg.use_type_subfolders = self.chk_type_subfolders.isChecked()
         cfg.notifications_enabled = self.chk_notifications.isChecked()
         cfg.check_for_updates = self.chk_check_updates.isChecked()
+        cfg.show_advanced_tools = self.chk_show_advanced.isChecked()
         cfg.ribbon_timeout_seconds = float(self.spin_ribbon_timeout.value())
         self._preview_toast_mgr.default_duration_ms = int(cfg.ribbon_timeout_seconds * 1000)
         cfg.quick_switcher_enabled = self.chk_quick_switcher.isChecked()

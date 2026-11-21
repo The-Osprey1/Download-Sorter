@@ -478,6 +478,9 @@ STARTER_PACK_LABELS: dict[str, tuple[str, str]] = {
 # person picks packs in the welcome or on the Rules page.
 NEW_INSTALL_TEMPLATES: tuple[str, ...] = ()
 
+# A new install starts with the simpler window (no Folder Architecture page).
+NEW_INSTALL_SHOW_ADVANCED = False
+
 
 @dataclass
 class Config:
@@ -504,6 +507,8 @@ class Config:
     paused: bool = False
     tutorial_completed: bool = False
     check_for_updates: bool = True
+    # Folder Architecture and Sort Lower Tiers. Setups saved before this existed keep them.
+    show_advanced_tools: bool = True
     rules: list[Rule] = field(default_factory=list)
     category_map: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CATEGORY_MAP))
     type_subfolders: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TYPE_SUBFOLDERS))
@@ -533,6 +538,7 @@ class Config:
         self.paused = bool(self.paused)
         self.tutorial_completed = bool(self.tutorial_completed)
         self.check_for_updates = bool(self.check_for_updates)
+        self.show_advanced_tools = bool(self.show_advanced_tools)
         self.rules = [r if isinstance(r, Rule) else Rule.from_dict(r) for r in self.rules]
         self.category_map = {
             (k if k.startswith(".") else "." + k).lower(): str(v).strip().replace("/", "\\").strip("\\")
@@ -584,7 +590,9 @@ class Config:
     @classmethod
     def new_install(cls) -> Config:
         """The settings a new install (or Return to Defaults) starts from."""
-        return cls.with_starter_defaults(NEW_INSTALL_TEMPLATES)
+        cfg = cls.with_starter_defaults(NEW_INSTALL_TEMPLATES)
+        cfg.show_advanced_tools = NEW_INSTALL_SHOW_ADVANCED
+        return cfg
 
     def resolved_watch_folder(self, paths: AppPaths | None = None) -> Path:
         if paths is not None and paths.downloads_dir is not None:
@@ -630,6 +638,7 @@ class Config:
             "paused": self.paused,
             "tutorial_completed": self.tutorial_completed,
             "check_for_updates": self.check_for_updates,
+            "show_advanced_tools": self.show_advanced_tools,
             "rules": [r.to_dict() for r in self.rules],
             "category_map": dict(self.category_map),
             "type_subfolders": dict(self.type_subfolders),
@@ -663,6 +672,7 @@ class Config:
             paused=data.get("paused", False),
             tutorial_completed=data.get("tutorial_completed", False),
             check_for_updates=data.get("check_for_updates", True),
+            show_advanced_tools=bool(data.get("show_advanced_tools", True)),
             rules=[Rule.from_dict(item) for item in data.get("rules", []) if isinstance(item, dict)],
             category_map=data.get("category_map") or dict(DEFAULT_CATEGORY_MAP),
             type_subfolders=data.get("type_subfolders") or dict(DEFAULT_TYPE_SUBFOLDERS),
