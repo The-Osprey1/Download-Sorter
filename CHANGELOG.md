@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Pick what you download in the welcome steps.** The second welcome step now asks what you download most and adds rules for the ones you tick: School, Job hunting, Bills & receipts, Travel, Contracts or 3D printing. It used to be about holding 3D-print files for a slicer.
 - **Three everyday rule packs:** Bills & receipts (invoices, receipts, bank statements, tax forms, also in German, Spanish, French, Italian, Portuguese, Russian, Japanese and Chinese), Travel (boarding passes, itineraries, bookings) and Contracts (agreements, leases, signed documents). The Custom Rules page offers every pack from one **+ Rule Pack** menu.
+- **Text follows Windows' text size.** Settings > Accessibility > Text size now makes Download Sorter's text bigger too (up to 150%). Header buttons fold to icons sooner and table columns widen, so nothing is cut off.
+- **A simpler window for new installs.** New installs show Home, Custom Rules and Settings. **Show Advanced Tools** in Settings brings back the Folder Architecture page and **Sort Lower Tiers**. Existing setups keep everything they had.
 - **Screen readers can name every button.** Narrator, NVDA and JAWS read icon-only buttons as "button", the × close button as "multiplication sign" and the Settings switches with no label. Every button, switch and text box now has a name taken from its label, tooltip or Settings row.
 
 ### Changed

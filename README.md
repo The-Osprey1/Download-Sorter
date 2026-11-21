@@ -47,11 +47,12 @@ You need Windows 10 or 11. Nothing else needs to be installed.
   ```
 
   To keep everything one level deep, turn off the type subfolders in **Settings**. Unrecognized file types can go to `Other` or stay where they are.
-- **Folder Architecture lets you design the layout.** Arrange folders top to bottom in tiers, start from **Auto-Create Basic** or the premade folders, add your own folders with rules, then **Apply & Shift Files**. **Undo** and **Return to Defaults** put things back.
+- **Folder Architecture lets you design the layout** (turn on **Show Advanced Tools** in Settings to see it). Arrange folders top to bottom in tiers, start from **Auto-Create Basic** or the premade folders, add your own folders with rules, then **Apply & Shift Files**. **Undo** and **Return to Defaults** put things back.
 - **Custom Rules send files by name or website.** A rule matches words in the file name, the website the file came from, and optionally only certain file types. Words can be in any language, and accents are optional (`resume` matches `Résumé.pdf`). Rules are checked top to bottom; the first match wins. Type a file name into the tester on that page to see where it would go.
 - **Rule packs** add ready-made rules in one click: School, Job hunting, Bills & receipts, Travel, Contracts and 3D printing. Pick them in the welcome steps or from **+ Rule Pack** on the Custom Rules page.
 - **A new `.3mf` stays in Downloads for 7 days**, so your slicer can still find it. When the days are up it also stays for as long as Bambu Studio, OrcaSlicer, PrusaSlicer or Cura is running (14 days at most). **Move Held .3MF** files them straight away.
 - **A ribbon in the top-right corner tells you what moved**, with **Undo**. Choose how long it stays in Settings; hover to pause it. It stays away while a game, a full-screen video, a presentation or the lock screen is up; the files are still sorted and listed on Home.
+- **Bigger text if you need it.** Download Sorter follows Windows' text size (Settings > Accessibility > Text size), up to 150%, and works with Narrator and other screen readers.
 - **Recent File Insert.** When another program asks you to choose a file to open or upload, a small pill offers the file Download Sorter just filed, so you don't have to go looking for it. It can be turned off in Settings.
 
 ## How a file's folder is chosen
