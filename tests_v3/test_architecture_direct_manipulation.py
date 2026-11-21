@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QMimeData, QPointF, Qt
 from PySide6.QtGui import (
     QDragEnterEvent,
     QDragMoveEvent,

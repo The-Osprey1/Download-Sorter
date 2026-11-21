@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import uuid
 
 if TYPE_CHECKING:
-    from download_sorter.config import Config
+    from download_sorter.config import Config, Rule
 
 
 def _clean_exts(values: list[str] | tuple[str, ...]) -> list[str]:

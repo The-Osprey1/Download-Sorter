@@ -7,6 +7,24 @@ on:
     branches: [ main ]
 
 jobs:
+  lint:
+    # Catches mistakes the tests can miss: a misspelled name in code no test
+    # reaches, an import left behind, a variable that is set but never used.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"
+
+    - name: Check the code
+      run: |
+        python -m pip install ruff==0.17.6
+        ruff check .
+
   test:
     runs-on: windows-latest
     # A normal run takes about 3 minutes. Without a limit, one stuck test kept a

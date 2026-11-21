@@ -64,7 +64,7 @@ if sys.platform == "win32":
     except (AttributeError, TypeError):
         pass
 
-from download_sorter.paths import AppPaths
+from download_sorter.paths import AppPaths, default_downloads_dir
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -301,7 +301,7 @@ def record_recent_file(
     if not dest.exists() or not dest.is_file():
         return
 
-    dl_root = Path(downloads_root).resolve() if downloads_root else Path.home() / "Downloads"
+    dl_root = Path(downloads_root).resolve() if downloads_root else default_downloads_dir()
     try:
         rel = dest.relative_to(dl_root)
         folder_disp = str(rel.parent) if rel.parent != Path(".") else "Downloads"
@@ -708,7 +708,7 @@ def plan_injection(
         folder = next(iter(folders))
         return InjectionPlan("same_folder", resolved, folder=folder, names=[p.name for p in resolved])
 
-    root = Path(downloads_root).resolve() if downloads_root else Path.home() / "Downloads"
+    root = Path(downloads_root).resolve() if downloads_root else default_downloads_dir()
     same_vol = all(same_volume(p, root) for p in resolved)
     small = total_size_mb(resolved) < float(cfg.get("stage_copy_limit_mb", 200.0))
     if same_vol or small:
@@ -724,7 +724,7 @@ def stage_batch(
 ) -> tuple[Path, list[Path]]:
     """Hardlink (or copy under size limit) files into one hidden folder."""
     cfg = settings or {}
-    root = Path(downloads_root).resolve() if downloads_root else Path.home() / "Downloads"
+    root = Path(downloads_root).resolve() if downloads_root else default_downloads_dir()
     stage = root / STAGE_DIR_NAME / (batch_id or uuid.uuid4().hex[:8])
     stage.mkdir(parents=True, exist_ok=True)
     make_hidden(stage.parent)
@@ -751,7 +751,7 @@ def stage_batch(
 
 def prune_stages(downloads_root: str | Path | None = None, max_age_hours: float = 24.0) -> int:
     """Delete stage folders older than max_age_hours."""
-    root = (Path(downloads_root).resolve() if downloads_root else Path.home() / "Downloads") / STAGE_DIR_NAME
+    root = (Path(downloads_root).resolve() if downloads_root else default_downloads_dir()) / STAGE_DIR_NAME
     removed = 0
     if not root.is_dir():
         return 0

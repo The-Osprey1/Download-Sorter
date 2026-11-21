@@ -15,11 +15,15 @@ from PySide6.QtCore import QLockFile, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from download_sorter import quiet_time
+from download_sorter.diagnostics import configure_file_logging, install_crash_logging
 from download_sorter.db import STATUS_COMPLETED
 from download_sorter.dest import is_under_watch_root
 from download_sorter.ipc import DEFAULT_IPC_NAME, DeferredReply, IPCServer, send_ipc_command
 from download_sorter.paths import AppPaths
 from download_sorter.service import SorterService
+from download_sorter.ui.accessibility import install_screen_reader_names
+from download_sorter.ui.text_scale import install_text_scaling, read_windows_text_scale
 from download_sorter.ui.main_window import MainWindow
 from download_sorter.ui.toasts import ToastManager
 from download_sorter.ui.workers import run_async
@@ -56,6 +60,28 @@ def _present_window(window: MainWindow) -> None:
     window.show()
     window.raise_()
     window.activateWindow()
+
+
+def make_moves_ribbon_handler(
+    service: Any,
+    toasts: Any,
+    *,
+    is_quiet_time: Callable[[], bool] = quiet_time.is_quiet_time,
+) -> Callable[[str, list[dict[str, Any]]], None]:
+    """What happens when files are sorted in the background: show the ribbon, unless
+    ribbons are turned off or a full-screen app, presentation or lock screen is up.
+    The files are sorted either way, and listed on Home with Undo."""
+
+    def _on_moves(batch_id: str, moves: list[dict[str, Any]]) -> None:
+        cfg = service.config
+        if not cfg.notifications_enabled:
+            return
+        if is_quiet_time():
+            logging.info("Ribbon for %d sorted file(s) skipped: full-screen or presentation", len(moves))
+            return
+        toasts.show_moves(batch_id, moves, duration_ms=int(cfg.ribbon_timeout_seconds * 1000))
+
+    return _on_moves
 
 
 def acquire_instance_lock(data_dir: Path, ipc_name: str = DEFAULT_IPC_NAME) -> QLockFile | None:
@@ -223,11 +249,8 @@ def run_app(
     """Start the single-process Download Sorter v3 tray + window + watcher."""
     app_paths = paths or AppPaths.default()
     app_paths.ensure_dirs()
-    logging.basicConfig(
-        filename=str(app_paths.log_file),
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+    configure_file_logging(app_paths.log_file)
+    install_crash_logging()
 
     hello = "show_window" if show_window else "ping"
     if send_ipc_command(hello, server_name=ipc_name) is not None:
@@ -245,6 +268,9 @@ def run_app(
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    install_screen_reader_names(app)
+    # Before any window is built: every style set from here on follows Windows' text size.
+    install_text_scaling(read_windows_text_scale())
     icon = _build_default_icon()
     app.setWindowIcon(icon)
 
@@ -264,13 +290,7 @@ def run_app(
         on_keep_both=window._on_toast_keep_both,
     )
 
-    window.moves_received.connect(
-        lambda b, m: toasts.show_moves(
-            b, m, duration_ms=int(service.config.ribbon_timeout_seconds * 1000)
-        )
-        if service.config.notifications_enabled
-        else None
-    )
+    window.moves_received.connect(make_moves_ribbon_handler(service, toasts))
     service.on_moves_completed = window.moves_received.emit
 
     class _QuickSwitcherBridge(QObject):

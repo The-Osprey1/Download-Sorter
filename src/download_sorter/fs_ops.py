@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from datetime import datetime
+import functools
 import hashlib
 import json
 import logging
@@ -373,6 +374,37 @@ def _files_identical(a: Path, b: Path) -> bool:
 def files_are_identical(a: Path, b: Path) -> bool:
     """Exact content comparison (tiered: size -> head/tail sample -> full SHA-256)."""
     return _files_identical(a, b)
+
+
+@functools.lru_cache(maxsize=4096)
+def _identical_for_versions(
+    a: str, a_size: int, a_mtime_ns: int, b: str, b_size: int, b_mtime_ns: int
+) -> bool:
+    # Sizes and times are part of the key: a change to either file is a new question.
+    return _files_identical(Path(a), Path(b))
+
+
+def files_are_identical_cached(a: Path, b: Path) -> bool:
+    """``files_are_identical``, remembered until either file's size or time changes.
+
+    Used where the same pair is asked about again and again (listing ``_Duplicates``
+    on every refresh). Anything that acts on the answer should call
+    ``files_are_identical`` instead.
+    """
+    try:
+        sa = a.stat()
+        sb = b.stat()
+    except OSError:
+        return False
+    if sa.st_size != sb.st_size:
+        return False
+    return _identical_for_versions(
+        str(a), sa.st_size, sa.st_mtime_ns, str(b), sb.st_size, sb.st_mtime_ns
+    )
+
+
+def clear_comparison_cache() -> None:
+    _identical_for_versions.cache_clear()
 
 
 def _next_available_name(target: Path) -> Path:
@@ -865,7 +897,7 @@ def _best_existing_counterpart(
             mtime = float(st.st_mtime)
         except (OSError, ValueError):
             continue
-        identical = 1 if (not is_cloud_placeholder(cand) and files_are_identical(dup_file, cand)) else 0
+        identical = 1 if (not is_cloud_placeholder(cand) and files_are_identical_cached(dup_file, cand)) else 0
         # Exact canonical name matches (e.g. report.pdf for report (1).pdf) outrank numbered copies
         canonical_exact = 1 if cand.name.lower() == canonical_lower else (1 if cand.name.lower() == exact_lower else 0)
         score = (identical, in_subfolder, canonical_exact, mtime)

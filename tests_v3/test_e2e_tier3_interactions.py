@@ -16,43 +16,26 @@ Verifies pairwise integration touchpoints across the 7 architectural feature are
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-import sys
 import time
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 
 from download_sorter.quick_switcher import (
     ADMIN_WARNING,
-    DEFAULT_RECENCY_TTL,
-    THREE_D_EXTENSIONS,
-    THREE_D_MAX_AGE_SEC,
-    TOO_MANY_WARNING,
-    QuickSwitcherMonitor,
     blocked_by_uipi,
     clear_recent_file,
     consume_items,
-    copy_files_to_clipboard,
-    find_dialog_edit_control,
-    get_recent_batch,
     get_recent_file,
     inject_file_into_dialog,
     inject_files_into_dialog,
-    invalidate_recent_file,
     is_file_dialog,
-    plan_injection,
-    prune_stages,
-    read_clipboard_files,
     record_recent_file,
-    stage_batch,
 )
 
 from download_sorter.ui.quick_switcher_pill import QuickSwitcherPill
 
-from tests_v3.mock_win32 import FakeWin32Desktop, MockWindow
+from tests_v3.mock_win32 import FakeWin32Desktop
 
 
 def test_t3_int_01_dialog_opened_at_exact_ttl_expiry_transition(
@@ -91,7 +74,7 @@ def test_t3_int_02_undo_invalidates_recent_file_before_dialog_opened(
 ) -> None:
     """T3-INT-02 (F2 x F5): Sorter moves file -> Undo triggered -> subsequent dialog detects no recent file."""
     clear_recent_file(data_dir=app_paths.data_dir)
-    f = create_test_file("undo_interact.pdf")
+    create_test_file("undo_interact.pdf")
 
     # Service sorts file
     summary = service_instance.scan_top_level_now(settle_seconds=0.0)

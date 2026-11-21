@@ -7,7 +7,6 @@ import gc
 import os
 from pathlib import Path
 import sys
-from typing import Any
 
 import pytest
 
@@ -73,6 +72,21 @@ def _no_live_slicer(monkeypatch: pytest.MonkeyPatch) -> None:
     import download_sorter.service as service_module
 
     monkeypatch.setattr(service_module, "is_slicer_running", lambda *a, **k: False)
+
+
+@pytest.fixture(autouse=True)
+def _legacy_new_install_packs(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most tests were written when a new install started with the School, Career and
+    3D printing rule packs and the full window, and lean on both. New installs now
+    start with no packs and the simpler window; tests marked ``shipped_defaults``
+    check that real behaviour.
+    """
+    if request.node.get_closest_marker("shipped_defaults") is not None:
+        return
+    import download_sorter.config as config_module
+
+    monkeypatch.setattr(config_module, "NEW_INSTALL_TEMPLATES", ("school", "career", "3d_printing"))
+    monkeypatch.setattr(config_module, "NEW_INSTALL_SHOW_ADVANCED", True)
 
 
 @pytest.fixture
