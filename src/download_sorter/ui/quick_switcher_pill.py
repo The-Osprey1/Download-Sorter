@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from pathlib import Path
 import sys
@@ -12,7 +13,7 @@ if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
 
-from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QCursor, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -57,6 +58,73 @@ HOVER_BG = "#1D222C"
 BTN_BG = "#171B24"
 BTN_HOVER = "#232936"
 FONT_FAMILY = "Segoe UI"
+
+
+@dataclass(frozen=True)
+class ScreenInfo:
+    """One monitor as Qt sees it: its geometry and work area in Qt's own units."""
+
+    geometry: QRect
+    available: QRect
+    dpr: float
+
+
+def _native_rect(screen: ScreenInfo) -> QRect:
+    # Qt keeps each monitor's top-left corner in physical pixels and scales its size.
+    geo = screen.geometry
+    return QRect(geo.left(), geo.top(), round(geo.width() * screen.dpr), round(geo.height() * screen.dpr))
+
+
+def screen_for_native_point(x: int, y: int, screens: list[ScreenInfo]) -> ScreenInfo | None:
+    """The monitor holding a point Windows gave in physical pixels (else the nearest one)."""
+    if not screens:
+        return None
+    for screen in screens:
+        if _native_rect(screen).contains(x, y):
+            return screen
+
+    def distance(screen: ScreenInfo) -> int:
+        r = _native_rect(screen)
+        dx = max(r.left() - x, 0, x - r.right())
+        dy = max(r.top() - y, 0, y - r.bottom())
+        return dx * dx + dy * dy
+
+    return min(screens, key=distance)
+
+
+def native_to_logical(x: int, y: int, screen: ScreenInfo) -> tuple[int, int]:
+    """Physical pixels to Qt's units on ``screen``: only the distance from its corner scales."""
+    ox, oy = screen.geometry.left(), screen.geometry.top()
+    dpr = screen.dpr or 1.0
+    return round((x - ox) / dpr + ox), round((y - oy) / dpr + oy)
+
+
+def pill_position(
+    dialog_rect: tuple[int, int, int, int], pill_w: int, pill_h: int, screens: list[ScreenInfo]
+) -> tuple[int, int] | None:
+    """Where the pill goes for a dialog at ``(left, top, right, bottom)`` in physical pixels:
+    above its top-right corner, or just under its title bar at the top of the screen."""
+    left, top, right, _bottom = dialog_rect
+    screen = screen_for_native_point(right - 1, top + 1, screens) or screen_for_native_point(
+        (left + right) // 2, top + 1, screens
+    )
+    if screen is None:
+        return None
+    dlg_right, dlg_top = native_to_logical(right, top, screen)
+    work = screen.available
+    x = dlg_right - pill_w - 16
+    x = max(work.left() + 8, min(x, work.right() + 1 - pill_w - 8))
+    y = dlg_top - pill_h - 6
+    if y < work.top() + 4:
+        y = dlg_top + 36
+    return x, y
+
+
+def _qt_screens() -> list[ScreenInfo]:
+    return [
+        ScreenInfo(s.geometry(), s.availableGeometry(), float(s.devicePixelRatio()) or 1.0)
+        for s in QGuiApplication.screens()
+    ]
 
 
 def _blend_colors(c1: str, c2: str, factor: float) -> str:
@@ -234,10 +302,6 @@ class QuickSwitcherPill:
 
         self.root = _PillWindow(self)
         self.scale = 1.0
-        screen = self.root.screen() or QGuiApplication.primaryScreen()
-        dpr = float(screen.devicePixelRatio()) if screen is not None else 1.0
-        self._dpr = max(1.0, dpr)
-
         self.pill_w = round(520 if self.is_batch else 360)
         self.pill_h = round(52 if self.is_batch else 44)
         self.last_x: int | None = None
@@ -540,53 +604,32 @@ class QuickSwitcherPill:
     # ---- Positioning & Tracking ---------------------------------------------
 
     def _position_pill(self) -> None:
-        """Position pill docked above (or below if top-edge) dialog."""
+        """Dock the pill above the dialog (or below its title bar at the top edge),
+        on whichever monitor the dialog is on now."""
         if sys.platform == "win32" and self.dialog_hwnd:
             try:
-                user32 = ctypes.windll.user32
                 rect = wintypes.RECT()
-                if user32.GetWindowRect(self.dialog_hwnd, ctypes.byref(rect)):
-                    class MONITORINFO(ctypes.Structure):
-                        _fields_ = [
-                            ("cbSize", ctypes.c_ulong),
-                            ("rcMonitor", wintypes.RECT),
-                            ("rcWork", wintypes.RECT),
-                            ("dwFlags", ctypes.c_ulong),
-                        ]
-
-                    mon = user32.MonitorFromWindow(self.dialog_hwnd, 2)
-                    minfo = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
-                    dpr = self._dpr
-                    screen_geo = (self.root.screen() or QGuiApplication.primaryScreen()).availableGeometry()
-                    work_top = screen_geo.top()
-                    work_left = screen_geo.left()
-                    work_right = screen_geo.right() + 1
-                    if mon and user32.GetMonitorInfoW(mon, ctypes.byref(minfo)):
-                        work_top = round(minfo.rcWork.top / dpr)
-                        work_left = round(minfo.rcWork.left / dpr)
-                        work_right = round(minfo.rcWork.right / dpr)
-
-                    dlg_top = round(rect.top / dpr)
-                    dlg_right = round(rect.right / dpr)
-
-                    x = dlg_right - self.pill_w - 16
-                    x = max(work_left + 8, min(x, work_right - self.pill_w - 8))
-                    y = dlg_top - self.pill_h - 6
-                    if y < work_top + 4:
-                        y = dlg_top + 36
-
-                    if (x, y) != (self.last_x, self.last_y):
-                        self.last_x = x
-                        self.last_y = y
-                        self.root.setGeometry(x, y, self.pill_w, self.pill_h)
-                    return
+                if ctypes.windll.user32.GetWindowRect(self.dialog_hwnd, ctypes.byref(rect)):
+                    spot = pill_position(
+                        (rect.left, rect.top, rect.right, rect.bottom), self.pill_w, self.pill_h, _qt_screens()
+                    )
+                    if spot is not None:
+                        self._place(*spot)
+                        return
             except Exception:
-                pass
+                logging.debug("Could not place the pill next to its dialog", exc_info=True)
 
         screen_geo = (self.root.screen() or QGuiApplication.primaryScreen()).availableGeometry()
-        x = screen_geo.right() - self.pill_w - 40
-        y = screen_geo.top() + 60
+        self._place(screen_geo.right() - self.pill_w - 40, screen_geo.top() + 60)
+
+    def _place(self, x: int, y: int) -> None:
+        """Move the pill, and the file checklist under it, when the spot changes."""
+        if (x, y) == (self.last_x, self.last_y):
+            return
+        self.last_x, self.last_y = x, y
         self.root.setGeometry(x, y, self.pill_w, self.pill_h)
+        if self.checklist_win is not None:
+            self.checklist_win.move(x, y + self.root.height() + 4)
 
     def _track_dialog(self) -> None:
         if self.is_closed:

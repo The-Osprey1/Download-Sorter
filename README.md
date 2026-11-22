@@ -29,6 +29,7 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
 - **New downloads are filed a few seconds after they finish.** Half-finished downloads, and files another program still has open, are left alone and tried again later.
 - **Only loose files at the top of Downloads are sorted.** Anything already inside a folder is never touched.
+- **Other folders too, if you like.** Add your Desktop, Screenshots or any folder under Settings > **Also Tidy These Folders**. Each is sorted into folders inside itself; files nothing matches stay put.
 - **Home shows what would happen before it happens.** The preview lists every file in Downloads with where it will go and why. Below it, the list of sorted files has an **Undo** button on every row.
 - **Files land in folders inside Downloads.** By default a main folder, then a folder for each kind of file:
 
