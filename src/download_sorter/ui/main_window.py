@@ -1985,6 +1985,29 @@ class MainWindow(QMainWindow):
             )
         )
 
+        self.list_extra_folders = QListWidget()
+        self.list_extra_folders.setMinimumWidth(220)
+        self.list_extra_folders.setFixedHeight(scaled_px(72))
+        self.list_extra_folders.setStyleSheet(
+            "QListWidget { background-color: #141416; border: 1px solid #2C2C2E; border-radius: 8px;"
+            " padding: 2px 4px; font-size: 12.5px; }"
+            "QListWidget::item:selected { background-color: #0A84FF; color: #FFFFFF; border-radius: 4px; }"
+        )
+        btn_add_extra = InteractiveRibbonBtn("Add...")
+        btn_add_extra.setToolTip("Choose another folder to keep tidy, like your Desktop or Screenshots")
+        btn_add_extra.clicked.connect(self._browse_extra_folder)
+        btn_remove_extra = InteractiveRibbonBtn("Remove")
+        btn_remove_extra.setToolTip("Stop tidying the selected folder (files already sorted stay where they are)")
+        btn_remove_extra.clicked.connect(self._remove_extra_folder)
+        card_core.add_row(
+            SettingRow(
+                "Also Tidy These Folders",
+                "Loose files in these folders are sorted into folders inside each one, with the same rules. "
+                "Files no rule or file type matches stay put.",
+                controls=[self.list_extra_folders, btn_add_extra, btn_remove_extra],
+            )
+        )
+
         self.chk_type_subfolders = MacToggle()
         card_core.add_row(
             SettingRow(
@@ -2866,6 +2889,8 @@ class MainWindow(QMainWindow):
         cfg = self.service.config
         self.chk_auto_sort.setChecked(not cfg.paused)
         self.edit_watch_folder.setText(display_watch_folder(cfg.watch_folder))
+        self.list_extra_folders.clear()
+        self.list_extra_folders.addItems(cfg.extra_watch_folders)
         self.spin_settle.setValue(cfg.settle_seconds)
         idx = self.combo_fallback.findData(cfg.fallback_mode)
         self.combo_fallback.setCurrentIndex(max(0, idx))
@@ -3448,6 +3473,22 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
 
+    def _browse_extra_folder(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(self, "Choose a Folder to Keep Tidy", str(Path.home()))
+        if chosen:
+            self._add_extra_folder(chosen)
+
+    def _add_extra_folder(self, folder: str) -> None:
+        folder = str(folder).strip()
+        existing = {self.list_extra_folders.item(i).text() for i in range(self.list_extra_folders.count())}
+        if folder and folder not in existing:
+            self.list_extra_folders.addItem(folder)
+
+    def _remove_extra_folder(self) -> None:
+        row = self.list_extra_folders.currentRow()
+        if row >= 0:
+            self.list_extra_folders.takeItem(row)
+
     def _browse_watch_folder(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Select Folder to Organize", str(self.service.watch_root))
         if chosen:
@@ -3458,6 +3499,9 @@ class MainWindow(QMainWindow):
         cfg.paused = not self.chk_auto_sort.isChecked()
         typed = self.edit_watch_folder.text().strip()
         cfg.watch_folder = stored_watch_folder(typed)
+        cfg.extra_watch_folders = [
+            self.list_extra_folders.item(i).text() for i in range(self.list_extra_folders.count())
+        ]
         cfg.settle_seconds = float(self.spin_settle.value())
         cfg.fallback_mode = str(self.combo_fallback.currentData() or "other")
         cfg.use_type_subfolders = self.chk_type_subfolders.isChecked()

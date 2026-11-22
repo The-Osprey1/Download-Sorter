@@ -488,6 +488,8 @@ class Config:
 
     schema_version: int = 3
     watch_folder: str = DEFAULT_WATCH_FOLDER
+    # More folders to tidy (Desktop, Screenshots...), each sorted into folders inside itself.
+    extra_watch_folders: list[str] = field(default_factory=list)
     settle_seconds: float = 3.0
     fallback_mode: str = "other"  # "other" or "leave"
     default_folder: str = "Other"
@@ -519,6 +521,7 @@ class Config:
     def __post_init__(self) -> None:
         self.schema_version = 3
         self.watch_folder = str(self.watch_folder or DEFAULT_WATCH_FOLDER)
+        self.extra_watch_folders = _normalize_str_list(self.extra_watch_folders)
         self.settle_seconds = max(0.0, float(self.settle_seconds))
         self.fallback_mode = self.fallback_mode if self.fallback_mode in ("other", "leave") else "other"
         self.default_folder = str(self.default_folder or "Other").strip().strip("\\") or "Other"
@@ -604,6 +607,18 @@ class Config:
         expanded = os.path.expandvars(os.path.expanduser(self.watch_folder))
         return Path(expanded).resolve()
 
+    def resolved_extra_folders(self) -> list[Path]:
+        """The extra folders as full paths (``${USERPROFILE}`` and the like expanded)."""
+        out: list[Path] = []
+        for text in self.extra_watch_folders:
+            try:
+                home = str(Path.home())
+                expanded = text.replace("${USERPROFILE}", home).replace("%USERPROFILE%", home)
+                out.append(Path(os.path.expandvars(os.path.expanduser(expanded))).resolve())
+            except (OSError, ValueError):
+                continue
+        return out
+
     def apply_template(self, template_key: str) -> int:
         """Append rules from ``STARTER_TEMPLATES`` if not already present by name. Returns count added."""
         existing_names = {r.name.lower() for r in self.rules}
@@ -619,6 +634,7 @@ class Config:
         return {
             "schema_version": self.schema_version,
             "watch_folder": self.watch_folder,
+            "extra_watch_folders": list(self.extra_watch_folders),
             "settle_seconds": self.settle_seconds,
             "fallback_mode": self.fallback_mode,
             "default_folder": self.default_folder,
@@ -653,6 +669,7 @@ class Config:
             raise TypeError("Config payload must be a JSON object")
         return cls(
             watch_folder=data.get("watch_folder", DEFAULT_WATCH_FOLDER),
+            extra_watch_folders=list(data.get("extra_watch_folders") or []),
             settle_seconds=data.get("settle_seconds", 3.0),
             fallback_mode=data.get("fallback_mode", "other"),
             default_folder=data.get("default_folder", "Other"),
