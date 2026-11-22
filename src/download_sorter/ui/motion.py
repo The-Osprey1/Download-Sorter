@@ -21,16 +21,13 @@ from PySide6.QtCore import (
     QPointF,
     QPropertyAnimation,
     QRectF,
-    QSize,
     QTimer,
     QVariantAnimation,
     Qt,
     Signal,
 )
 from PySide6.QtGui import (
-    QBrush,
     QColor,
-    QFont,
     QFontMetrics,
     QIcon,
     QLinearGradient,

@@ -10,45 +10,28 @@ Exercises 5 multi-component end-to-end user journeys:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-import sys
 import time
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 
 from download_sorter.quick_switcher import (
     ADMIN_WARNING,
-    DEFAULT_RECENCY_TTL,
-    THREE_D_EXTENSIONS,
-    THREE_D_MAX_AGE_SEC,
-    TOO_MANY_WARNING,
-    QuickSwitcherMonitor,
     blocked_by_uipi,
     build_dropfiles,
     clear_recent_file,
     consume_items,
-    copy_files_to_clipboard,
-    find_dialog_edit_control,
-    get_recent_batch,
     get_recent_file,
-    inject_file_into_dialog,
     inject_files_into_dialog,
-    invalidate_recent_file,
     is_file_dialog,
-    plan_injection,
-    prune_stages,
-    read_clipboard_files,
     record_recent_file,
-    stage_batch,
     start_file_drag,
 )
 
 from download_sorter.ui.quick_switcher_pill import QuickSwitcherPill
 
-from tests_v3.mock_win32 import FakeWin32Desktop, MockWindow
+from tests_v3.mock_win32 import FakeWin32Desktop
 
 
 # ===========================================================================
@@ -63,7 +46,7 @@ def test_scenario_1_download_3d_model_and_open_slicer(
     t0 = 200000.0
 
     # 1. Download file placed in watch folder
-    model = create_test_file("articulated_dragon.3mf", content=b"3MF ZIP PK HEADER DATA")
+    create_test_file("articulated_dragon.3mf", content=b"3MF ZIP PK HEADER DATA")
 
     # 2. SorterService sorts file and records into recency buffer
     with patch("time.time", return_value=t0):
@@ -112,10 +95,9 @@ def test_scenario_2_multifile_batch_download_and_multiselect_upload(
 ) -> None:
     """Scenario 2: User downloads 4 JPG photos; uploads all simultaneously via multi-file injection."""
     clear_recent_file(data_dir=app_paths.data_dir)
-    now = time.time()
-
     # 1. 4 photos downloaded in rapid succession (every 2 seconds)
-    photos = [create_test_file(f"photo_{i}.jpg", content=b"JPG DATA") for i in range(1, 5)]
+    for i in range(1, 5):
+        create_test_file(f"photo_{i}.jpg", content=b"JPG DATA")
 
     # 2. Sorter sorts all 4 into category destination
     summary = service_instance.scan_top_level_now(settle_seconds=0.0)
@@ -125,7 +107,7 @@ def test_scenario_2_multifile_batch_download_and_multiselect_upload(
     recent = get_recent_file(data_dir=app_paths.data_dir)
     assert recent is not None
     assert recent["batch_count"] == 4
-    batch_id = recent["batch_id"]
+    assert "batch_id" in recent
 
     # 4. Chrome file upload dialog opened
     browser_dlg = fake_desktop.create_dialog(title="Open", edit_type="ComboBoxEx32")
@@ -164,7 +146,7 @@ def test_scenario_3_download_undo_and_file_dialog_exclusion(
     summary = service_instance.scan_top_level_now(settle_seconds=0.0)
     assert len(summary["moved"]) == 1
     move_id = summary["moved"][0]["id"]
-    dest_path = summary["moved"][0]["dest_path"]
+    assert "dest_path" in summary["moved"][0]
 
     # Verify offered in recent state
     recent = get_recent_file(data_dir=app_paths.data_dir)

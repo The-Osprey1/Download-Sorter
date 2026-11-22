@@ -1,6 +1,6 @@
 # Download Sorter
 
-> **Made by Devyn Fidel (2026)** · v3.0.0 · [MIT License](LICENSE)
+> **Made by Devyn Fidel (2026)** · [MIT License](LICENSE)
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
@@ -9,17 +9,19 @@
 
 **Download Sorter keeps your Downloads folder tidy.** A few seconds after a download finishes, it moves the file into a folder for its type (Documents, Images, Installers and so on), right inside Downloads. Everything happens on your PC, and every move can be undone.
 
+It watches the folder Windows uses for Downloads, even if you moved it to another drive or OneDrive moved it.
+
 Version 3 is one program with one window. [Coming from 2.x? Read this first.](#coming-from-2x)
 
 ---
 
 ## Get it
 
-1. **Download** the installer, `DownloadSorter-Setup-v3.0.0-windows-x64.exe`, from the [releases page](https://github.com/The-Osprey1/Download-Sorter/releases).
+1. **Download** the installer, `DownloadSorter-Setup-v<version>-windows-x64.exe`, from the [releases page](https://github.com/The-Osprey1/Download-Sorter/releases/latest).
 2. **Run it.** Windows will probably show a blue "Windows protected your PC" screen the first time. [Here's why, and what to click](#windows-protected-your-pc).
    - It installs just for you, in `%LOCALAPPDATA%\Programs\DownloadSorter`. No administrator password is needed.
    - It adds Start menu and desktop shortcuts, and an entry in Installed apps.
-3. **Follow the three welcome steps** the first time the window opens. Nothing is sorted until you finish or skip them.
+3. **Follow the three welcome steps** the first time the window opens. The second step asks what you download most (school work, bills and receipts, travel, contracts, job hunting, 3D printing) and adds rules for the ones you tick. Nothing is sorted until you finish or skip the steps.
 
 You need Windows 10 or 11. Nothing else needs to be installed.
 
@@ -27,6 +29,7 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
 - **New downloads are filed a few seconds after they finish.** Half-finished downloads, and files another program still has open, are left alone and tried again later.
 - **Only loose files at the top of Downloads are sorted.** Anything already inside a folder is never touched.
+- **Other folders too, if you like.** Add your Desktop, Screenshots or any folder under Settings > **Also Tidy These Folders**. Each is sorted into folders inside itself; files nothing matches stay put.
 - **Home shows what would happen before it happens.** The preview lists every file in Downloads with where it will go and why. Below it, the list of sorted files has an **Undo** button on every row.
 - **Files land in folders inside Downloads.** By default a main folder, then a folder for each kind of file:
 
@@ -45,10 +48,12 @@ You need Windows 10 or 11. Nothing else needs to be installed.
   ```
 
   To keep everything one level deep, turn off the type subfolders in **Settings**. Unrecognized file types can go to `Other` or stay where they are.
-- **Folder Architecture lets you design the layout.** Arrange folders top to bottom in tiers, start from **Auto-Create Basic** or the premade folders, add your own folders with rules, then **Apply & Shift Files**. **Undo** and **Return to Defaults** put things back.
-- **Custom Rules send files by name or website.** A rule matches words in the file name, the website the file came from, and optionally only certain file types. Rules are checked top to bottom; the first match wins. Type a file name into the tester on that page to see where it would go.
+- **Folder Architecture lets you design the layout** (turn on **Show Advanced Tools** in Settings to see it). Arrange folders top to bottom in tiers, start from **Auto-Create Basic** or the premade folders, add your own folders with rules, then **Apply & Shift Files**. **Undo** and **Return to Defaults** put things back.
+- **Custom Rules send files by name or website.** A rule matches words in the file name, the website the file came from, and optionally only certain file types. Words can be in any language, and accents are optional (`resume` matches `Résumé.pdf`). Rules are checked top to bottom; the first match wins. Type a file name into the tester on that page to see where it would go.
+- **Rule packs** add ready-made rules in one click: School, Job hunting, Bills & receipts, Travel, Contracts and 3D printing. Pick them in the welcome steps or from **+ Rule Pack** on the Custom Rules page.
 - **A new `.3mf` stays in Downloads for 7 days**, so your slicer can still find it. When the days are up it also stays for as long as Bambu Studio, OrcaSlicer, PrusaSlicer or Cura is running (14 days at most). **Move Held .3MF** files them straight away.
-- **A ribbon in the top-right corner tells you what moved**, with **Undo**. Choose how long it stays in Settings; hover to pause it.
+- **A ribbon in the top-right corner tells you what moved**, with **Undo**. Choose how long it stays in Settings; hover to pause it. It stays away while a game, a full-screen video, a presentation or the lock screen is up; the files are still sorted and listed on Home.
+- **Bigger text if you need it.** Download Sorter follows Windows' text size (Settings > Accessibility > Text size), up to 150%, and works with Narrator and other screen readers.
 - **Recent File Insert.** When another program asks you to choose a file to open or upload, a small pill offers the file Download Sorter just filed, so you don't have to go looking for it. It can be turned off in Settings.
 
 ## How a file's folder is chosen
@@ -84,7 +89,7 @@ To check that your download is exactly what was published:
 2. Run this in PowerShell, in the folder where the installer is:
 
    ```powershell
-   Get-FileHash .\DownloadSorter-Setup-v3.0.0-windows-x64.exe -Algorithm SHA256
+   Get-FileHash .\DownloadSorter-Setup-v<version>-windows-x64.exe -Algorithm SHA256
    ```
 
 3. The long code it prints should match the line for the installer in `checksums.txt`.
@@ -132,9 +137,9 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 - **Start with Windows** and the **right-click menu** ("Sort with Download Sorter" on a folder) are switches in Settings.
 - **Back up or move your setup:** Settings → Upgrade & Backup exports your rules and folder layout to one file; **Carry Over v2.8 / Setup...** loads it back.
 - **Uninstall:** Windows Settings → Apps → Installed apps → Download Sorter → Uninstall. It asks whether to also delete your rules and history.
-- **Something went wrong?** Open an [issue](https://github.com/The-Osprey1/Download-Sorter/issues/new/choose). If you can, attach `%LOCALAPPDATA%\download-sorter-v3\sorter_v3.log` (look it over first: it contains file names).
+- **Something went wrong?** Open an [issue](https://github.com/The-Osprey1/Download-Sorter/issues/new/choose). If you can, attach `%LOCALAPPDATA%\download-sorter-v3\sorter_v3.log` (look it over first: it contains file names). Unexpected errors are written there with the details a fix needs.
 
-*Unattended install, for IT folks:* `DownloadSorter-Setup-v3.0.0-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
+*Unattended install, for IT folks:* `DownloadSorter-Setup-v<version>-windows-x64.exe /S` (optional `/D=C:\Custom\Path`). The Inno Setup spellings `/VERYSILENT`, `/SILENT` and `/DIR=` work too.
 
 ## Coming from 2.x
 
@@ -142,7 +147,8 @@ Version 3 is a rewrite, and it is deliberately smaller.
 
 - **Your rules come with you.** The first time version 3 starts it copies your 2.x word rules, watched folder and .3mf hold setting into its own settings folder (`download-sorter-v3`). Your 2.x settings are left where they were, and **Carry Over v2.8 / Setup...** does the import again whenever you want. Other 2.x settings start from the version 3 defaults.
 - **Files 2.x already sorted stay where they are.** Version 3 only sorts loose files at the top of Downloads.
-- **Not in 3.0:** the Ctrl+Shift+Space search window, learning from your moves, project folders and the Projects page, Clean up a folder (remodel), unzipping downloads, the G-code and MakerWorld checks, the Desktop sweep, old-installer cleanup, pictures by month, and rules that read inside PDFs. If you rely on one of these, stay on 2.8 for now and [say which](https://github.com/The-Osprey1/Download-Sorter/issues).
+- **Back since 3.2:** the Ctrl+Shift+Space search window, rule suggestions from files you move by hand, unzipping downloads, rules that read inside PDFs, old-installer cleanup (**Detox**), and photo folders by year and month.
+- **Still not in 3.x:** project folders and the Projects page, Clean up a folder (remodel), the G-code and MakerWorld checks, and the Desktop sweep. If you rely on one of these, stay on 2.8 for now and [say which](https://github.com/The-Osprey1/Download-Sorter/issues).
 
 ---
 
@@ -176,7 +182,7 @@ Everything is in `%LOCALAPPDATA%\download-sorter-v3`:
 |---|---|
 | `config.json` | Settings, rules and folder layout (`config.json.bak` is the previous save). |
 | `state.db` | The history of moves, used by Undo (SQLite). |
-| `sorter_v3.log` | The log. |
+| `sorter_v3.log` | The log. It starts a new file at 2 MB and keeps two older ones (`.1`, `.2`). |
 | `recent_files.json` | The files Recent File Insert can offer. |
 | `updates\` | A downloaded installer, until it has been installed. |
 
@@ -194,16 +200,17 @@ src/download_sorter/
   db.py                     move history with a two-phase journal
   ipc.py                    single-instance commands between copies
   update_check.py, updater.py   the daily version check and verified download
+  quiet_time.py             holds ribbons during full-screen apps and presentations
+  diagnostics.py            the size-capped log and unexpected-error capture
   quick_switcher.py         Recent File Insert
   cli.py                    the command line
-  ui/                       window, tray, ribbons, background workers
+  ui/                       window, tray, ribbons, background workers, screen-reader names
 tests_v3/                   the test suite
 build_release.py            builds dist/ (PyInstaller, zip, setup file, checksums)
 installer_builder.py        the single-file setup program
 verify_release.py           release preflight
 ```
 
-The other `.py` files at the top of the repository belong to version 2. They are kept for reference and are not part of the 3.0 program.
 
 ## Developing
 

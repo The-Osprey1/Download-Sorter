@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 import zipfile
 
 from download_sorter.architecture import (

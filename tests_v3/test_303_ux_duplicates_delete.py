@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase, QPixmap
 
 from download_sorter import fs_ops

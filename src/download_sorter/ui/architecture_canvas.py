@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 import os
-from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import (
@@ -110,14 +109,7 @@ BLUEPRINT_PILLS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _make_pill_button(text: str, *, checkable: bool = True, tooltip: str = "") -> QPushButton:
-    btn = QPushButton(text)
-    btn.setObjectName("ArchPillBtn")
-    btn.setCheckable(checkable)
-    btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-    btn.setStyleSheet(
-        """
+_PILL_CSS = """
         QPushButton#ArchPillBtn {
             background-color: #1C1C1E;
             color: #AEAEB2;
@@ -143,7 +135,17 @@ def _make_pill_button(text: str, *, checkable: bool = True, tooltip: str = "") -
             border-color: #222225;
         }
         """
-    )
+
+
+def _make_pill_button(
+    text: str, *, checkable: bool = True, tooltip: str = "", extra_css: str = ""
+) -> QPushButton:
+    btn = QPushButton(text)
+    btn.setObjectName("ArchPillBtn")
+    btn.setCheckable(checkable)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    btn.setStyleSheet(_PILL_CSS + extra_css)
     if tooltip:
         btn.setToolTip(tooltip)
     return btn
@@ -747,10 +749,12 @@ class TemplateShelfWidget(QFrame):
         filter_row.setSpacing(4)
         self._filter_btns: dict[str, QPushButton] = {}
         for fkey, label in (("all", "All"), ("t1", "T1"), ("t2", "T2+")):
-            b = _make_pill_button(label, checkable=True)
-            b.setStyleSheet(
-                b.styleSheet()
-                + "QPushButton#ArchPillBtn { padding: 2px 8px; font-size: 10.5px; }"
+            # Styled in one go: reading a style back and setting it again would scale
+            # its font sizes twice when Windows text is bigger (see ui/text_scale.py).
+            b = _make_pill_button(
+                label,
+                checkable=True,
+                extra_css="QPushButton#ArchPillBtn { padding: 2px 8px; font-size: 10.5px; }",
             )
             b.clicked.connect(lambda _c, k=fkey: self._set_tier_filter(k))
             self._filter_btns[fkey] = b
@@ -1799,7 +1803,6 @@ class FolderArchitectureCanvas(QWidget):
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pt = self._to_canvas(event.position())
 
         # Complete '+' handle spawn or wire-reparent
         if self._spawning_from_id is not None:

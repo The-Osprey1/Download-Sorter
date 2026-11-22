@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGraphicsDropShadowEffect,
-    QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -59,20 +59,23 @@ from download_sorter.chrome_bridge import (
     is_chrome_host_registered,
 )
 from download_sorter.config import (
+    STARTER_PACK_LABELS,
     Config,
     Rule,
     carry_over_setup,
     export_setup_file,
+    display_watch_folder,
     import_v2_config,
-    portable_path,
-    readable_path,
+    stored_watch_folder,
 )
 from download_sorter.learning import dismiss_suggestion, get_rule_suggestions
 from download_sorter.paths import AppPaths
 from download_sorter.quick_switcher import normalize_hotkey, parse_hotkey
 from download_sorter.service import SorterService
 from download_sorter import update_check, updater
+from download_sorter.ui.accessibility import name_controls_for_screen_readers
 from download_sorter.ui.architecture_canvas import ArchitectureTab
+from download_sorter.ui.text_scale import scaled_px
 from download_sorter.ui.chrome_walkthrough import ChromeExtensionWalkthroughDialog
 from download_sorter.ui.motion import (
     AnimatedBanner,
@@ -91,7 +94,6 @@ from download_sorter.ui.motion import (
     flash_rows,
     make_badge as _make_badge,
     make_vector_icon,
-    refresh_style as _refresh_style,
     slide_toggle,
 )
 from download_sorter.ui.theme import STYLESHEET
@@ -246,7 +248,7 @@ class UpgradeCarryOverDialog(QDialog):
                 f"Detected {schema_txt} · {summary['rules_imported']} custom rule(s) · "
                 f"{summary['categories_imported']} extension rule(s) · "
                 f"{summary['subfolders_imported']} type subfolder(s)\n"
-                f"Protected .3MF Hold: {hold_txt} · Watch folder: {readable_path(str(summary['watch_folder']))}\n"
+                f"Protected .3MF Hold: {hold_txt} · Watch folder: {display_watch_folder(str(summary['watch_folder']))}\n"
                 f"Resulting Folder Architecture: {summary['tier_count']} tier(s), "
                 f"{summary['arch_nodes']} folder node(s)."
             )
@@ -600,7 +602,7 @@ def _style_table(table: QTableWidget) -> None:
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     table.verticalHeader().setVisible(False)
-    table.verticalHeader().setDefaultSectionSize(40)
+    table.verticalHeader().setDefaultSectionSize(scaled_px(40))
     table.horizontalHeader().setHighlightSections(False)
 
 
@@ -666,10 +668,15 @@ class WalkthroughDialog(QDialog):
         header_row.addLayout(header_text, 1)
         layout.addLayout(header_row)
 
-        # Calm Recessed Diagram Stage
+        # Calm Recessed Diagram Stage; step 2 shows the rule pack chooser in its place.
         self.stage_canvas = WalkthroughDiagramCanvas(container)
         self.stage_canvas.setMinimumSize(500, 148)
-        layout.addWidget(self.stage_canvas)
+        self.packs_panel = self._build_packs_panel()
+        self.stage = QStackedWidget()
+        self.stage.setFixedHeight(148)
+        self.stage.addWidget(self.stage_canvas)
+        self.stage.addWidget(self.packs_panel)
+        layout.addWidget(self.stage)
 
         # Concise 1-line footnote per step (unboxed, zero nested border clutter)
         self.pages = QStackedWidget()
@@ -677,7 +684,7 @@ class WalkthroughDialog(QDialog):
         self.pages.addWidget(self._build_page(f"Watching top-level only: {watch_root}"))
         self.pages.addWidget(
             self._build_page(
-                f".3MF files wait {hold_days} days by default · Every move has 1-Click Undo"
+                "Everything else is still sorted by file type · Every move can be undone"
             )
         )
         self.pages.addWidget(
@@ -738,8 +745,8 @@ class WalkthroughDialog(QDialog):
             ),
             (
                 "STEP 2 OF 3",
-                "Safe Slicer Hold & Instant Undo",
-                f"New .3MF print files stay in Downloads for {hold_days} days so you can slice first, and every sort is 1-click reversible.",
+                "What Do You Download Most?",
+                "Tick any that fit and I'll add rules for them. You can add or remove rule packs later on the Custom Rules page.",
             ),
             (
                 "STEP 3 OF 3",
@@ -748,6 +755,27 @@ class WalkthroughDialog(QDialog):
             ),
         ]
         self._go(0)
+
+    def _build_packs_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("WalkthroughPacks")
+        grid = QGridLayout(panel)
+        grid.setContentsMargins(4, 6, 4, 6)
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(10)
+        self.pack_boxes: dict[str, QCheckBox] = {}
+        for index, (key, (label, description)) in enumerate(STARTER_PACK_LABELS.items()):
+            box = QCheckBox(label.replace("&", "&&"))  # a single & would mark a shortcut key
+            box.setAccessibleName(label)
+            box.setToolTip(description)
+            box.setAccessibleDescription(description)
+            self.pack_boxes[key] = box
+            grid.addWidget(box, index // 2, index % 2)
+        return panel
+
+    def selected_packs(self) -> list[str]:
+        """The rule packs ticked on step 2, in the order they are offered."""
+        return [key for key, box in self.pack_boxes.items() if box.isChecked()]
 
     def _build_page(self, highlight_text: str) -> QWidget:
         page = QWidget()
@@ -764,6 +792,7 @@ class WalkthroughDialog(QDialog):
         idx = max(0, min(2, index))
         self.pages.setCurrentIndex(idx)
         self.stage_canvas.set_step(idx)
+        self.stage.setCurrentWidget(self.packs_panel if idx == 1 else self.stage_canvas)
         self.mascot_widget.set_step(idx)
 
         badge_txt, title_txt, speech_txt = self._step_meta[idx]
@@ -962,10 +991,10 @@ class DuplicateManagerDialog(QDialog):
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.tbl_dups.setColumnWidth(0, 38)
-        self.tbl_dups.setColumnWidth(3, 136)
-        self.tbl_dups.setColumnWidth(4, 126)
-        self.tbl_dups.setColumnWidth(5, 84)
+        self.tbl_dups.setColumnWidth(0, scaled_px(38))
+        self.tbl_dups.setColumnWidth(3, scaled_px(136))
+        self.tbl_dups.setColumnWidth(4, scaled_px(126))
+        self.tbl_dups.setColumnWidth(5, scaled_px(84))
         self.tbl_dups.cellClicked.connect(self._on_cell_clicked)
         self.tbl_dups.itemSelectionChanged.connect(self._update_summary)
         self.tbl_dups.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1048,6 +1077,7 @@ class DuplicateManagerDialog(QDialog):
 
         for idx, entry in enumerate(self._entries):
             chk = QCheckBox()
+            chk.setAccessibleName(f"Select {entry.get('name') or 'this duplicate'}")
             chk.stateChanged.connect(lambda _s: self._update_summary())
             holder = QWidget()
             hl = QHBoxLayout(holder)
@@ -1407,6 +1437,8 @@ class MainWindow(QMainWindow):
         self.moves_received.connect(self._on_background_moves_received)
         self.refresh_all()
         install_global_button_feedback(self, self.lbl_footer)
+        # Before a narrow window drops the header buttons' text.
+        name_controls_for_screen_readers(self)
 
     # ------------------------------------------------------------------
     # Single-Row Apple Toolbar
@@ -1687,8 +1719,8 @@ class MainWindow(QMainWindow):
         s_hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         s_hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         s_hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.tbl_sim.setColumnWidth(0, 240)
-        self.tbl_sim.setColumnWidth(1, 148)
+        self.tbl_sim.setColumnWidth(0, scaled_px(240))
+        self.tbl_sim.setColumnWidth(1, scaled_px(148))
         sim_layout.addWidget(self.tbl_sim, 1)
         layout.addWidget(sim_card, 3)
 
@@ -1718,7 +1750,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.tbl_activity.setColumnWidth(1, 220)
+        self.tbl_activity.setColumnWidth(1, scaled_px(220))
         act_layout.addWidget(self.tbl_activity, 1)
         layout.addWidget(act_card, 2)
         return tab
@@ -1736,15 +1768,19 @@ class MainWindow(QMainWindow):
         packs_row = QHBoxLayout(packs_wrap)
         packs_row.setContentsMargins(0, 0, 0, 0)
         packs_row.setSpacing(6)
-        for label, tpl_key in (
-            ("+ School", "school"),
-            ("+ Career", "career"),
-            ("+ 3D Printing", "3d_printing"),
-        ):
-            btn = InteractiveRibbonBtn(label)
-            btn.setToolTip(f"Add starter pack: {label.lstrip('+ ')}")
-            btn.clicked.connect(lambda _=False, k=tpl_key: self._apply_template(k))
-            packs_row.addWidget(btn)
+        self.btn_rule_packs = InteractiveRibbonBtn("+ Rule Pack")
+        self.btn_rule_packs.setToolTip("Add a ready-made set of rules for School, Bills & receipts, Travel and more")
+        self.menu_rule_packs = QMenu(self.btn_rule_packs)
+        for tpl_key, (label, description) in STARTER_PACK_LABELS.items():
+            action = self.menu_rule_packs.addAction(f"{label} — {description}".replace("&", "&&"))
+            action.setData(tpl_key)
+            action.triggered.connect(lambda _=False, k=tpl_key: self._apply_template(k))
+        self.btn_rule_packs.clicked.connect(
+            lambda: self.menu_rule_packs.exec(
+                self.btn_rule_packs.mapToGlobal(self.btn_rule_packs.rect().bottomLeft())
+            )
+        )
+        packs_row.addWidget(self.btn_rule_packs)
         btn_import = InteractiveRibbonBtn("Carry Over v2.8 / Setup...")
         btn_import.setObjectName("GhostButton")
         btn_import.setToolTip("Import rules, overrides, or folder layouts from Download Sorter v2.8 or an exported v3 JSON file")
@@ -1832,10 +1868,10 @@ class MainWindow(QMainWindow):
         r_hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         r_hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
         r_hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
-        self.tbl_rules.setColumnWidth(1, 180)
-        self.tbl_rules.setColumnWidth(2, 175)
-        self.tbl_rules.setColumnWidth(4, 140)
-        self.tbl_rules.setColumnWidth(5, 120)
+        self.tbl_rules.setColumnWidth(1, scaled_px(180))
+        self.tbl_rules.setColumnWidth(2, scaled_px(175))
+        self.tbl_rules.setColumnWidth(4, scaled_px(140))
+        self.tbl_rules.setColumnWidth(5, scaled_px(120))
         rules_layout.addWidget(self.tbl_rules, 1)
         layout.addWidget(rules_card, 1)
 
@@ -1946,6 +1982,29 @@ class MainWindow(QMainWindow):
                 "Folder to Organize",
                 "Primary folder monitored by Download Sorter.",
                 controls=[self.edit_watch_folder, btn_browse],
+            )
+        )
+
+        self.list_extra_folders = QListWidget()
+        self.list_extra_folders.setMinimumWidth(220)
+        self.list_extra_folders.setFixedHeight(scaled_px(72))
+        self.list_extra_folders.setStyleSheet(
+            "QListWidget { background-color: #141416; border: 1px solid #2C2C2E; border-radius: 8px;"
+            " padding: 2px 4px; font-size: 12.5px; }"
+            "QListWidget::item:selected { background-color: #0A84FF; color: #FFFFFF; border-radius: 4px; }"
+        )
+        btn_add_extra = InteractiveRibbonBtn("Add...")
+        btn_add_extra.setToolTip("Choose another folder to keep tidy, like your Desktop or Screenshots")
+        btn_add_extra.clicked.connect(self._browse_extra_folder)
+        btn_remove_extra = InteractiveRibbonBtn("Remove")
+        btn_remove_extra.setToolTip("Stop tidying the selected folder (files already sorted stay where they are)")
+        btn_remove_extra.clicked.connect(self._remove_extra_folder)
+        card_core.add_row(
+            SettingRow(
+                "Also Tidy These Folders",
+                "Loose files in these folders are sorted into folders inside each one, with the same rules. "
+                "Files no rule or file type matches stay put.",
+                controls=[self.list_extra_folders, btn_add_extra, btn_remove_extra],
             )
         )
 
@@ -2226,6 +2285,15 @@ class MainWindow(QMainWindow):
             "Windows integration, release checks, and portable configuration backup.",
         )
 
+        self.chk_show_advanced = MacToggle()
+        card_sys.add_row(
+            SettingRow(
+                "Show Advanced Tools",
+                "The Folder Architecture page and Sort Lower Tiers, for designing your own folder layout.",
+                controls=self.chk_show_advanced,
+            )
+        )
+
         self.chk_startup = MacToggle()
         card_sys.add_row(
             SettingRow(
@@ -2300,6 +2368,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Refresh & Actions
     # ------------------------------------------------------------------
+    def _apply_advanced_tools_visibility(self, show: bool) -> None:
+        """The simpler window (new installs) hides Folder Architecture and Sort Lower Tiers."""
+        arch_index = self.tabs.indexOf(self.arch_tab)
+        if not show and self.tabs.currentIndex() == arch_index:
+            self.tabs.setCurrentIndex(0)
+        self.tabs.setTabVisible(arch_index, show)
+        self.btn_sort_tiers.setVisible(show)
+
     def _on_tab_changed(self, index: int) -> None:
         for i, icon_name in enumerate(self._tab_icon_names):
             col = "#F5F5F7" if i == index else "#8E8E93"
@@ -2713,6 +2789,8 @@ class MainWindow(QMainWindow):
         self.tbl_rules.setRowCount(len(rules))
         for idx, rule in enumerate(rules):
             chk = QCheckBox()
+            chk.setAccessibleName(f"Rule {rule.name} is on")
+            chk.setToolTip(f"Turn the rule '{rule.name}' on or off")
             chk.setChecked(rule.enabled)
             chk.toggled.connect(lambda checked, i=idx: self._toggle_rule_enabled(i, checked))
             holder = QWidget()
@@ -2810,13 +2888,17 @@ class MainWindow(QMainWindow):
     def _refresh_settings_fields(self) -> None:
         cfg = self.service.config
         self.chk_auto_sort.setChecked(not cfg.paused)
-        self.edit_watch_folder.setText(readable_path(cfg.watch_folder))
+        self.edit_watch_folder.setText(display_watch_folder(cfg.watch_folder))
+        self.list_extra_folders.clear()
+        self.list_extra_folders.addItems(cfg.extra_watch_folders)
         self.spin_settle.setValue(cfg.settle_seconds)
         idx = self.combo_fallback.findData(cfg.fallback_mode)
         self.combo_fallback.setCurrentIndex(max(0, idx))
         self.chk_type_subfolders.setChecked(cfg.use_type_subfolders)
         self.chk_notifications.setChecked(cfg.notifications_enabled)
         self.chk_check_updates.setChecked(cfg.check_for_updates)
+        self.chk_show_advanced.setChecked(cfg.show_advanced_tools)
+        self._apply_advanced_tools_visibility(cfg.show_advanced_tools)
         self.spin_ribbon_timeout.setValue(max(1.0, min(30.0, float(cfg.ribbon_timeout_seconds))))
         self.spin_ribbon_timeout.setEnabled(cfg.notifications_enabled)
         self.chk_quick_switcher.setChecked(cfg.quick_switcher_enabled)
@@ -3250,11 +3332,14 @@ class MainWindow(QMainWindow):
         cfg = copy.deepcopy(self.service.config)
         added = cfg.apply_template(template_key)
         self._commit_config(cfg)
-        self.banner.show_message(
-            f"Added starter rule pack '{template_key}': {added} new rule(s).",
-            kind="success" if added else "info",
+        label = STARTER_PACK_LABELS.get(template_key, (template_key, ""))[0]
+        message = (
+            f"Added the {label} rule pack: {added} new rule(s)."
+            if added
+            else f"The {label} rule pack is already in your rules."
         )
-        self.lbl_footer.setText(f"Added starter rule pack '{template_key}': {added} new rule(s).")
+        self.banner.show_message(message, kind="success" if added else "info")
+        self.lbl_footer.setText(message)
 
     def _on_sorty_clicked(self, tip: str) -> None:
         if "SECRET UNLOCKED" in tip or "PARTY MODE" in tip.upper():
@@ -3388,6 +3473,22 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
 
+    def _browse_extra_folder(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(self, "Choose a Folder to Keep Tidy", str(Path.home()))
+        if chosen:
+            self._add_extra_folder(chosen)
+
+    def _add_extra_folder(self, folder: str) -> None:
+        folder = str(folder).strip()
+        existing = {self.list_extra_folders.item(i).text() for i in range(self.list_extra_folders.count())}
+        if folder and folder not in existing:
+            self.list_extra_folders.addItem(folder)
+
+    def _remove_extra_folder(self) -> None:
+        row = self.list_extra_folders.currentRow()
+        if row >= 0:
+            self.list_extra_folders.takeItem(row)
+
     def _browse_watch_folder(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Select Folder to Organize", str(self.service.watch_root))
         if chosen:
@@ -3397,12 +3498,16 @@ class MainWindow(QMainWindow):
         cfg = copy.deepcopy(self.service.config)
         cfg.paused = not self.chk_auto_sort.isChecked()
         typed = self.edit_watch_folder.text().strip()
-        cfg.watch_folder = portable_path(typed) if typed else r"${USERPROFILE}\Downloads"
+        cfg.watch_folder = stored_watch_folder(typed)
+        cfg.extra_watch_folders = [
+            self.list_extra_folders.item(i).text() for i in range(self.list_extra_folders.count())
+        ]
         cfg.settle_seconds = float(self.spin_settle.value())
         cfg.fallback_mode = str(self.combo_fallback.currentData() or "other")
         cfg.use_type_subfolders = self.chk_type_subfolders.isChecked()
         cfg.notifications_enabled = self.chk_notifications.isChecked()
         cfg.check_for_updates = self.chk_check_updates.isChecked()
+        cfg.show_advanced_tools = self.chk_show_advanced.isChecked()
         cfg.ribbon_timeout_seconds = float(self.spin_ribbon_timeout.value())
         self._preview_toast_mgr.default_duration_ms = int(cfg.ribbon_timeout_seconds * 1000)
         cfg.quick_switcher_enabled = self.chk_quick_switcher.isChecked()
@@ -3494,7 +3599,7 @@ class MainWindow(QMainWindow):
             hl.setContentsMargins(6, 0, 6, 0)
             hl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge = _make_badge(what, badge_variant)
-            badge.setMinimumWidth(108)
+            badge.setMinimumWidth(scaled_px(108))
             hl.addWidget(badge)
             self.tbl_sim.setCellWidget(idx, 1, holder)
 
@@ -3654,6 +3759,12 @@ class MainWindow(QMainWindow):
         """Launch the interactive 3-step onboarding walkthrough modal."""
         dlg = WalkthroughDialog(self.service.watch_root, self.service.config.hold_3mf_days, self)
         dlg.exec()
+        chosen = dlg.selected_packs()
+        if chosen:
+            cfg = copy.deepcopy(self.service.config)
+            added = sum(cfg.apply_template(key) for key in chosen)
+            if added:
+                self._commit_config(cfg)
         # Finished, skipped or closed with Esc: the tour has been seen either way.
         # Automatic sorting waits for this, so it must not stay pending forever.
         self.complete_walkthrough()
@@ -3687,14 +3798,16 @@ class MainWindow(QMainWindow):
     def _fit_to_window(self) -> None:
         width, height = self.width(), self.height()
         if hasattr(self, "lbl_status_badge"):
-            self.lbl_status_badge.setVisible(width >= self.HEADER_COMPACT_WIDTH)
+            self.lbl_status_badge.setVisible(width >= scaled_px(self.HEADER_COMPACT_WIDTH))
+            # The widths were tuned for 100% text; bigger text needs room sooner.
+            compact, tight = scaled_px(self.HEADER_COMPACT_WIDTH), scaled_px(self.HEADER_TIGHT_WIDTH)
             for btn in (self.btn_undo_last, self.btn_open_downloads, self.btn_walkthrough):
-                btn.set_collapsed(width < self.HEADER_COMPACT_WIDTH)
+                btn.set_collapsed(width < compact)
             for btn in (self.btn_pause, self.btn_file_held):
-                btn.set_collapsed(width < self.HEADER_TIGHT_WIDTH)
+                btn.set_collapsed(width < tight)
             for btn in (getattr(self, "btn_detox", None), getattr(self, "btn_quick_search", None)):
                 if btn is not None:
-                    btn.set_collapsed(width < 1200)
+                    btn.set_collapsed(width < scaled_px(1200))
         if hasattr(self, "list_test_trace"):
             show_trace = height >= self.TESTER_TRACE_MIN_HEIGHT
             if self.list_test_trace.isHidden() == show_trace:

@@ -5,6 +5,72 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sys
+
+# Stored in settings when the user hasn't picked a folder: "wherever Downloads is".
+DEFAULT_WATCH_FOLDER = r"${USERPROFILE}\Downloads"
+
+# Windows' identifier for the Downloads folder (FOLDERID_Downloads).
+_DOWNLOADS_FOLDER_ID = "374DE290-123F-4565-9164-39C4925E467B"
+
+
+def known_downloads_dir() -> Path | None:
+    """Where Windows says the Downloads folder is, or None if it can't say.
+
+    People move Downloads to another drive (Properties > Location), and OneDrive
+    can move it too, so ``%USERPROFILE%\\Downloads`` is not always the right folder.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        import uuid
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        folder_id = _GUID.from_buffer_copy(uuid.UUID(_DOWNLOADS_FOLDER_ID).bytes_le)
+        get_path = ctypes.WinDLL("shell32").SHGetKnownFolderPath
+        get_path.argtypes = [
+            ctypes.POINTER(_GUID),
+            wintypes.DWORD,
+            wintypes.HANDLE,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        get_path.restype = ctypes.c_long
+        free = ctypes.WinDLL("ole32").CoTaskMemFree
+        free.argtypes = [ctypes.c_void_p]
+        free.restype = None
+
+        buffer = ctypes.c_void_p()
+        result = get_path(ctypes.byref(folder_id), 0, None, ctypes.byref(buffer))
+        try:
+            if result != 0 or not buffer.value:
+                return None
+            text = ctypes.wstring_at(buffer.value)
+        finally:
+            if buffer.value:
+                free(buffer)
+    except Exception:  # noqa: BLE001 - any failure means "fall back to the profile folder"
+        return None
+    found = Path(text) if text else None
+    return found if found is not None and found.is_dir() else None
+
+
+def default_downloads_dir() -> Path:
+    """The Downloads folder: where Windows says it is, else the one in the profile."""
+    return known_downloads_dir() or Path.home() / "Downloads"
+
+
+def is_default_watch_folder(text: str) -> bool:
+    norm = str(text or "").strip().replace("/", "\\").rstrip("\\").lower()
+    return norm in ("", DEFAULT_WATCH_FOLDER.lower(), r"%userprofile%\downloads", r"$userprofile\downloads")
 
 
 def _local_app_data() -> Path:

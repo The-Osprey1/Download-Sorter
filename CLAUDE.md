@@ -9,10 +9,11 @@ Download Sorter v3 is a Windows single-process PySide6 desktop app (`DownloadSor
 - `build_release.py`, `installer_builder.py`, `verify_release.py`, `release_notes.py`, `version_resource.py`, `suite_theme.py`, `DownloadSorter.spec`: building and checking a release.
 
 ## Commands
-Use the project's virtual environment (create it with `python -m venv .venv` and `pip install -r requirements.txt pytest pytest-timeout pyinstaller`):
+Use the project's virtual environment (create it with `python -m venv .venv` and `pip install -r requirements.txt pytest pytest-timeout pyinstaller ruff`):
 
 ```powershell
 .\.venv\Scripts\python.exe -X faulthandler -m pytest tests_v3 -v   # tests
+.\.venv\Scripts\python.exe -m ruff check .                           # code check (also runs on GitHub)
 .\.venv\Scripts\python.exe main.py --version
 .\.venv\Scripts\python.exe main.py --simulate                      # dry run on throwaway folders
 .\.venv\Scripts\python.exe verify_release.py                       # release preflight

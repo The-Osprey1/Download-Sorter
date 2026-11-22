@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import copy
+import dataclasses
 import logging
 from pathlib import Path
 import threading
@@ -69,6 +70,11 @@ class _TopLevelEventHandler(FileSystemEventHandler):
             self._enqueue_if_top_level(event.dest_path)
 
 
+def _overlaps(a: Path, b: Path) -> bool:
+    """True when one folder is the other or sits inside it."""
+    return a == b or a in b.parents or b in a.parents
+
+
 # A file that is open in another program is retried with a growing pause instead of
 # every couple of seconds: base * 2^attempt, never longer than this.
 BUSY_RETRY_MAX_SECONDS = 60.0
@@ -113,6 +119,26 @@ class SorterService:
         with self._lock:
             return self.config.resolved_watch_folder(self.paths)
 
+    def watch_roots(self) -> list[Path]:
+        """Downloads first, then each extra folder that exists and doesn't overlap.
+
+        A folder inside another watched folder (or containing one) is left out: files
+        sorted into it could be picked up and sorted again.
+        """
+        with self._lock:
+            primary = self.config.resolved_watch_folder(self.paths)
+            extras = self.config.resolved_extra_folders()
+        roots = [primary]
+        for folder in extras:
+            if not folder.is_dir():
+                logging.info("Extra folder to tidy is not there, skipped: %s", folder)
+                continue
+            if any(_overlaps(folder, root) for root in roots):
+                logging.warning("Extra folder overlaps another watched folder, skipped: %s", folder)
+                continue
+            roots.append(folder)
+        return roots
+
     @property
     def paused(self) -> bool:
         with self._lock:
@@ -128,11 +154,11 @@ class SorterService:
     def update_config(self, new_config: Config) -> None:
         old_observer: Observer | None = None
         with self._lock:
-            old_root = self.config.resolved_watch_folder(self.paths)
+            old_roots = self.watch_roots()
             save_config(new_config, self.paths)
             self.config = new_config
-            new_root = self.config.resolved_watch_folder(self.paths)
-            if self._observer is not None and new_root != old_root:
+            new_roots = self.watch_roots()
+            if self._observer is not None and new_roots != old_roots:
                 # Detach only. The watcher thread takes this same lock in _enqueue(),
                 # so joining it while the lock is held would stall both threads.
                 old_observer = self._observer
@@ -226,8 +252,8 @@ class SorterService:
             on_progress(0, 0, "Scanning Downloads...")
         with self._lock:
             cfg = self.config
-            root = cfg.resolved_watch_folder(self.paths)
-        if cfg.paused or not root.is_dir():
+        roots = [r for r in self.watch_roots() if r.is_dir()]
+        if cfg.paused or not roots:
             return {
                 "batch_id": "",
                 "moved": [],
@@ -238,7 +264,11 @@ class SorterService:
             }
 
         wait = cfg.settle_seconds if settle_seconds is None else float(settle_seconds)
-        candidates = sorted((entry for entry in root.iterdir() if entry.is_file()), key=lambda p: p.name.lower())
+        candidates = [
+            entry
+            for root in roots
+            for entry in sorted((e for e in root.iterdir() if e.is_file()), key=lambda p: p.name.lower())
+        ]
         # An explicit sort is a fresh start: forget what the background loop backed off.
         with self._lock:
             self._busy_backoff.clear()
@@ -686,14 +716,15 @@ class SorterService:
         shift_files: bool = True,
         create_empty_folders: bool = False,
     ) -> dict[str, Any]:
-        """Reset architecture & rules back to starter defaults and shift files back if requested."""
+        """Reset architecture & rules to what a new install starts with, and shift files back if requested."""
         with self._lock:
             cur = self.config
-            default_cfg = Config.with_starter_defaults()
+            default_cfg = Config.new_install()
             default_cfg.watch_folder = cur.watch_folder
             default_cfg.tutorial_completed = cur.tutorial_completed
             default_cfg.notifications_enabled = cur.notifications_enabled
             default_cfg.check_for_updates = cur.check_for_updates
+            default_cfg.show_advanced_tools = cur.show_advanced_tools
             default_cfg.ribbon_timeout_seconds = cur.ribbon_timeout_seconds
             default_cfg.paused = cur.paused
             default_cfg.architecture = architecture_from_config(default_cfg).to_dict()
@@ -752,16 +783,20 @@ class SorterService:
             self.db.reconcile_incomplete_moves()
         except Exception:
             logging.exception("Could not reconcile interrupted moves")
-        try:
-            cleanup_orphaned_staging(self.watch_root)
-        except Exception:
-            logging.exception("Could not clean up orphaned staging directories")
+        for root in self.watch_roots():
+            try:
+                cleanup_orphaned_staging(root)
+            except Exception:
+                logging.exception("Could not clean up orphaned staging directories in %s", root)
         self._start_observer()
         if self.config.quick_switcher_enabled:
             self._start_quick_switcher()
         self._worker_thread = threading.Thread(target=self._run_loop, name="sorter-v3-worker", daemon=True)
         self._worker_thread.start()
-        logging.info("Download Sorter v3 service started (watching top-level %s)", self.watch_root)
+        logging.info(
+            "Download Sorter v3 service started (watching top-level %s)",
+            ", ".join(str(r) for r in self.watch_roots()),
+        )
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop_event.set()
@@ -872,13 +907,17 @@ class SorterService:
             return min(30.0, min(waits))
 
     def _start_observer(self) -> None:
-        root = self.watch_root
-        if not root.is_dir():
-            logging.warning("Watched folder does not exist yet: %s", root)
+        roots = []
+        for root in self.watch_roots():
+            if root.is_dir():
+                roots.append(root)
+            else:
+                logging.warning("Watched folder does not exist yet: %s", root)
+        if not roots:
             return
         observer = Observer()
-        handler = _TopLevelEventHandler(root, self._enqueue)
-        observer.schedule(handler, str(root), recursive=False)
+        for root in roots:
+            observer.schedule(_TopLevelEventHandler(root, self._enqueue), str(root), recursive=False)
         observer.start()
         with self._lock:
             displaced = self._observer
@@ -945,7 +984,11 @@ class SorterService:
     ) -> dict[str, Any]:
         with self._lock:
             cfg = self.config
-            root = cfg.resolved_watch_folder(self.paths)
+        roots = self.watch_roots()
+        primary = roots[0]
+        # In an extra folder (a Desktop, say) only files a rule or file type matches move:
+        # shortcuts and other unknown files stay instead of going to "Other".
+        extra_cfg = dataclasses.replace(cfg, fallback_mode="leave") if len(roots) > 1 else cfg
         batch_id = f"b-{uuid.uuid4().hex[:8]}"
         moved: list[dict[str, Any]] = []
         ignored = 0
@@ -961,15 +1004,16 @@ class SorterService:
                 self._clear_busy(path)  # deleted or moved by the user: nothing to retry
                 continue
             try:
-                if path.resolve().parent != root:
-                    self._clear_busy(path)
-                    continue
+                root = path.resolve().parent
             except OSError:
+                self._clear_busy(path)
+                continue
+            if root not in roots:
                 self._clear_busy(path)
                 continue
 
             cand = candidate_from_path(path)
-            decision = evaluate(cand, cfg)
+            decision = evaluate(cand, cfg if root == primary else extra_cfg)
             if decision.action == "ignore":
                 ignored += 1
                 continue

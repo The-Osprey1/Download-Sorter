@@ -56,6 +56,7 @@ Source = "https://github.com/The-Osprey1/Download-Sorter"
 dev = [
     "pytest>=9.2.0",
     "pytest-timeout>=2.4.0",
+    "ruff>=0.17.6",
     "pyinstaller>=6.22.3"
 ]
 
@@ -86,4 +87,14 @@ timeout_method = "thread"
 markers = [
     "desktop: needs a live interactive Windows desktop (real dialogs/windows); deselect with -m \"not desktop\"",
     "ntfs: needs a real NTFS volume (hardlinks, file indexes, cloud attributes)",
+    "shipped_defaults: use the rule packs a new install really starts with (other tests get the School, Career and 3D printing packs they were written for)",
 ]
+
+[tool.ruff]
+target-version = "py310"
+src = [".", "src"]
+
+[tool.ruff.lint]
+# Mistakes that break or hide bugs: syntax errors, undefined names, unused imports
+# and variables, names defined twice. Style is not checked.
+select = ["E9", "F"]

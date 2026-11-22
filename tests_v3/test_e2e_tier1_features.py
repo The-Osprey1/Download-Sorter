@@ -14,11 +14,9 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-import sys
 import time
 from typing import Any
 
-import pytest
 
 try:
     import tomllib
@@ -27,25 +25,16 @@ except ModuleNotFoundError:
 
 from download_sorter.quick_switcher import (
     ADMIN_WARNING,
-    DEFAULT_RECENCY_TTL,
-    THREE_D_EXTENSIONS,
-    THREE_D_MAX_AGE_SEC,
-    TOO_MANY_WARNING,
-    QuickSwitcherMonitor,
     blocked_by_uipi,
     clear_recent_file,
     consume_items,
-    copy_files_to_clipboard,
     find_dialog_edit_control,
-    get_recent_batch,
     get_recent_file,
     inject_file_into_dialog,
     inject_files_into_dialog,
-    invalidate_recent_file,
     is_file_dialog,
     plan_injection,
     prune_stages,
-    read_clipboard_files,
     record_recent_file,
     stage_batch,
 )
@@ -410,7 +399,7 @@ def test_t1_f5_01_service_file_sorting_hooks_recent_file(
 ) -> None:
     """T1-F5-01: Verify SorterService file moves automatically record into recent files buffer."""
     clear_recent_file(data_dir=app_paths.data_dir)
-    f = create_test_file("Auto_Sort_Doc.pdf")
+    create_test_file("Auto_Sort_Doc.pdf")
     summary = service_instance.scan_top_level_now(settle_seconds=0.0)
 
     assert len(summary["moved"]) == 1
@@ -425,7 +414,7 @@ def test_t1_f5_02_undo_move_invalidates_recent_state(
 ) -> None:
     """T1-F5-02: Verify undoing a single move invalidates the recent file state."""
     clear_recent_file(data_dir=app_paths.data_dir)
-    f = create_test_file("Single_Undo_Doc.pdf")
+    create_test_file("Single_Undo_Doc.pdf")
     summary = service_instance.scan_top_level_now(settle_seconds=0.0)
     move_id = summary["moved"][0]["id"]
 
@@ -440,8 +429,8 @@ def test_t1_f5_03_undo_batch_invalidates_all_batch_recent_state(
 ) -> None:
     """T1-F5-03: Verify undoing a batch invalidates the entire recent file batch."""
     clear_recent_file(data_dir=app_paths.data_dir)
-    f1 = create_test_file("Batch_Undo_A.pdf")
-    f2 = create_test_file("Batch_Undo_B.pdf")
+    create_test_file("Batch_Undo_A.pdf")
+    create_test_file("Batch_Undo_B.pdf")
     summary = service_instance.scan_top_level_now(settle_seconds=0.0)
     assert len(summary["moved"]) == 2
 

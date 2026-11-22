@@ -13,7 +13,8 @@ import uuid
 from typing import Any
 
 from download_sorter.dest import to_relative_dest
-from download_sorter.paths import AppPaths
+from download_sorter import paths as _paths
+from download_sorter.paths import DEFAULT_WATCH_FOLDER, AppPaths, is_default_watch_folder
 
 DEFAULT_IGNORE_EXTENSIONS: list[str] = [
     ".crdownload",
@@ -381,7 +382,104 @@ STARTER_TEMPLATES: dict[str, list[Rule]] = {
             extensions=[".3mf", ".stl", ".step", ".stp"],
         ),
     ],
+    "finance": [
+        Rule(
+            id="tpl-finance-keywords",
+            name="Bills & Receipts",
+            destination=r"Documents\Bills & Receipts",
+            keywords=[
+                "invoice",
+                "receipt",
+                "bank statement",
+                "account statement",
+                "credit card statement",
+                "estatement",
+                "utility bill",
+                "phone bill",
+                "electric bill",
+                "tax return",
+                "tax",
+                "w2",
+                "1099",
+                "paystub",
+                "pay stub",
+                "payslip",
+                # The same words in other languages.
+                "rechnung",
+                "quittung",
+                "factura",
+                "facture",
+                "fattura",
+                "recibo",
+                "reçu",
+                "счёт",
+                "счет",
+                "請求書",
+                "領収書",
+                "发票",
+            ],
+            extensions=[".pdf", ".jpg", ".jpeg", ".png", ".heic", ".doc", ".docx", ".xls", ".xlsx", ".csv"],
+        ),
+    ],
+    "travel": [
+        Rule(
+            id="tpl-travel-keywords",
+            name="Travel documents",
+            destination=r"Documents\Travel",
+            keywords=[
+                "boarding pass",
+                "itinerary",
+                "eticket",
+                "e ticket",
+                "booking confirmation",
+                "reservation",
+                "travel insurance",
+            ],
+            extensions=[".pdf", ".pkpass", ".jpg", ".jpeg", ".png"],
+        ),
+        Rule(
+            id="tpl-travel-sites",
+            name="Travel websites",
+            destination=r"Documents\Travel",
+            domains=[
+                "booking.com",
+                "expedia.com",
+                "airbnb.com",
+                "hotels.com",
+                "kayak.com",
+                "trainline.com",
+            ],
+            extensions=[".pdf", ".pkpass"],
+        ),
+    ],
+    "contracts": [
+        Rule(
+            id="tpl-contracts-keywords",
+            name="Contracts & Agreements",
+            destination=r"Documents\Contracts",
+            keywords=["contract", "agreement", "lease", "nda", "non disclosure", "signed", "vertrag", "contrato", "contrat"],
+            domains=["docusign.net", "docusign.com", "echosign.com", "hellosign.com"],
+            extensions=[".pdf", ".doc", ".docx"],
+        ),
+    ],
 }
+
+# What the welcome and the Rules page call each pack, in the order they are offered.
+STARTER_PACK_LABELS: dict[str, tuple[str, str]] = {
+    "school": ("School", "Syllabi, lecture notes, homework and files from class websites"),
+    "career": ("Job hunting", "Résumés, cover letters and offer letters"),
+    "finance": ("Bills & receipts", "Invoices, receipts, bank statements and tax forms"),
+    "travel": ("Travel", "Boarding passes, itineraries and bookings"),
+    "contracts": ("Contracts", "Agreements, leases and signed documents"),
+    "3d_printing": ("3D printing", "Models from MakerWorld, Printables and Thingiverse"),
+}
+
+# Rule packs a new install starts with. None: files are sorted by type until the
+# person picks packs in the welcome or on the Rules page.
+NEW_INSTALL_TEMPLATES: tuple[str, ...] = ()
+
+# A new install starts with the simpler window (no Folder Architecture page).
+NEW_INSTALL_SHOW_ADVANCED = False
 
 
 @dataclass
@@ -389,7 +487,9 @@ class Config:
     """Validated Download Sorter v3 configuration."""
 
     schema_version: int = 3
-    watch_folder: str = r"${USERPROFILE}\Downloads"
+    watch_folder: str = DEFAULT_WATCH_FOLDER
+    # More folders to tidy (Desktop, Screenshots...), each sorted into folders inside itself.
+    extra_watch_folders: list[str] = field(default_factory=list)
     settle_seconds: float = 3.0
     fallback_mode: str = "other"  # "other" or "leave"
     default_folder: str = "Other"
@@ -409,6 +509,8 @@ class Config:
     paused: bool = False
     tutorial_completed: bool = False
     check_for_updates: bool = True
+    # Folder Architecture and Sort Lower Tiers. Setups saved before this existed keep them.
+    show_advanced_tools: bool = True
     rules: list[Rule] = field(default_factory=list)
     category_map: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CATEGORY_MAP))
     type_subfolders: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TYPE_SUBFOLDERS))
@@ -418,7 +520,8 @@ class Config:
 
     def __post_init__(self) -> None:
         self.schema_version = 3
-        self.watch_folder = str(self.watch_folder or r"${USERPROFILE}\Downloads")
+        self.watch_folder = str(self.watch_folder or DEFAULT_WATCH_FOLDER)
+        self.extra_watch_folders = _normalize_str_list(self.extra_watch_folders)
         self.settle_seconds = max(0.0, float(self.settle_seconds))
         self.fallback_mode = self.fallback_mode if self.fallback_mode in ("other", "leave") else "other"
         self.default_folder = str(self.default_folder or "Other").strip().strip("\\") or "Other"
@@ -438,6 +541,7 @@ class Config:
         self.paused = bool(self.paused)
         self.tutorial_completed = bool(self.tutorial_completed)
         self.check_for_updates = bool(self.check_for_updates)
+        self.show_advanced_tools = bool(self.show_advanced_tools)
         self.rules = [r if isinstance(r, Rule) else Rule.from_dict(r) for r in self.rules]
         self.category_map = {
             (k if k.startswith(".") else "." + k).lower(): str(v).strip().replace("/", "\\").strip("\\")
@@ -486,11 +590,34 @@ class Config:
                 rules.append(Rule.from_dict(tpl.to_dict()))
         return cls(rules=rules)
 
+    @classmethod
+    def new_install(cls) -> Config:
+        """The settings a new install (or Return to Defaults) starts from."""
+        cfg = cls.with_starter_defaults(NEW_INSTALL_TEMPLATES)
+        cfg.show_advanced_tools = NEW_INSTALL_SHOW_ADVANCED
+        return cfg
+
     def resolved_watch_folder(self, paths: AppPaths | None = None) -> Path:
         if paths is not None and paths.downloads_dir is not None:
             return paths.downloads_dir.resolve()
+        if is_default_watch_folder(self.watch_folder):
+            known = _paths.known_downloads_dir()
+            if known is not None:
+                return known.resolve()
         expanded = os.path.expandvars(os.path.expanduser(self.watch_folder))
         return Path(expanded).resolve()
+
+    def resolved_extra_folders(self) -> list[Path]:
+        """The extra folders as full paths (``${USERPROFILE}`` and the like expanded)."""
+        out: list[Path] = []
+        for text in self.extra_watch_folders:
+            try:
+                home = str(Path.home())
+                expanded = text.replace("${USERPROFILE}", home).replace("%USERPROFILE%", home)
+                out.append(Path(os.path.expandvars(os.path.expanduser(expanded))).resolve())
+            except (OSError, ValueError):
+                continue
+        return out
 
     def apply_template(self, template_key: str) -> int:
         """Append rules from ``STARTER_TEMPLATES`` if not already present by name. Returns count added."""
@@ -507,6 +634,7 @@ class Config:
         return {
             "schema_version": self.schema_version,
             "watch_folder": self.watch_folder,
+            "extra_watch_folders": list(self.extra_watch_folders),
             "settle_seconds": self.settle_seconds,
             "fallback_mode": self.fallback_mode,
             "default_folder": self.default_folder,
@@ -526,6 +654,7 @@ class Config:
             "paused": self.paused,
             "tutorial_completed": self.tutorial_completed,
             "check_for_updates": self.check_for_updates,
+            "show_advanced_tools": self.show_advanced_tools,
             "rules": [r.to_dict() for r in self.rules],
             "category_map": dict(self.category_map),
             "type_subfolders": dict(self.type_subfolders),
@@ -539,7 +668,8 @@ class Config:
         if not isinstance(data, dict):
             raise TypeError("Config payload must be a JSON object")
         return cls(
-            watch_folder=data.get("watch_folder", r"${USERPROFILE}\Downloads"),
+            watch_folder=data.get("watch_folder", DEFAULT_WATCH_FOLDER),
+            extra_watch_folders=list(data.get("extra_watch_folders") or []),
             settle_seconds=data.get("settle_seconds", 3.0),
             fallback_mode=data.get("fallback_mode", "other"),
             default_folder=data.get("default_folder", "Other"),
@@ -559,6 +689,7 @@ class Config:
             paused=data.get("paused", False),
             tutorial_completed=data.get("tutorial_completed", False),
             check_for_updates=data.get("check_for_updates", True),
+            show_advanced_tools=bool(data.get("show_advanced_tools", True)),
             rules=[Rule.from_dict(item) for item in data.get("rules", []) if isinstance(item, dict)],
             category_map=data.get("category_map") or dict(DEFAULT_CATEGORY_MAP),
             type_subfolders=data.get("type_subfolders") or dict(DEFAULT_TYPE_SUBFOLDERS),
@@ -622,9 +753,9 @@ def load_config(paths: AppPaths) -> Config:
             for tpl in ("school", "career", "3d_printing"):
                 cfg.apply_template(tpl)
         except Exception:
-            cfg = Config.with_starter_defaults()
+            cfg = Config.new_install()
     else:
-        cfg = Config.with_starter_defaults()
+        cfg = Config.new_install()
     save_config(cfg, paths)
     return cfg
 
@@ -653,6 +784,34 @@ def readable_path(text: str) -> str:
     return str(PureWindowsPath(os.path.expandvars(expanded)))
 
 
+def display_watch_folder(stored: str) -> str:
+    """The watched folder as Settings shows it: the real Downloads folder for the default."""
+    if is_default_watch_folder(stored):
+        known = _paths.known_downloads_dir()
+        if known is not None:
+            return str(known)
+    return readable_path(stored)
+
+
+def stored_watch_folder(typed: str) -> str:
+    """What Settings saves for a typed folder.
+
+    Leaving the field empty, or leaving it on the real Downloads folder, saves the
+    default, so the app keeps following Downloads if Windows moves it later.
+    """
+    text = str(typed or "").strip()
+    if not text or is_default_watch_folder(text):
+        return DEFAULT_WATCH_FOLDER
+    known = _paths.known_downloads_dir()
+    if known is not None:
+        try:
+            if Path(text).resolve() == known.resolve():
+                return DEFAULT_WATCH_FOLDER
+        except (OSError, ValueError):
+            pass
+    return portable_path(text)
+
+
 def import_v2_config(v2_path: Path) -> Config:
     """Convert a Download Sorter v2.x (or v3/exported) ``config.json`` into a complete v3 ``Config``."""
     raw = json.loads(Path(v2_path).read_text(encoding="utf-8"))
@@ -673,7 +832,7 @@ def import_v2_config(v2_path: Path) -> Config:
 
     watch_block = raw.get("watch") if isinstance(raw.get("watch"), dict) else {}
     watch_folder = _normalize_profile_vars(
-        str(watch_block.get("folder") or raw.get("downloads_dir") or r"${USERPROFILE}\Downloads")
+        str(watch_block.get("folder") or raw.get("downloads_dir") or DEFAULT_WATCH_FOLDER)
     )
     settle_seconds = float(watch_block.get("settle_seconds", 3.0))
     type_folders = raw.get("type_folders") if isinstance(raw.get("type_folders"), dict) else {}
