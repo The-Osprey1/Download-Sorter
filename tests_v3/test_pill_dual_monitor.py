@@ -87,3 +87,17 @@ def test_checklist_moves_with_the_pill(v3_qapp, tmp_path: Path) -> None:
     assert (pill.root.x(), pill.root.y()) == (500, 300)
     assert (pill.checklist_win.x(), pill.checklist_win.y()) == (500, 300 + pill.root.height() + 4)
     pill.close()
+
+
+def test_monitor_from_windows_becomes_qt_units() -> None:
+    from download_sorter.ui.quick_switcher_pill import screen_from_monitor
+
+    # A 4K monitor at 150% to the right of a 4K one: physical (3840, 0)-(7680, 2160).
+    screen = screen_from_monitor((3840, 0, 7680, 2160), (3840, 0, 7680, 2088), 1.5)
+    assert screen.geometry == QRect(3840, 0, 2560, 1440)
+    assert screen.available == QRect(3840, 0, 2560, 1392)
+    # A 100% monitor to the left of the main one, at negative coordinates.
+    left = screen_from_monitor((-1920, 0, 0, 1080), (-1920, 0, 0, 1040), 1.0)
+    assert left.geometry == QRect(-1920, 0, 1920, 1080)
+    x, _y = pill_position((-1800, 200, -1000, 700), PILL_W, PILL_H, [left])
+    assert x == -1000 - PILL_W - 16

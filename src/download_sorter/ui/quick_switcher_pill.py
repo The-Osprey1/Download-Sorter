@@ -120,6 +120,51 @@ def pill_position(
     return x, y
 
 
+def screen_from_monitor(
+    monitor: tuple[int, int, int, int], work: tuple[int, int, int, int], dpr: float
+) -> ScreenInfo:
+    """A monitor as Windows describes it (physical left, top, right, bottom), in Qt's units."""
+    dpr = dpr or 1.0
+    left, top, right, bottom = monitor
+    geometry = QRect(left, top, round((right - left) / dpr), round((bottom - top) / dpr))
+    info = ScreenInfo(geometry, geometry, dpr)
+    w_left, w_top = native_to_logical(work[0], work[1], info)
+    available = QRect(w_left, w_top, round((work[2] - work[0]) / dpr), round((work[3] - work[1]) / dpr))
+    return ScreenInfo(geometry, available, dpr)
+
+
+def _win32_dialog_screen(hwnd: int) -> ScreenInfo | None:
+    """The monitor Windows says the dialog is on, with that monitor's own scaling."""
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", ctypes.c_ulong),
+            ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT),
+            ("dwFlags", ctypes.c_ulong),
+        ]
+
+    user32 = ctypes.windll.user32
+    mon = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+    info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+    if not mon or not user32.GetMonitorInfoW(mon, ctypes.byref(info)):
+        return None
+    dpi = 0
+    try:
+        dpi_x, dpi_y = ctypes.c_uint(0), ctypes.c_uint(0)
+        if ctypes.windll.shcore.GetDpiForMonitor(mon, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) == 0:
+            dpi = int(dpi_x.value)
+    except (AttributeError, OSError):
+        dpi = 0
+    if not dpi:
+        try:
+            dpi = int(user32.GetDpiForWindow(hwnd))
+        except (AttributeError, OSError):
+            dpi = 0
+    m, w = info.rcMonitor, info.rcWork
+    return screen_from_monitor((m.left, m.top, m.right, m.bottom), (w.left, w.top, w.right, w.bottom), dpi / 96.0 if dpi else 1.0)
+
+
 def _qt_screens() -> list[ScreenInfo]:
     return [
         ScreenInfo(s.geometry(), s.availableGeometry(), float(s.devicePixelRatio()) or 1.0)
@@ -610,8 +655,10 @@ class QuickSwitcherPill:
             try:
                 rect = wintypes.RECT()
                 if ctypes.windll.user32.GetWindowRect(self.dialog_hwnd, ctypes.byref(rect)):
+                    dialog_screen = _win32_dialog_screen(self.dialog_hwnd)
+                    screens = [dialog_screen] if dialog_screen is not None else _qt_screens()
                     spot = pill_position(
-                        (rect.left, rect.top, rect.right, rect.bottom), self.pill_w, self.pill_h, _qt_screens()
+                        (rect.left, rect.top, rect.right, rect.bottom), self.pill_w, self.pill_h, screens
                     )
                     if spot is not None:
                         self._place(*spot)
