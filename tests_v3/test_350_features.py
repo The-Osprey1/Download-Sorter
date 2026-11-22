@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QDialog, QMessageBox
@@ -281,7 +282,11 @@ def test_scan_folders_button_runs_and_gives_feedback(
 # ---------------------------------------------------------------------------
 
 def test_subtitles_hidden_and_tooltips_present(v3_qapp, app_paths: AppPaths) -> None:  # noqa: ANN001
-    assert about.__version__ == "3.5.1"
+    # The version matches the newest released changelog section (not a fixed number,
+    # which had to be edited by hand for every release).
+    changelog = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text(encoding="utf-8")
+    newest = re.search(r"^## \[(?!Unreleased\])([^\]]+)\]", changelog, re.MULTILINE)
+    assert newest is not None and about.__version__ == newest.group(1)
 
     row = SettingRow("Demo Row", "Explanation moved into hover tooltip")
     assert row.lbl_subtitle.isVisible() is False
