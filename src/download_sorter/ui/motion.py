@@ -100,7 +100,7 @@ def is_breathing(widget: QWidget) -> bool:
 def _drop_effect(widget: QWidget, effect: QGraphicsOpacityEffect) -> None:
     try:
         if widget.graphicsEffect() is effect and not is_breathing(widget):
-            effect.setOpacity(1.0)
+            widget.setGraphicsEffect(None)
     except RuntimeError:
         pass
 
@@ -171,14 +171,14 @@ def flash_rows(
     hex_color: str = "#2D6CDF",
     duration: int = 1100,
 ) -> None:
-    """Briefly highlight rows in ``table`` with a smooth alpha fade-out overlay."""
+    """Briefly highlight rows in ``table`` with a smooth QPainter alpha fade-out overlay."""
     _clear_flash(table)
     if not rows or not animations_enabled() or duration <= 0:
         return
 
     base = QColor(hex_color)
     viewport = table.viewport()
-    overlays: list[QWidget] = []
+    overlays: list[_GlowOverlay] = []
     for row in rows:
         if row < 0 or row >= table.rowCount():
             continue
@@ -186,9 +186,7 @@ def flash_rows(
         height = table.rowHeight(row)
         if top < -height or height <= 0:
             continue
-        overlay = QWidget(viewport)
-        overlay.setObjectName("rowFlash")
-        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        overlay = _GlowOverlay(viewport, base, radius=4)
         overlay.setGeometry(0, max(top, 0), max(viewport.width(), 1), height)
         overlay.show()
         overlays.append(overlay)
@@ -198,23 +196,22 @@ def flash_rows(
 
     def _paint(alpha: float) -> None:
         clamped = max(0.0, min(1.0, alpha))
-        tint = f"rgba({base.red()}, {base.green()}, {base.blue()}, {clamped:.3f})"
         for overlay in overlays:
             try:
-                overlay.setStyleSheet(f"QWidget#rowFlash {{ background: {tint}; border: none; }}")
+                overlay.set_alpha(clamped)
             except RuntimeError:
                 pass
 
     anim = QVariantAnimation(table)
     anim.setDuration(duration)
-    anim.setStartValue(0.26)
+    anim.setStartValue(0.85)
     anim.setEndValue(0.0)
     anim.setEasingCurve(QEasingCurve.Type.OutCubic)
     anim.valueChanged.connect(lambda v: _paint(float(v)))
     anim.finished.connect(lambda: _clear_flash(table))
     table._motion_flash_overlays = overlays
     _keep(table, "_motion_flash", anim)
-    _paint(0.26)
+    _paint(0.85)
     anim.start()
 
 
@@ -2229,6 +2226,27 @@ def spring_pop_in(widget: QWidget, duration_ms: int = 260, offset_y: int = 10) -
     group.finished.connect(_cleanup)
     _keep(widget, "_motion_spring_pop_in", group)
     group.start()
+
+
+def play_window_open_animation(window: QWidget, duration_ms: int = 165) -> None:
+    """Subtle, quick DWM-composited fade-in when the main window opens."""
+    if (
+        not animations_enabled()
+        or duration_ms <= 0
+        or os.environ.get("PYTEST_CURRENT_TEST")
+    ):
+        window.setWindowOpacity(1.0)
+        return
+    window.setWindowOpacity(0.0)
+    anim = QVariantAnimation(window)
+    anim.setDuration(duration_ms)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    anim.valueChanged.connect(lambda v: window.setWindowOpacity(float(v)))
+    anim.finished.connect(lambda: window.setWindowOpacity(1.0))
+    _keep(window, "_motion_window_open", anim)
+    anim.start()
 
 
 class _GlobalButtonFeedbackFilter(QObject):

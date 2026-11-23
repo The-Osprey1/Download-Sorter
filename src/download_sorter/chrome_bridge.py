@@ -174,16 +174,27 @@ def install_chrome_native_host(
     }
 
 
+def _manifest_target_exists(manifest_file: Path) -> bool:
+    if not manifest_file.is_file():
+        return False
+    try:
+        payload = json.loads(manifest_file.read_text(encoding="utf-8"))
+        target_raw = str(payload.get("path") or "").strip() if isinstance(payload, dict) else ""
+        return bool(target_raw) and Path(target_raw).is_file()
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
 def is_chrome_host_registered(data_dir: Path | None = None) -> bool:
-    """Return True when the HKCU Chrome Native Messaging key points to an existing manifest."""
+    """Return True when the HKCU Chrome Native Messaging key points to an existing manifest and target."""
     if sys.platform != "win32":
-        return chrome_manifest_path(data_dir).is_file()
+        return _manifest_target_exists(chrome_manifest_path(data_dir))
     import winreg
 
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_HOST_KEYS[0], 0, winreg.KEY_READ) as key:
             val, _ = winreg.QueryValueEx(key, "")
-            return bool(val) and Path(str(val)).is_file()
+            return bool(val) and _manifest_target_exists(Path(str(val)))
     except OSError:
         return False
 
@@ -631,6 +642,7 @@ def reroute_chrome_file(
             data_dir=app_paths.data_dir,
             source_url=str(req.get("source_url") or ""),
             ext=src_path.suffix,
+            filename=src_path.name,
         )
     except Exception:
         pass
@@ -646,6 +658,117 @@ def reroute_chrome_file(
         "folder_display": folder_display,
         "relative_dest": f"{folder_display}/{src_path.name}",
     }
+
+
+def sort_now_from_chrome(
+    paths: AppPaths | None = None,
+    *,
+    try_ipc: bool = True,
+) -> dict[str, Any]:
+    """Sort top-level Downloads now via IPC or offline SorterService."""
+    app_paths = paths or AppPaths.default()
+    if try_ipc:
+        resp = send_ipc_command("sort_now", timeout_ms=400, reply_timeout_ms=10000)
+        if resp is not None:
+            return {
+                "ok": bool(resp.get("ok", True)),
+                "moved_count": int(resp.get("moved", 0) or 0),
+                "via": "ipc",
+            }
+    from download_sorter.service import SorterService
+
+    svc = SorterService(app_paths)
+    try:
+        res = svc.scan_top_level_now(settle_seconds=0.0)
+        return {"ok": True, "moved_count": len(res.get("moved", [])), "via": "direct"}
+    finally:
+        svc.stop(timeout=0.5)
+
+
+def reveal_chrome_file(
+    req: dict[str, Any],
+    paths: AppPaths | None = None,
+    *,
+    launch: bool = True,
+) -> dict[str, Any]:
+    """Open File Explorer highlighting a routed file or subfolder inside Downloads."""
+    app_paths = paths or AppPaths.default()
+    cfg = load_config(app_paths)
+    watch_dir = cfg.resolved_watch_folder(app_paths).resolve()
+
+    candidates: list[Path] = []
+    raw_full = str(req.get("full_path") or "").strip()
+    if raw_full:
+        try:
+            candidates.append(Path(raw_full).resolve())
+        except OSError:
+            pass
+    for raw_rel in (str(req.get("relative_dest") or "").strip(), str(req.get("folder") or "").strip()):
+        if not raw_rel:
+            continue
+        if raw_rel.lower() == "downloads":
+            candidates.append(watch_dir)
+        else:
+            clean_rel = to_relative_dest(raw_rel, fallback="")
+            if clean_rel:
+                candidates.append((watch_dir / clean_rel).resolve())
+
+    target: Path | None = None
+    for cand in candidates:
+        if (cand == watch_dir or is_under_watch_root(cand, watch_dir)) and cand.exists():
+            target = cand
+            break
+
+    if target is None:
+        return {"ok": False, "error": "File or folder not found inside Downloads"}
+
+    if launch and sys.platform == "win32":
+        if target.is_file():
+            subprocess.Popen(["explorer.exe", f'/select,"{target}"'])
+        elif hasattr(os, "startfile"):
+            os.startfile(str(target))
+    return {"ok": True, "revealed": str(target), "is_dir": target.is_dir()}
+
+
+def list_recent_chrome_moves(
+    paths: AppPaths | None = None,
+    *,
+    limit: int = 6,
+) -> dict[str, Any]:
+    """Return recent active moves from StateDB so the Chrome popup reflects desktop sorts too."""
+    app_paths = paths or AppPaths.default()
+    cfg = load_config(app_paths)
+    watch_dir = cfg.resolved_watch_folder(app_paths).resolve()
+    db = StateDB(app_paths.db_file)
+    try:
+        rows = db.list_active_moves(limit=max(1, min(25, int(limit))))
+    finally:
+        db.close()
+
+    moves: list[dict[str, Any]] = []
+    for row in rows:
+        dest_raw = str(row.get("dest_path") or "")
+        dest_path = Path(dest_raw) if dest_raw else watch_dir
+        try:
+            rel_posix = dest_path.resolve().relative_to(watch_dir).as_posix()
+        except ValueError:
+            rel_posix = str(row.get("filename") or dest_path.name)
+        folder_display = rel_posix.rsplit("/", 1)[0] if "/" in rel_posix else "Downloads"
+        source_url = str(row.get("source_url") or "")
+        moves.append(
+            {
+                "filename": str(row.get("filename") or dest_path.name),
+                "folder": folder_display,
+                "relative_dest": rel_posix,
+                "full_path": dest_raw,
+                "source_url": source_url,
+                "source_host": extract_host(source_url),
+                "is_duplicate": bool(row.get("is_duplicate")),
+                "matched_rule": str(row.get("matched_rule") or ""),
+                "at": int(round(float(row.get("moved_at") or 0.0) * 1000.0)),
+            }
+        )
+    return {"ok": True, "moves": moves}
 
 
 def test_chrome_tab(req: dict[str, Any], paths: AppPaths | None = None) -> dict[str, Any]:
@@ -664,6 +787,28 @@ def test_chrome_tab(req: dict[str, Any], paths: AppPaths | None = None) -> dict[
     if decision.relative_dest is not None:
         rel_posix = _to_chrome_relative(decision.relative_dest)
         folder = rel_posix.rsplit("/", 1)[0] if "/" in rel_posix else "Downloads"
+    smart_hint = ""
+    if decision.match_type != "rule" and (cfg.ai_smart_hints_enabled or cfg.ai_auto_route_fallback):
+        try:
+            from download_sorter.learning import TokenRouteLearner
+
+            db = StateDB(app_paths.db_file)
+            try:
+                learner = TokenRouteLearner()
+                learner.train_from_db_and_store(db, app_paths.data_dir)
+            finally:
+                db.close()
+            min_conf = max(0.50, min(0.95, float(cfg.ai_min_confidence) / 100.0))
+            pred = learner.predict_folder(
+                sample_name,
+                source_url=tab_url,
+                ext=Path(sample_name).suffix,
+                min_confidence=min_conf,
+            )
+            if pred is not None:
+                smart_hint = pred.destination.replace("\\", "/")
+        except Exception:
+            pass
     return {
         "ok": True,
         "host": host,
@@ -672,6 +817,8 @@ def test_chrome_tab(req: dict[str, Any], paths: AppPaths | None = None) -> dict[
         "matched_rule": decision.matched_rule,
         "match_type": decision.match_type,
         "reason": decision.reason,
+        "has_domain_rule": decision.match_type == "rule",
+        "smart_hint": smart_hint,
     }
 
 
@@ -705,6 +852,12 @@ def handle_native_request(req: dict[str, Any], paths: AppPaths | None = None) ->
         return create_chrome_rule(req, app_paths)
     if action == "undo_last":
         return undo_last_from_chrome(app_paths)
+    if action == "sort_now":
+        return sort_now_from_chrome(app_paths)
+    if action == "reveal_file":
+        return reveal_chrome_file(req, app_paths)
+    if action == "recent_moves":
+        return list_recent_chrome_moves(app_paths, limit=int(req.get("limit") or 6))
     if action == "check_duplicate":
         return check_chrome_duplicate(req, app_paths)
     if action == "reroute_file":

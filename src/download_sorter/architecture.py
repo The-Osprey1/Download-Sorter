@@ -68,7 +68,7 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 1,
         "parent_name": "",
         "kind": "doc",
-        "extensions": [".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md", ".xls", ".xlsx", ".xlsm", ".csv", ".ods", ".ppt", ".pptx", ".odp", ".key", ".epub", ".mobi", ".tex", ".bib", ".pkpass"],
+        "extensions": [".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md", ".xls", ".xlsx", ".xlsm", ".csv", ".ods", ".ppt", ".pptx", ".odp", ".key", ".epub", ".mobi", ".tex", ".bib", ".pkpass", ".ics"],
         "keywords": [],
         "domains": [],
         "summary": "PDFs, Word docs, spreadsheets, slides & ebooks",
@@ -79,7 +79,7 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 1,
         "parent_name": "",
         "kind": "print",
-        "extensions": [".stl", ".3mf", ".obj", ".3ds", ".fbx", ".blend", ".glb", ".gltf", ".gcode", ".bgcode", ".nc", ".tap", ".ngc", ".gco", ".g"],
+        "extensions": [".stl", ".3mf", ".obj", ".3ds", ".fbx", ".blend", ".glb", ".gltf", ".chitubox", ".lys", ".bbsflmt", ".gcode", ".bgcode", ".nc", ".tap", ".ngc", ".cnc", ".mks", ".gco", ".g"],
         "keywords": [],
         "domains": [],
         "summary": "3D prints, meshes & CNC/G-code files",
@@ -90,7 +90,7 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 1,
         "parent_name": "",
         "kind": "cad",
-        "extensions": [".step", ".stp", ".iges", ".igs", ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf"],
+        "extensions": [".step", ".stp", ".iges", ".igs", ".f3d", ".f3z", ".ipt", ".iam", ".sldprt", ".sldasm", ".slddrw", ".dwg", ".dxf", ".lac", ".lbrn", ".lbrn2"],
         "keywords": [],
         "domains": [],
         "summary": "STEP, IGES, Fusion 360, SolidWorks & DXF/DWG",
@@ -101,7 +101,7 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 1,
         "parent_name": "",
         "kind": "image",
-        "extensions": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".svg", ".bmp", ".tif", ".tiff", ".ico", ".ai", ".eps", ".cdr"],
+        "extensions": [".jpg", ".jpeg", ".jfif", ".png", ".gif", ".webp", ".avif", ".heic", ".svg", ".bmp", ".tif", ".tiff", ".ico", ".ai", ".eps", ".cdr"],
         "keywords": [],
         "domains": [],
         "summary": "Photos, screenshots, vectors & icons",
@@ -112,7 +112,7 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 1,
         "parent_name": "",
         "kind": "video",
-        "extensions": [".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v"],
+        "extensions": [".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v", ".3gp"],
         "keywords": [],
         "domains": [],
         "summary": "Screen recordings, clips & movies",
@@ -123,7 +123,7 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 1,
         "parent_name": "",
         "kind": "audio",
-        "extensions": [".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".aiff", ".wma"],
+        "extensions": [".mp3", ".wav", ".flac", ".m4a", ".m4r", ".aac", ".ogg", ".aiff", ".wma", ".mid", ".midi"],
         "keywords": [],
         "domains": [],
         "summary": "Music, podcasts & sound samples",
@@ -156,7 +156,7 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 1,
         "parent_name": "",
         "kind": "code",
-        "extensions": [".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".cpp", ".c", ".h", ".hpp", ".cs", ".java", ".rs", ".go", ".json", ".yaml", ".yml", ".toml", ".xml", ".ini", ".env", ".sql", ".db", ".sqlite", ".parquet", ".feather", ".log", ".dmp", ".out"],
+        "extensions": [".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".cpp", ".c", ".h", ".hpp", ".ino", ".cs", ".java", ".rs", ".go", ".m", ".uf2", ".json", ".yaml", ".yml", ".toml", ".xml", ".ini", ".env", ".sql", ".db", ".sqlite", ".parquet", ".feather", ".log", ".dmp", ".out"],
         "keywords": [],
         "domains": [],
         "summary": "Source code, JSON/YAML configs & data logs",
@@ -168,7 +168,8 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "parent_name": "",
         "kind": "finance",
         "extensions": [".pdf", ".csv", ".xlsx", ".ofx", ".qfx"],
-        "keywords": ["invoice", "receipt", "statement", "tax", "w2", "1099", "billing", "payment"],
+        "keywords": ["invoice", "receipt", "bank_statement", "billing_statement", "account_statement", "tax", "w2", "1099", "billing", "payment"],
+        "exclude_keywords": ["statement of purpose", "personal statement", "mission statement", "thesis statement"],
         "domains": ["stripe.com", "paypal.com", "intuit.com", "turbotax.com", "chase.com"],
         "summary": "Invoices, receipts, bank statements & tax forms",
     },
@@ -466,7 +467,7 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 2,
         "parent_name": "CAD",
         "kind": "cad",
-        "extensions": [".dwg", ".dxf"],
+        "extensions": [".dwg", ".dxf", ".lac", ".lbrn", ".lbrn2"],
         "keywords": [],
         "domains": [],
         "summary": "Laser cutting & CAD DWG/DXF drawings",
@@ -477,10 +478,11 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
         "tier": 2,
         "parent_name": "Images",
         "kind": "image",
-        "extensions": [".png", ".jpg", ".jpeg", ".webp"],
-        "keywords": ["screenshot", "screen_shot", "snip", "capture", "cleanshot"],
+        "extensions": [".png", ".jpg", ".jpeg", ".webp", ".bmp"],
+        "keywords": ["screenshot", "screen_shot", "snip", "snipping", "capture", "cleanshot", "greenshot", "sharex", "flameshot", "lightshot", "gyazo", "screengrab"],
+        "exclude_keywords": ["logo", "icon", "wallpaper", "banner", "thumbnail"],
         "domains": [],
-        "summary": "Screen captures matched by filename",
+        "summary": "Screen captures matched by filename or screenshot metadata",
     },
     {
         "key": "t2_png",
@@ -630,6 +632,596 @@ PREMADE_FOLDER_CATALOG: list[dict[str, Any]] = [
 ]
 
 
+def _t2_sug(
+    name: str,
+    group: str,
+    kind: str,
+    *,
+    extensions: list[str] | tuple[str, ...] = (),
+    keywords: list[str] | tuple[str, ...] = (),
+    exclude_keywords: list[str] | tuple[str, ...] = (),
+    domains: list[str] | tuple[str, ...] = (),
+    summary: str = "",
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "group": group,
+        "kind": kind,
+        "extensions": _clean_exts(extensions),
+        "keywords": _clean_strs(keywords),
+        "exclude_keywords": _clean_strs(exclude_keywords),
+        "domains": [d.lower() for d in _clean_strs(domains)],
+        "summary": summary,
+    }
+
+
+TIER2_SUGGESTIONS_BY_PARENT: dict[str, dict[str, list[dict[str, Any]]]] = {
+    "audio": {
+        "file_type": [
+            _t2_sug("MP3", "file_type", "audio", extensions=[".mp3"], summary="MP3 audio tracks"),
+            _t2_sug("WAV", "file_type", "audio", extensions=[".wav", ".aiff"], summary="Uncompressed WAV & AIFF audio"),
+            _t2_sug("MP4", "file_type", "audio", extensions=[".m4a"], summary="MPEG-4 / M4A audio containers"),
+            _t2_sug("FLAC", "file_type", "audio", extensions=[".flac"], summary="Lossless FLAC audio"),
+            _t2_sug("AAC & OGG", "file_type", "audio", extensions=[".aac", ".ogg", ".wma"], summary="AAC, OGG & WMA audio"),
+        ],
+        "classification": [
+            _t2_sug(
+                "Songs",
+                "classification",
+                "audio",
+                extensions=[".mp3", ".flac", ".m4a", ".wav", ".aac", ".ogg"],
+                keywords=["song", "track", "album", "music", "remix", "ost", "instrumental"],
+                summary="Music tracks, songs & albums",
+            ),
+            _t2_sug(
+                "Ringtones",
+                "classification",
+                "audio",
+                extensions=[".mp3", ".m4a", ".m4r", ".wav", ".ogg"],
+                keywords=["ringtone", "notification", "alert", "alarm", "chime", "tone"],
+                summary="Ringtones, chimes & notification alerts",
+            ),
+            _t2_sug(
+                "Recordings",
+                "classification",
+                "audio",
+                extensions=[".mp3", ".m4a", ".wav", ".mp4", ".ogg"],
+                keywords=["recording", "voice", "memo", "interview", "meeting", "podcast", "lecture"],
+                summary="Voice memos, meetings & field recordings",
+            ),
+            _t2_sug(
+                "Sound Effects & Samples",
+                "classification",
+                "audio",
+                extensions=[".wav", ".mp3", ".flac", ".ogg", ".aiff"],
+                keywords=["sfx", "sample", "loop", "drum", "synth", "oneshot", "foley"],
+                summary="SFX, loops & producer sample packs",
+            ),
+        ],
+    },
+    "documents": {
+        "file_type": [
+            _t2_sug("PDF", "file_type", "pdf", extensions=[".pdf"], summary="PDF documents"),
+            _t2_sug("Word", "file_type", "doc", extensions=[".doc", ".docx", ".rtf", ".odt"], summary="Microsoft Word & rich text"),
+            _t2_sug("Spreadsheets", "file_type", "sheet", extensions=[".xls", ".xlsx", ".xlsm", ".csv", ".ods"], summary="Excel workbooks & CSV tables"),
+            _t2_sug("Presentations", "file_type", "doc", extensions=[".ppt", ".pptx", ".odp", ".key"], summary="PowerPoint & Keynote decks"),
+            _t2_sug("Text & Markdown", "file_type", "doc", extensions=[".txt", ".md", ".tex"], summary="Plain text & Markdown notes"),
+            _t2_sug("Ebooks", "file_type", "doc", extensions=[".epub", ".mobi"], summary="EPUB & Kindle publications"),
+        ],
+        "classification": [
+            _t2_sug(
+                "School & Coursework",
+                "classification",
+                "school",
+                extensions=[".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xlsx", ".txt", ".ipynb", ".py", ".zip"],
+                keywords=["syllabus", "homework", "lecture", "assignment", "exam", "midterm", "quiz", "lab_report", "worksheet", "problem_set", "transcript", "coursework"],
+                domains=["instructure.com", "blackboard.com", "brightspace.com", "classroom.google.com", "gradescope.com"],
+                summary="Syllabi, lectures, homework & LMS downloads",
+            ),
+            _t2_sug(
+                "Bills & Receipts",
+                "classification",
+                "finance",
+                extensions=[".pdf", ".csv", ".xlsx"],
+                keywords=["invoice", "receipt", "bank_statement", "billing_statement", "account_statement", "bill", "tax", "w2", "1099"],
+                exclude_keywords=["statement of purpose", "personal statement", "mission statement", "thesis statement"],
+                summary="Invoices, receipts, bank statements & tax forms",
+            ),
+            _t2_sug(
+                "Resumes & Career",
+                "classification",
+                "career",
+                extensions=[".pdf", ".doc", ".docx"],
+                keywords=["resume", "cv", "cover_letter", "offer_letter"],
+                summary="Resumes, CVs & offer letters",
+            ),
+            _t2_sug(
+                "Contracts & Legal",
+                "classification",
+                "doc",
+                extensions=[".pdf", ".doc", ".docx"],
+                keywords=["contract", "agreement", "lease", "nda", "signed"],
+                summary="Signed agreements, NDAs & leases",
+            ),
+            _t2_sug(
+                "Manuals & Guides",
+                "classification",
+                "doc",
+                extensions=[".pdf", ".epub", ".txt"],
+                keywords=["manual", "datasheet", "guide", "handbook", "spec"],
+                summary="Product manuals, datasheets & specs",
+            ),
+        ],
+    },
+    "3d models": {
+        "file_type": [
+            _t2_sug("3MF", "file_type", "print", extensions=[".3mf"], summary="Bambu / Prusa 3MF project files"),
+            _t2_sug("STL", "file_type", "print", extensions=[".stl"], summary="Standard STL print meshes"),
+            _t2_sug("OBJ & Meshes", "file_type", "print", extensions=[".obj", ".fbx", ".blend", ".glb", ".gltf", ".3ds"], summary="OBJ, Blender, FBX & GLTF meshes"),
+            _t2_sug("G-Code", "file_type", "cnc", extensions=[".gcode", ".bgcode", ".gco", ".nc", ".tap", ".ngc"], summary="Sliced printer G-code & CNC toolpaths"),
+        ],
+        "classification": [
+            _t2_sug(
+                "MakerWorld",
+                "classification",
+                "print",
+                extensions=[".3mf", ".stl"],
+                keywords=["makerworld", "bambu"],
+                domains=["makerworld.com"],
+                summary="Models downloaded from MakerWorld",
+            ),
+            _t2_sug(
+                "Printables & Thingiverse",
+                "classification",
+                "print",
+                extensions=[".3mf", ".stl", ".obj", ".zip"],
+                domains=["printables.com", "thingiverse.com", "thangs.com"],
+                summary="Models from Printables, Thingiverse & Thangs",
+            ),
+            _t2_sug(
+                "Functional Parts & Mounts",
+                "classification",
+                "print",
+                extensions=[".3mf", ".stl"],
+                keywords=["bracket", "mount", "holder", "adapter", "clip", "jig", "stand"],
+                summary="Brackets, mounts, holders & adapters",
+            ),
+            _t2_sug(
+                "Miniatures & Figurines",
+                "classification",
+                "print",
+                extensions=[".3mf", ".stl", ".obj"],
+                keywords=[
+                    "miniature",
+                    "figurine",
+                    "statue",
+                    "bust",
+                    "diorama",
+                    "chibi",
+                    "cosplay",
+                    "helmet",
+                    "mask",
+                    "character",
+                    "tabletop",
+                    "warhammer",
+                    "dnd",
+                    "sculpt",
+                    "dragon",
+                    "pokemon",
+                    "gundam",
+                    "articulated",
+                    "flexi",
+                    "action_figure",
+                    "bobblehead",
+                    "anime",
+                    "plushie",
+                ],
+                exclude_keywords=[
+                    "bracket",
+                    "mount",
+                    "holder",
+                    "adapter",
+                    "clamp",
+                    "latch",
+                    "spool",
+                    "drag chain",
+                    "bed chain",
+                    "screen cover",
+                    "riser",
+                    "tripod",
+                    "profile",
+                    "calibration",
+                    "gasket",
+                    "solidcast",
+                    "intake",
+                    "runner",
+                    "card_display",
+                    "card display",
+                ],
+                summary="Tabletop minis, figurines, statues & cosplay props",
+            ),
+            _t2_sug(
+                "Organizers & Gridfinity",
+                "classification",
+                "print",
+                extensions=[".3mf", ".stl"],
+                keywords=["gridfinity", "organizer", "tray", "bin", "drawer", "box"],
+                summary="Gridfinity bins, trays & storage organizers",
+            ),
+        ],
+    },
+    "cad": {
+        "file_type": [
+            _t2_sug("STEP", "file_type", "cad", extensions=[".step", ".stp"], summary="Neutral STEP solid geometry"),
+            _t2_sug("Fusion 360", "file_type", "cad", extensions=[".f3d", ".f3z"], summary="Autodesk Fusion 360 archives"),
+            _t2_sug("SolidWorks", "file_type", "cad", extensions=[".sldprt", ".sldasm", ".slddrw"], summary="SolidWorks parts, assemblies & drawings"),
+            _t2_sug("DWG & DXF", "file_type", "cad", extensions=[".dwg", ".dxf"], summary="2D laser/CNC profiles & CAD drawings"),
+            _t2_sug("IGES", "file_type", "cad", extensions=[".iges", ".igs"], summary="Neutral IGES surface/solid CAD"),
+            _t2_sug("Inventor", "file_type", "cad", extensions=[".ipt", ".iam"], summary="Autodesk Inventor parts & assemblies"),
+        ],
+        "classification": [
+            _t2_sug(
+                "Mechanical Parts",
+                "classification",
+                "cad",
+                extensions=[".step", ".stp", ".f3d", ".sldprt", ".ipt"],
+                keywords=["bracket", "gear", "shaft", "housing", "bearing", "plate", "flange"],
+                summary="Gears, housings, brackets & machined parts",
+            ),
+            _t2_sug(
+                "Enclosures & Cases",
+                "classification",
+                "cad",
+                extensions=[".step", ".stp", ".f3d", ".f3z", ".sldprt"],
+                keywords=["enclosure", "case", "box", "cover", "chassis"],
+                summary="Electronics enclosures, covers & chassis",
+            ),
+            _t2_sug(
+                "Assemblies",
+                "classification",
+                "cad",
+                extensions=[".f3z", ".sldasm", ".iam", ".step", ".stp"],
+                keywords=["assembly", "assy", "subassembly"],
+                summary="Multi-part CAD assemblies",
+            ),
+            _t2_sug(
+                "Schematics & Drawings",
+                "classification",
+                "cad",
+                extensions=[".dwg", ".dxf", ".slddrw", ".pdf"],
+                keywords=["schematic", "drawing", "layout", "floorplan", "wiring"],
+                summary="Engineering drawings, layouts & schematics",
+            ),
+        ],
+    },
+    "images": {
+        "file_type": [
+            _t2_sug("PNG", "file_type", "image", extensions=[".png"], summary="Lossless PNG images"),
+            _t2_sug("JPG", "file_type", "image", extensions=[".jpg", ".jpeg"], summary="JPEG photos & web images"),
+            _t2_sug("SVG & Vector", "file_type", "design", extensions=[".svg", ".ai", ".eps"], summary="Scalable vector artwork"),
+            _t2_sug("WEBP & HEIC", "file_type", "image", extensions=[".webp", ".heic"], summary="WebP & Apple HEIC images"),
+            _t2_sug("GIF", "file_type", "image", extensions=[".gif"], summary="Animated GIFs & clips"),
+            _t2_sug("RAW & TIFF", "file_type", "image", extensions=[".tif", ".tiff", ".bmp", ".ico"], summary="Uncompressed TIFF, BMP & icons"),
+        ],
+        "classification": [
+            _t2_sug(
+                "Screenshots",
+                "classification",
+                "image",
+                extensions=[".png", ".jpg", ".jpeg", ".webp", ".bmp"],
+                keywords=[
+                    "screenshot",
+                    "screen_shot",
+                    "snip",
+                    "snipping",
+                    "capture",
+                    "cleanshot",
+                    "greenshot",
+                    "sharex",
+                    "flameshot",
+                    "lightshot",
+                    "gyazo",
+                    "screengrab",
+                ],
+                exclude_keywords=["logo", "icon", "wallpaper", "banner", "thumbnail"],
+                summary="Screen captures & snips (filename + screenshot metadata)",
+            ),
+            _t2_sug(
+                "Photos & Camera",
+                "classification",
+                "image",
+                extensions=[".jpg", ".jpeg", ".heic"],
+                keywords=["photo", "dsc", "img", "portrait", "pxl"],
+                exclude_keywords=["screenshot", "screen_shot", "snip", "logo", "icon", "diagram", "chart"],
+                summary="Camera & phone photos (EXIF + filename)",
+            ),
+            _t2_sug(
+                "Wallpapers & Art",
+                "classification",
+                "design",
+                extensions=[".png", ".jpg", ".jpeg", ".webp"],
+                keywords=["wallpaper", "background", "art", "poster", "banner"],
+                summary="Desktop wallpapers, posters & digital art",
+            ),
+            _t2_sug(
+                "Logos & Icons",
+                "classification",
+                "design",
+                extensions=[".png", ".jpg", ".jpeg", ".svg", ".ico", ".webp", ".ai", ".eps"],
+                keywords=["logo", "icon", "favicon", "avatar", "badge", "emblem", "brandmark", "wordmark", "sprite"],
+                summary="Logos, app icons & UI sprites",
+            ),
+            _t2_sug(
+                "Memes & Reactions",
+                "classification",
+                "image",
+                extensions=[".png", ".jpg", ".jpeg", ".gif", ".webp"],
+                keywords=["meme", "reaction", "funny"],
+                summary="Memes & reaction GIFs",
+            ),
+        ],
+    },
+    "videos": {
+        "file_type": [
+            _t2_sug("MP4", "file_type", "video", extensions=[".mp4", ".m4v"], summary="MP4 & M4V videos"),
+            _t2_sug("MOV", "file_type", "video", extensions=[".mov"], summary="QuickTime & iPhone MOV clips"),
+            _t2_sug("MKV", "file_type", "video", extensions=[".mkv"], summary="Matroska MKV video containers"),
+            _t2_sug("WEBM & AVI", "file_type", "video", extensions=[".webm", ".avi", ".wmv", ".flv"], summary="WebM, AVI & legacy video files"),
+        ],
+        "classification": [
+            _t2_sug(
+                "Screen Recordings",
+                "classification",
+                "video",
+                extensions=[".mp4", ".mov", ".mkv", ".webm"],
+                keywords=["recording", "screen_recording", "capture", "obs", "replay", "clip"],
+                summary="OBS captures, screen recordings & replays",
+            ),
+            _t2_sug(
+                "Tutorials & Lectures",
+                "classification",
+                "school",
+                extensions=[".mp4", ".mov", ".mkv", ".webm"],
+                keywords=["tutorial", "lecture", "course", "lesson", "walkthrough", "howto"],
+                summary="Recorded lectures, tutorials & courses",
+            ),
+            _t2_sug(
+                "Movies & Shows",
+                "classification",
+                "video",
+                extensions=[".mp4", ".mkv", ".avi", ".m4v"],
+                keywords=["movie", "episode", "season", "1080p", "4k", "trailer"],
+                summary="Films, episodes & trailers",
+            ),
+            _t2_sug(
+                "Camera & Drone Clips",
+                "classification",
+                "video",
+                extensions=[".mp4", ".mov"],
+                keywords=["dji", "gopro", "vid", "footage", "vlog"],
+                summary="Action camera, drone & vlog footage",
+            ),
+        ],
+    },
+    "archives": {
+        "file_type": [
+            _t2_sug("ZIP", "file_type", "archive", extensions=[".zip"], summary="Standard ZIP archives"),
+            _t2_sug("7z & RAR", "file_type", "archive", extensions=[".7z", ".rar"], summary="High-compression 7-Zip & RAR archives"),
+            _t2_sug("TAR & GZ", "file_type", "archive", extensions=[".tar", ".gz", ".tgz", ".bz2", ".xz"], summary="Unix tarballs & gzip bundles"),
+            _t2_sug("ISO Disk Images", "file_type", "archive", extensions=[".iso"], summary="OS & installer ISO images"),
+        ],
+        "classification": [
+            _t2_sug(
+                "Backups",
+                "classification",
+                "archive",
+                extensions=[".zip", ".7z", ".tar", ".gz"],
+                keywords=["backup", "bak", "export", "archive", "dump"],
+                summary="Data exports & compressed backups",
+            ),
+            _t2_sug(
+                "Portable Apps & Releases",
+                "classification",
+                "installer",
+                extensions=[".zip", ".7z"],
+                keywords=["portable", "win64", "x64", "release", "build"],
+                summary="Portable software builds & release zips",
+            ),
+            _t2_sug(
+                "Font & Asset Packs",
+                "classification",
+                "design",
+                extensions=[".zip", ".rar", ".7z"],
+                keywords=["font", "fonts", "assets", "icons", "pack", "bundle"],
+                summary="Design packs, icons & font bundles",
+            ),
+            _t2_sug(
+                "Source Code Zips",
+                "classification",
+                "code",
+                extensions=[".zip", ".tar", ".gz"],
+                keywords=["source", "repo", "github", "gitlab", "starter", "codebase"],
+                summary="Downloaded GitHub / repo source archives",
+            ),
+        ],
+    },
+    "installers": {
+        "file_type": [
+            _t2_sug("EXE", "file_type", "installer", extensions=[".exe"], summary="Windows executable setups"),
+            _t2_sug("MSI & MSIX", "file_type", "installer", extensions=[".msi", ".msix", ".appx"], summary="Windows Installer packages"),
+            _t2_sug("macOS Packages", "file_type", "installer", extensions=[".dmg", ".pkg"], summary="Apple DMG & PKG installers"),
+        ],
+        "classification": [
+            _t2_sug(
+                "Drivers & Firmware",
+                "classification",
+                "installer",
+                extensions=[".exe", ".msi"],
+                keywords=["driver", "nvidia", "amd", "intel", "realtek", "firmware", "bios"],
+                summary="GPU, chipset, BIOS & peripheral drivers",
+            ),
+            _t2_sug(
+                "Dev Tools & IDEs",
+                "classification",
+                "code",
+                extensions=[".exe", ".msi"],
+                keywords=["python", "vscode", "git", "node", "docker", "sdk", "studio"],
+                summary="Compilers, editors, SDKs & dev tools",
+            ),
+            _t2_sug(
+                "Games & Launchers",
+                "classification",
+                "installer",
+                extensions=[".exe", ".msi"],
+                keywords=["steam", "epic", "game", "launcher", "discord"],
+                summary="Game clients & launchers",
+            ),
+            _t2_sug(
+                "Utilities & Updates",
+                "classification",
+                "installer",
+                extensions=[".exe", ".msi"],
+                keywords=["setup", "installer", "update", "patch", "utility"],
+                summary="General desktop utilities & updaters",
+            ),
+        ],
+    },
+    "code": {
+        "file_type": [
+            _t2_sug("Python", "file_type", "code", extensions=[".py", ".ipynb"], summary="Python scripts & Jupyter notebooks"),
+            _t2_sug("Web (JS/TS/HTML/CSS)", "file_type", "code", extensions=[".js", ".ts", ".jsx", ".tsx", ".html", ".css"], summary="Frontend scripts, styles & markup"),
+            _t2_sug("Configs & Data (JSON/YAML/SQL)", "file_type", "code", extensions=[".json", ".yaml", ".yml", ".toml", ".xml", ".ini", ".env", ".sql", ".db", ".sqlite"], summary="JSON, YAML, TOML configs & SQL files"),
+            _t2_sug("Systems (C/C++/Rust/Go)", "file_type", "code", extensions=[".c", ".cpp", ".h", ".hpp", ".cs", ".java", ".rs", ".go"], summary="C/C++, C#, Java, Rust & Go sources"),
+            _t2_sug("Logs & Dumps", "file_type", "code", extensions=[".log", ".dmp", ".out"], summary="Application logs & crash dumps"),
+        ],
+        "classification": [
+            _t2_sug(
+                "Scripts & Automation",
+                "classification",
+                "code",
+                extensions=[".py", ".js", ".ts", ".sh"],
+                keywords=["script", "bot", "automation", "tool", "cli", "helper"],
+                summary="Utility scripts & automation tools",
+            ),
+            _t2_sug(
+                "Datasets",
+                "classification",
+                "sheet",
+                extensions=[".json", ".csv", ".parquet", ".feather", ".sqlite", ".db"],
+                keywords=["dataset", "data", "train", "test", "export", "metrics"],
+                summary="Structured datasets & exported metrics",
+            ),
+            _t2_sug(
+                "Configs & Dotfiles",
+                "classification",
+                "code",
+                extensions=[".json", ".yaml", ".yml", ".toml", ".ini", ".env"],
+                keywords=["config", "settings", "profile", "theme", "preset"],
+                summary="App profiles, presets & config files",
+            ),
+            _t2_sug(
+                "Notebooks & Analysis",
+                "classification",
+                "school",
+                extensions=[".ipynb", ".py", ".html", ".log"],
+                keywords=["notebook", "analysis", "report", "plot", "experiment"],
+                summary="Data exploration notebooks & experiments",
+            ),
+        ],
+    },
+    "finance": {
+        "file_type": [
+            _t2_sug("PDF Statements", "file_type", "finance", extensions=[".pdf"], summary="PDF invoices, bills & tax forms"),
+            _t2_sug("CSV & Excel Ledgers", "file_type", "sheet", extensions=[".csv", ".xlsx", ".ofx", ".qfx"], summary="Transaction exports & spreadsheets"),
+        ],
+        "classification": [
+            _t2_sug("Receipts & Invoices", "classification", "finance", extensions=[".pdf"], keywords=["receipt", "invoice", "order", "payment"], summary="Purchase receipts & billing invoices"),
+            _t2_sug("Tax Forms", "classification", "finance", extensions=[".pdf"], keywords=["tax", "w2", "1099", "irs", "1098"], summary="Tax filings & government forms"),
+            _t2_sug("Bank Statements", "classification", "finance", extensions=[".pdf", ".csv", ".ofx"], keywords=["statement", "bank", "checking", "credit"], summary="Monthly account statements"),
+        ],
+    },
+    "school": {
+        "file_type": [
+            _t2_sug("PDF Readings", "file_type", "pdf", extensions=[".pdf"], summary="PDF readings & slides"),
+            _t2_sug("Docs & Slides", "file_type", "doc", extensions=[".doc", ".docx", ".ppt", ".pptx"], summary="Word essays & PowerPoint decks"),
+            _t2_sug("Code & Notebooks", "file_type", "code", extensions=[".py", ".ipynb", ".zip"], summary="Coding assignments & notebooks"),
+        ],
+        "classification": [
+            _t2_sug("Syllabi", "classification", "school", extensions=[".pdf", ".doc", ".docx"], keywords=["syllabus", "schedule", "course_outline"], summary="Course syllabi & calendars"),
+            _t2_sug("Homework", "classification", "school", extensions=[".pdf", ".doc", ".docx", ".ipynb", ".py", ".zip"], keywords=["homework", "hw", "assignment", "problem_set"], summary="Homework & problem sets"),
+            _t2_sug("Lab Reports", "classification", "school", extensions=[".pdf", ".doc", ".docx", ".xlsx", ".csv"], keywords=["lab", "lab_report", "experiment"], summary="Lab reports & experimental data"),
+            _t2_sug("Exams & Study Guides", "classification", "school", extensions=[".pdf", ".doc", ".docx", ".pptx"], keywords=["exam", "midterm", "final_exam", "quiz", "study_guide", "review"], summary="Study guides, quizzes & exams"),
+        ],
+    },
+    "career": {
+        "file_type": [
+            _t2_sug("PDF", "file_type", "pdf", extensions=[".pdf"], summary="PDF resumes & offers"),
+            _t2_sug("Word", "file_type", "doc", extensions=[".doc", ".docx"], summary="Editable Word documents"),
+        ],
+        "classification": [
+            _t2_sug("Resumes", "classification", "career", extensions=[".pdf", ".doc", ".docx"], keywords=["resume", "cv"], summary="Targeted resumes & CVs"),
+            _t2_sug("Cover Letters & Offers", "classification", "career", extensions=[".pdf", ".doc", ".docx"], keywords=["cover_letter", "offer_letter", "scholarship"], summary="Cover letters & offer packages"),
+        ],
+    },
+    "design": {
+        "file_type": [
+            _t2_sug("Figma & Sketch", "file_type", "design", extensions=[".fig", ".sketch", ".xd"], summary="UI design project files"),
+            _t2_sug("Photoshop & Illustrator", "file_type", "design", extensions=[".psd", ".ai", ".eps", ".afdesign"], summary="Layered PSD & vector AI files"),
+        ],
+        "classification": [
+            _t2_sug("Mockups & Wireframes", "classification", "design", extensions=[".fig", ".psd", ".png", ".pdf"], keywords=["mockup", "wireframe", "prototype", "ui"], summary="UI mockups & wireframes"),
+            _t2_sug("Brand & Logos", "classification", "design", extensions=[".svg", ".ai", ".eps", ".png"], keywords=["brand", "logo", "palette", "styleguide"], summary="Logos & brand kits"),
+        ],
+    },
+}
+
+_TIER2_KIND_PARENT_ALIASES: dict[str, str] = {
+    "audio": "audio",
+    "doc": "documents",
+    "pdf": "documents",
+    "sheet": "documents",
+    "print": "3d models",
+    "cnc": "3d models",
+    "cad": "cad",
+    "image": "images",
+    "video": "videos",
+    "archive": "archives",
+    "installer": "installers",
+    "code": "code",
+    "finance": "finance",
+    "school": "school",
+    "career": "career",
+    "design": "design",
+}
+
+
+def get_tier2_suggestions(
+    parent_name: str = "",
+    parent_kind: str = "",
+    mode: str = "all",
+) -> list[dict[str, Any]]:
+    """Return suggested Tier 2 subfolders for a Tier 1 parent (by File Type and Classification).
+
+    ``mode`` may be ``"all"``, ``"file_type"``, or ``"classification"``.
+    """
+    key = str(parent_name or "").strip().lower()
+    bucket = TIER2_SUGGESTIONS_BY_PARENT.get(key)
+    if bucket is None and parent_kind:
+        alias = _TIER2_KIND_PARENT_ALIASES.get(str(parent_kind).strip().lower(), "")
+        if alias:
+            bucket = TIER2_SUGGESTIONS_BY_PARENT.get(alias)
+    if bucket is None:
+        return []
+
+    wanted = str(mode or "all").strip().lower()
+    groups = ("file_type", "classification") if wanted == "all" else (wanted,)
+    results: list[dict[str, Any]] = []
+    for grp in groups:
+        for item in bucket.get(grp, ()):
+            results.append(copy.deepcopy(item))
+    return results
+
+
 ARCHITECTURE_PRESETS: dict[str, dict[str, Any]] = {
     "basic_starter": {
         "label": "Basic Starter (Clean 2-Tier Foundation)",
@@ -707,6 +1299,7 @@ class ArchNode:
     kind: str = "default"
     extensions: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
+    exclude_keywords: list[str] = field(default_factory=list)
     domains: list[str] = field(default_factory=list)
     enabled: bool = True
     is_custom: bool = False
@@ -722,6 +1315,7 @@ class ArchNode:
         self.kind = str(self.kind or "default")
         self.extensions = _clean_exts(self.extensions)
         self.keywords = _clean_strs(self.keywords)
+        self.exclude_keywords = _clean_strs(self.exclude_keywords)
         self.domains = [d.lower() for d in _clean_strs(self.domains)]
         self.enabled = bool(self.enabled)
         self.is_custom = bool(self.is_custom)
@@ -732,7 +1326,7 @@ class ArchNode:
         return KIND_COLORS.get(self.kind, KIND_COLORS["default"])
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
             "tier": self.tier,
@@ -745,6 +1339,9 @@ class ArchNode:
             "is_custom": self.is_custom,
             "premade_key": self.premade_key,
         }
+        if self.exclude_keywords:
+            payload["exclude_keywords"] = list(self.exclude_keywords)
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ArchNode:
@@ -756,6 +1353,7 @@ class ArchNode:
             kind=str(data.get("kind", "default")),
             extensions=list(data.get("extensions", [])),
             keywords=list(data.get("keywords", [])),
+            exclude_keywords=list(data.get("exclude_keywords", [])),
             domains=list(data.get("domains", [])),
             enabled=bool(data.get("enabled", True)),
             is_custom=bool(data.get("is_custom", False)),
@@ -852,6 +1450,21 @@ class FolderArchitecture:
     def children_of(self, parent_id: str | None) -> list[ArchNode]:
         return [n for n in self.nodes if n.parent_id == parent_id]
 
+    def descendants_of(self, node_id: str) -> list[ArchNode]:
+        """Return all strict descendants of ``node_id`` sorted by tier then name."""
+        descendants: list[ArchNode] = []
+        queue: list[str] = [node_id]
+        seen: set[str] = {node_id}
+        while queue:
+            cur_id = queue.pop(0)
+            for child in self.children_of(cur_id):
+                if child.id not in seen:
+                    seen.add(child.id)
+                    descendants.append(child)
+                    queue.append(child.id)
+        descendants.sort(key=lambda n: (n.tier, n.name.lower()))
+        return descendants
+
     def is_descendant_of(self, candidate_id: str, ancestor_id: str) -> bool:
         """Return True if ``candidate_id`` is a strict descendant of ``ancestor_id``."""
         cur = self.get_node(candidate_id)
@@ -924,6 +1537,51 @@ class FolderArchitecture:
         self.tier_count = max(self.tier_count, min(self.MAX_TIERS, max_used))
         return True
 
+    def can_merge(self, source_id: str, target_id: str) -> bool:
+        """Return True when ``source_id`` and its subtree can be merged into ``target_id``."""
+        if not source_id or not target_id or source_id == target_id:
+            return False
+        if source_id == "__root__" or target_id == "__root__":
+            return False
+        src = self.get_node(source_id)
+        dst = self.get_node(target_id)
+        if src is None or dst is None:
+            return False
+        if self.is_descendant_of(source_id, target_id) or self.is_descendant_of(target_id, source_id):
+            return False
+        return (dst.tier + self.subtree_depth(source_id)) <= self.MAX_TIERS
+
+    def merge_nodes(
+        self,
+        source_id: str,
+        target_id: str,
+        *,
+        new_name: str | None = None,
+    ) -> ArchNode | None:
+        """Merge ``source_id`` (rules and subfolders) into ``target_id`` and remove ``source_id``."""
+        if not self.can_merge(source_id, target_id):
+            return None
+        src = self.get_node(source_id)
+        dst = self.get_node(target_id)
+        if src is None or dst is None:
+            return None
+
+        dst.extensions = _clean_exts([*dst.extensions, *src.extensions])
+        dst.keywords = _clean_strs([*dst.keywords, *src.keywords])
+        dst.domains = [d.lower() for d in _clean_strs([*dst.domains, *src.domains])]
+        if new_name and new_name.strip():
+            dst.name = new_name.strip().replace("/", "").replace("\\", "") or dst.name
+
+        for child in list(self.children_of(src.id)):
+            existing_child = self.find_by_name_and_tier(child.name, dst.tier + 1, dst.id)
+            if existing_child is not None:
+                self.merge_nodes(child.id, existing_child.id)
+            else:
+                self.reparent_node(child.id, dst.id)
+
+        self.nodes = [n for n in self.nodes if n.id != src.id]
+        return dst
+
     def node_relative_path(self, node_id: str) -> str:
         parts: list[str] = []
         seen: set[str] = set()
@@ -958,6 +1616,7 @@ class FolderArchitecture:
         *,
         extensions: list[str] | None = None,
         keywords: list[str] | None = None,
+        exclude_keywords: list[str] | None = None,
         domains: list[str] | None = None,
         enabled: bool = True,
         is_custom: bool = True,
@@ -975,6 +1634,7 @@ class FolderArchitecture:
                 if is_leaf:
                     existing.extensions = _clean_exts([*existing.extensions, *(extensions or [])])
                     existing.keywords = _clean_strs([*existing.keywords, *(keywords or [])])
+                    existing.exclude_keywords = _clean_strs([*existing.exclude_keywords, *(exclude_keywords or [])])
                     existing.domains = _clean_strs([*existing.domains, *(domains or [])])
                     existing.enabled = enabled
                 parent_id = existing.id
@@ -983,6 +1643,7 @@ class FolderArchitecture:
 
             leaf_exts = list(extensions or []) if is_leaf else []
             leaf_kws = list(keywords or []) if is_leaf else []
+            leaf_ex_kws = list(exclude_keywords or []) if is_leaf else []
             leaf_doms = list(domains or []) if is_leaf else []
             node = ArchNode(
                 id=f"n-{uuid.uuid4().hex[:6]}",
@@ -992,6 +1653,7 @@ class FolderArchitecture:
                 kind=_guess_kind(part, leaf_exts),
                 extensions=leaf_exts,
                 keywords=leaf_kws,
+                exclude_keywords=leaf_ex_kws,
                 domains=leaf_doms,
                 enabled=enabled,
                 is_custom=is_custom,
@@ -1037,6 +1699,7 @@ class FolderArchitecture:
         if existing is not None:
             existing.extensions = _clean_exts([*existing.extensions, *tpl["extensions"]])
             existing.keywords = _clean_strs([*existing.keywords, *tpl["keywords"]])
+            existing.exclude_keywords = _clean_strs([*existing.exclude_keywords, *tpl.get("exclude_keywords", [])])
             existing.domains = _clean_strs([*existing.domains, *tpl["domains"]])
             return existing
 
@@ -1048,6 +1711,7 @@ class FolderArchitecture:
             kind=str(tpl["kind"]),
             extensions=list(tpl["extensions"]),
             keywords=list(tpl["keywords"]),
+            exclude_keywords=list(tpl.get("exclude_keywords", [])),
             domains=list(tpl["domains"]),
             enabled=True,
             is_custom=False,
@@ -1065,6 +1729,7 @@ class FolderArchitecture:
         kind: str = "default",
         extensions: list[str] | None = None,
         keywords: list[str] | None = None,
+        exclude_keywords: list[str] | None = None,
         domains: list[str] | None = None,
         enabled: bool = True,
     ) -> ArchNode:
@@ -1084,6 +1749,7 @@ class FolderArchitecture:
             kind=kind or _guess_kind(name, extensions or []),
             extensions=list(extensions or []),
             keywords=list(keywords or []),
+            exclude_keywords=list(exclude_keywords or []),
             domains=list(domains or []),
             enabled=enabled,
             is_custom=True,
@@ -1101,6 +1767,7 @@ class FolderArchitecture:
         kind: str | None = None,
         extensions: list[str] | None = None,
         keywords: list[str] | None = None,
+        exclude_keywords: list[str] | None = None,
         domains: list[str] | None = None,
         enabled: bool | None = None,
     ) -> ArchNode | None:
@@ -1123,13 +1790,22 @@ class FolderArchitecture:
             node.extensions = _clean_exts(extensions)
         if keywords is not None:
             node.keywords = _clean_strs(keywords)
+        if exclude_keywords is not None:
+            node.exclude_keywords = _clean_strs(exclude_keywords)
         if domains is not None:
             node.domains = [d.lower() for d in _clean_strs(domains)]
         if enabled is not None:
             node.enabled = bool(enabled)
         return node
 
-    def remove_node(self, node_id: str) -> None:
+    def remove_node(self, node_id: str, *, promote_children: bool = False) -> list[str]:
+        node = self.get_node(node_id)
+        if node is None:
+            return []
+        if promote_children:
+            target_parent = node.parent_id
+            for child in list(self.children_of(node_id)):
+                self.reparent_node(child.id, target_parent)
         to_remove = {node_id}
         changed = True
         while changed:
@@ -1139,6 +1815,7 @@ class FolderArchitecture:
                     to_remove.add(n.id)
                     changed = True
         self.nodes = [n for n in self.nodes if n.id not in to_remove]
+        return sorted(to_remove)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1287,6 +1964,7 @@ def architecture_from_config(cfg: Config) -> FolderArchitecture:
             rule.destination,
             extensions=rule.extensions,
             keywords=rule.keywords,
+            exclude_keywords=rule.exclude_keywords,
             domains=rule.domains,
             enabled=rule.enabled,
             is_custom=True,
@@ -1349,14 +2027,17 @@ def _merge_user_and_generated_rules(user_rules: list[Rule], generated: list[Rule
 
 def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> Config:
     """Compile a ``FolderArchitecture`` into a complete, deterministic ``Config``."""
-    from download_sorter.config import DEFAULT_TYPE_SUBFOLDERS, Rule
+    from download_sorter.config import Rule
+    from download_sorter.router import rule_specificity_score
 
     cfg = copy.deepcopy(base_cfg)
     cfg.architecture = arch.to_dict()
     cfg.use_type_subfolders = arch.tier_count >= 2
 
     new_cat_map: dict[str, str] = {}
-    new_type_subs: dict[str, str] = dict(DEFAULT_TYPE_SUBFOLDERS) if arch.tier_count >= 2 else {}
+    # Only create Tier 2 extension subfolders for Tier 2 nodes actually present in the architecture;
+    # never resurrect hidden DEFAULT_TYPE_SUBFOLDERS that are not on the user's canvas.
+    new_type_subs: dict[str, str] = {}
     generated_rules: list[Rule] = []
 
     # Step A: Tier 1 top-level category mappings & rule-based Tier 1 nodes
@@ -1370,6 +2051,7 @@ def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> 
                     name=f"{node.name}",
                     destination=node.name,
                     keywords=list(node.keywords),
+                    exclude_keywords=list(node.exclude_keywords),
                     domains=list(node.domains),
                     extensions=list(node.extensions),
                     enabled=True,
@@ -1404,6 +2086,7 @@ def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> 
                     name=f"{rel_path}",
                     destination=rel_path,
                     keywords=list(node.keywords),
+                    exclude_keywords=list(node.exclude_keywords),
                     domains=list(node.domains),
                     extensions=list(node.extensions),
                     enabled=True,
@@ -1429,11 +2112,12 @@ def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> 
                     )
                     break
 
-    # Deduplicate rules by (destination.lower(), keywords, domains, extensions) while keeping deepest/keyword-specific first
+    # Keep keyword/domain rules ahead of extension-only rules, deepest tier first, then most specific
     generated_rules.sort(
         key=lambda r: (
             0 if (r.keywords or r.domains) else 1,
             -len(r.destination.split("\\")),
+            -rule_specificity_score(r),
         )
     )
     cfg.rules = _merge_user_and_generated_rules(base_cfg.rules, generated_rules)
@@ -1444,7 +2128,22 @@ def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> 
     return cfg
 
 
-_SCAN_SKIP_DIRS = {"_duplicates", "_extracted", "__pycache__", ".git", ".venv"}
+_SCAN_SKIP_DIRS = {
+    "_duplicates",
+    "_extracted",
+    "extracted",
+    "_archive",
+    "__pycache__",
+    "__macosx",
+    ".git",
+    ".venv",
+    "node_modules",
+    "site-packages",
+    "build",
+    "dist",
+    "crashpad",
+    "ebwebview",
+}
 _SCAN_STOPWORDS = {
     "copy",
     "final",
@@ -1470,8 +2169,9 @@ _SCAN_STOPWORDS = {
 def scan_folder_architecture(
     watch_root: Path,
     *,
-    max_depth: int = 5,
+    max_depth: int = 2,
     max_files_per_dir: int = 300,
+    use_tfidf: bool = True,
     on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
     """Scan ``watch_root`` on disk and build an interactive ``FolderArchitecture`` root map."""
@@ -1490,6 +2190,7 @@ def scan_folder_architecture(
 
     dir_records: list[dict[str, Any]] = []
     global_token_counts: Counter[str] = Counter()
+    doc_freq: Counter[str] = Counter()
     total_files = 0
     max_tier_seen = 1
 
@@ -1531,6 +2232,9 @@ def scan_folder_architecture(
                 if host:
                     domain_counts[host] += 1
 
+        for tok in token_counts:
+            doc_freq[tok] += 1
+
         dir_records.append(
             {
                 "rel_parts": rel.parts,
@@ -1561,12 +2265,22 @@ def scan_folder_architecture(
             for ext, cnt in rec["ext_counts"].most_common(8)
             if cnt >= 2 or (cnt / fc) >= 0.25 or len(rec["ext_counts"]) == 1
         ]
-        # Distinctive keywords: >=2 occurrences in this folder and >=50% purity across whole tree
-        inferred_kws = [
-            tok
-            for tok, cnt in rec["token_counts"].most_common(12)
-            if cnt >= 2 and (cnt / max(1, global_token_counts[tok])) >= 0.5
-        ][:5]
+        # Distinctive keywords: >=2 occurrences, >=50% purity, ranked by cross-folder TF-IDF
+        import math
+
+        non_empty_dirs = max(1, sum(1 for r in dir_records if r["file_count"] > 0))
+        scored_kws: list[tuple[float, int, str]] = []
+        for tok, cnt in rec["token_counts"].items():
+            if cnt >= 2 and (cnt / max(1, global_token_counts[tok])) >= 0.5:
+                if use_tfidf:
+                    tf = cnt / fc
+                    idf = math.log((1.0 + non_empty_dirs) / (1.0 + doc_freq[tok])) + 1.0
+                    score = tf * idf
+                else:
+                    score = float(cnt)
+                scored_kws.append((score, cnt, tok))
+        scored_kws.sort(key=lambda item: (-item[0], -item[1], item[2]))
+        inferred_kws = [tok for _score, _cnt, tok in scored_kws[:5]]
         inferred_domains = [host for host, _cnt in rec["domain_counts"].most_common(3)]
 
         node_id = uuid.uuid4().hex[:8]

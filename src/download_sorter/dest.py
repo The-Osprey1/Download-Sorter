@@ -11,6 +11,7 @@ watched folder those either escape it or become a folder literally named
 from __future__ import annotations
 
 from datetime import datetime
+import functools
 import os
 from pathlib import Path, PureWindowsPath
 import re
@@ -131,6 +132,8 @@ def apply_rename_template(
 
 
 def _expand(text: str) -> str:
+    if "$" not in text and "%" not in text and not text.startswith("~"):
+        return text
     # ntpath.expandvars handles %NAME%, $NAME and ${NAME} alike on Windows;
     # USERPROFILE is spelled out so the same works where it is not set.
     home = str(Path.home())
@@ -168,6 +171,28 @@ def _clean_parts(parts: tuple[str, ...] | list[str]) -> list[str] | None:
     return out
 
 
+@functools.lru_cache(maxsize=2048)
+def _to_relative_dest_cached(raw_text: str, fallback: str) -> str:
+    text = raw_text.strip().replace("/", "\\")
+    if not text:
+        return fallback
+    path = PureWindowsPath(text)
+    if path.drive or path.root:
+        from download_sorter.paths import default_downloads_dir
+
+        watch_root = default_downloads_dir()
+        rel = _relative_to(path, watch_root)
+        if rel is None:
+            rel = _relative_to(path, Path.home())
+        if rel is None:
+            parts = _clean_parts([p for p in path.parts if p not in (path.anchor,)])
+            return parts[-1] if parts else fallback
+        parts = _clean_parts(rel.parts)
+    else:
+        parts = _clean_parts(path.parts)
+    return "\\".join(parts) if parts else fallback
+
+
 def to_relative_dest(
     raw: str,
     *,
@@ -182,7 +207,16 @@ def to_relative_dest(
       (``...\\me\\Documents\\Bank`` -> ``Documents\\Bank``). Anywhere else: its last folder name.
     - Anything with ``..`` or characters Windows does not allow: ``fallback``.
     """
-    text = str(raw or "").strip().replace("/", "\\")
+    raw_str = str(raw or "")
+    stripped = raw_str.strip()
+    if (
+        watch_root is None
+        and "$" not in stripped
+        and "%" not in stripped
+        and not stripped.startswith("~")
+    ):
+        return _to_relative_dest_cached(raw_str, fallback)
+    text = stripped.replace("/", "\\")
     if not text:
         return fallback
     text = _expand(text)

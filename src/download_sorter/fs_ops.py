@@ -475,7 +475,14 @@ def find_existing_counterpart(src: Path, planned_dest: Path) -> Path | None:
     return None
 
 
-def resolve_destination(src: Path, planned_dest: Path, watch_root: Path) -> tuple[Path, bool]:
+def resolve_destination(
+    src: Path,
+    planned_dest: Path,
+    watch_root: Path,
+    *,
+    counterpart: Path | None = None,
+    _counterpart_checked: bool = False,
+) -> tuple[Path, bool]:
     """Never overwrite an existing destination.
 
     If an exact byte-identical file or a browser-numbered copy (e.g. ``report (1).pdf``)
@@ -483,7 +490,8 @@ def resolve_destination(src: Path, planned_dest: Path, watch_root: Path) -> tupl
     quarantine the incoming duplicate to ``watch_root/_Duplicates/<YYYY-MM>/<name>``.
     Otherwise add `` (2)`` / `` (3)`` numbering.
     """
-    counterpart = find_existing_counterpart(src, planned_dest)
+    if not _counterpart_checked:
+        counterpart = find_existing_counterpart(src, planned_dest)
     if counterpart is not None:
         month_dir = datetime.now().strftime("%Y-%m")
         dup_target = watch_root / "_Duplicates" / month_dir / src.name
@@ -599,7 +607,13 @@ def execute_move(
         logging.warning("Not moving %s: %s is outside the watched folder", src.name, planned_dest)
         return None
     existing_counterpart = find_existing_counterpart(src, planned_dest)
-    final_dest, is_dup = resolve_destination(src, planned_dest, watch_root)
+    final_dest, is_dup = resolve_destination(
+        src,
+        planned_dest,
+        watch_root,
+        counterpart=existing_counterpart,
+        _counterpart_checked=True,
+    )
     if not is_dup:
         renamed_dup = find_renamed_duplicate(src, db=db, watch_root=watch_root)
         if renamed_dup is not None:
@@ -855,8 +869,14 @@ def _cleanup_empty_dup_dirs(dup_root: Path) -> None:
         pass
 
 
-def _index_watch_files(root: Path) -> dict[str, list[Path]]:
-    """Map lower-cased canonical filename -> sorted candidate paths under ``root``."""
+def _index_watch_files(
+    root: Path,
+    *,
+    wanted_keys: set[str] | None = None,
+) -> dict[str, list[Path]]:
+    """Map lower-cased canonical filename -> candidate paths under ``root``."""
+    if wanted_keys is not None and not wanted_keys:
+        return {}
     by_canonical: dict[str, list[Path]] = {}
     for cur_dir, dirnames, filenames in os.walk(root):
         dirnames[:] = [
@@ -867,9 +887,10 @@ def _index_watch_files(root: Path) -> dict[str, list[Path]]:
         for fname in filenames:
             if fname.startswith("."):
                 continue
-            cand = base / fname
-            key = strip_browser_copy_suffix(fname).lower()
-            by_canonical.setdefault(key, []).append(cand)
+            key = strip_browser_copy_suffix(fname).lower() if "(" in fname else fname.lower()
+            if wanted_keys is not None and key not in wanted_keys:
+                continue
+            by_canonical.setdefault(key, []).append(base / fname)
     return by_canonical
 
 
@@ -914,11 +935,13 @@ def scan_duplicate_files(watch_root: Path, *, db: StateDB | None = None) -> list
     dup_root = root / "_Duplicates"
     if not dup_root.is_dir():
         return []
-    by_canonical = _index_watch_files(root)
+    dup_files = [p for p in dup_root.rglob("*") if p.is_file()]
+    if not dup_files:
+        return []
+    wanted_keys = {strip_browser_copy_suffix(f.name).lower() for f in dup_files}
+    by_canonical = _index_watch_files(root, wanted_keys=wanted_keys)
     entries: list[dict[str, Any]] = []
-    for fpath in dup_root.rglob("*"):
-        if not fpath.is_file():
-            continue
+    for fpath in dup_files:
         try:
             st = fpath.stat()
             rel = str(fpath.relative_to(root))
@@ -1392,9 +1415,9 @@ def scan_detox_candidates(
             d for d in dirnames if not d.startswith(".") and d not in ("_Duplicates", "_Extracted")
         ]
         for fname in filenames:
-            fpath = cur / fname
-            if fpath.suffix.lower() not in _INSTALLER_EXTS:
+            if os.path.splitext(fname)[1].lower() not in _INSTALLER_EXTS:
                 continue
+            fpath = cur / fname
             try:
                 st = fpath.stat()
             except OSError:

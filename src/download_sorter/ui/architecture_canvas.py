@@ -27,6 +27,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QPolygonF,
 )
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -45,6 +46,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -61,12 +63,14 @@ from download_sorter.architecture import (
     apply_architecture_to_config,
     architecture_from_config,
     delete_architecture_snapshot,
+    get_tier2_suggestions,
     list_architecture_snapshots,
     load_architecture_snapshot,
     merge_architectures,
     save_architecture_snapshot,
     scan_folder_architecture,
 )
+from download_sorter.project_detect import DetectedProject, detect_projects_in_folder
 from download_sorter.service import SorterService
 from download_sorter.ui.motion import (
     CollapsibleRibbonBtn,
@@ -365,6 +369,43 @@ class CustomFolderNodeDialog(QDialog):
         # Clickable Parent Folder List
         self.list_parents = QListWidget()
         self.list_parents.setMaximumHeight(92)
+        self.list_parents.currentRowChanged.connect(lambda _row: self._refresh_suggestions())
+
+        # Tier 2 Suggested Subfolders Picker (By File Type vs. By Classification, zero QComboBox)
+        self._sugg_mode = "all"
+        self._sugg_label = QLabel("Suggested Options:")
+        self._sugg_wrap = QWidget()
+        sugg_v = QVBoxLayout(self._sugg_wrap)
+        sugg_v.setContentsMargins(0, 0, 0, 0)
+        sugg_v.setSpacing(5)
+        sugg_tabs = QHBoxLayout()
+        sugg_tabs.setSpacing(5)
+        self._sugg_mode_btns: dict[str, QPushButton] = {}
+        for mkey, mlabel in (
+            ("all", "All"),
+            ("file_type", "By File Type"),
+            ("classification", "By Classification"),
+        ):
+            mb = _make_pill_button(
+                mlabel,
+                checkable=True,
+                extra_css="QPushButton#ArchPillBtn { padding: 2px 8px; font-size: 10.5px; }",
+            )
+            mb.clicked.connect(lambda _chk, m=mkey: self._set_suggestion_mode(m))
+            self._sugg_mode_btns[mkey] = mb
+            sugg_tabs.addWidget(mb)
+        sugg_tabs.addStretch(1)
+        sugg_v.addLayout(sugg_tabs)
+
+        self.list_suggestions = QListWidget()
+        self.list_suggestions.setMaximumHeight(112)
+        self.list_suggestions.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_suggestions.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.list_suggestions.setToolTip(
+            "Click a suggested subfolder to pre-fill name & rules, or type any custom folder name above"
+        )
+        self.list_suggestions.itemClicked.connect(self._apply_dialog_suggestion)
+        sugg_v.addWidget(self.list_suggestions)
 
         # Clickable Category Color Pills
         kind_wrap = QWidget()
@@ -418,6 +459,7 @@ class CustomFolderNodeDialog(QDialog):
         form.addRow("Folder Name:", self.edit_name)
         form.addRow("Layer / Tier:", tier_wrap)
         form.addRow("Parent Folder:", self.list_parents)
+        form.addRow(self._sugg_label, self._sugg_wrap)
         form.addRow("Category Color:", kind_wrap)
         form.addRow("File Extensions:", self.edit_exts)
         form.addRow("Filename Keywords:", self.edit_keywords)
@@ -439,7 +481,62 @@ class CustomFolderNodeDialog(QDialog):
         layout.addWidget(buttons)
 
         self._select_kind(self._selected_kind)
+        self._set_suggestion_mode("all")
         self._select_tier(self._selected_tier)
+
+    def _set_suggestion_mode(self, mode: str) -> None:
+        self._sugg_mode = mode
+        for mkey, btn in self._sugg_mode_btns.items():
+            btn.setChecked(mkey == mode)
+        self._refresh_suggestions()
+
+    def _refresh_suggestions(self) -> None:
+        self.list_suggestions.clear()
+        if self._selected_tier < 2:
+            self._sugg_label.setVisible(False)
+            self._sugg_wrap.setVisible(False)
+            return
+        cur = self.list_parents.currentItem()
+        parent_id = str(cur.data(Qt.ItemDataRole.UserRole) or "") if cur is not None else ""
+        pnode = self.arch.get_node(parent_id) if parent_id else None
+        suggestions = (
+            get_tier2_suggestions(pnode.name, pnode.kind, mode=self._sugg_mode)
+            if pnode is not None
+            else []
+        )
+        has_any = bool(
+            pnode is not None and get_tier2_suggestions(pnode.name, pnode.kind, mode="all")
+        )
+        self._sugg_label.setVisible(has_any)
+        self._sugg_wrap.setVisible(has_any)
+        if not has_any:
+            return
+        for s in suggestions:
+            tag = "FILE TYPE" if s["group"] == "file_type" else "CLASS"
+            hints: list[str] = []
+            if s.get("extensions"):
+                hints.append(", ".join(s["extensions"][:3]) + ("..." if len(s["extensions"]) > 3 else ""))
+            if s.get("keywords"):
+                hints.append("kw: " + ", ".join(s["keywords"][:3]))
+            if s.get("domains"):
+                hints.append("site: " + ", ".join(s["domains"][:2]))
+            hint_str = "  ·  ".join(hints)
+            li = QListWidgetItem(f"[{tag}]  {s['name']}   ({hint_str})" if hint_str else f"[{tag}]  {s['name']}")
+            li.setToolTip(f"{s.get('summary', '')}\nClick to fill folder name & sorting rules.")
+            li.setData(Qt.ItemDataRole.UserRole, s)
+            self.list_suggestions.addItem(li)
+
+    def _apply_dialog_suggestion(self, item: QListWidgetItem) -> None:
+        s = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(s, dict):
+            return
+        self.edit_name.setText(str(s.get("name", "")))
+        self.edit_exts.setText(", ".join(s.get("extensions", [])))
+        self.edit_keywords.setText(", ".join(s.get("keywords", [])))
+        self.edit_domains.setText(", ".join(s.get("domains", [])))
+        kind_val = str(s.get("kind", "") or "")
+        if kind_val in self._kind_btns:
+            self._select_kind(kind_val)
 
     def _select_kind(self, kind_key: str) -> None:
         self._selected_kind = kind_key
@@ -451,6 +548,7 @@ class CustomFolderNodeDialog(QDialog):
         for t, btn in self._tier_btns.items():
             btn.setChecked(t == self._selected_tier)
         self._populate_parents(self._preferred_parent_id)
+        self._refresh_suggestions()
 
     def _populate_parents(self, preferred_id: str | None) -> None:
         tier = self._selected_tier
@@ -509,6 +607,500 @@ class CustomFolderNodeDialog(QDialog):
             "keywords": split(self.edit_keywords.text()),
             "domains": split(self.edit_domains.text()),
         }
+
+
+class MergeFolderDialog(QDialog):
+    """Pick a target folder to merge the selected folder's rules, subfolders, and files into."""
+
+    def __init__(
+        self,
+        arch: FolderArchitecture,
+        source_node: ArchNode,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._arch = arch
+        self._source = source_node
+        self._valid_targets = [
+            n for n in arch.nodes if arch.can_merge(source_node.id, n.id)
+        ]
+        # Prefer siblings in the same (tier, parent_id) first, then same tier, then alphabetical
+        self._valid_targets.sort(
+            key=lambda n: (
+                0 if (n.tier == source_node.tier and n.parent_id == source_node.parent_id) else 1,
+                0 if n.tier == source_node.tier else 1,
+                n.tier,
+                n.name.lower(),
+            )
+        )
+
+        self.setWindowTitle(f"Merge '{source_node.name}' Into...")
+        self.setMinimumSize(440, 400)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(10)
+
+        src_rel = arch.node_relative_path(source_node.id)
+        lbl_hdr = QLabel(f"Merge Downloads\\{src_rel} into another folder")
+        lbl_hdr.setStyleSheet("font-size: 13.5px; font-weight: 600; color: #F5F5F7;")
+        lbl_hdr.setWordWrap(True)
+        v.addWidget(lbl_hdr)
+
+        lbl_info = QLabel(
+            "Combines extensions, keywords, and website rules into the target folder and reparents any subfolders."
+        )
+        lbl_info.setStyleSheet("color: #98989D; font-size: 11.5px;")
+        lbl_info.setWordWrap(True)
+        v.addWidget(lbl_info)
+
+        lbl_list = QLabel("Target Folder")
+        lbl_list.setStyleSheet("color: #AEAEB2; font-size: 11px; font-weight: 600;")
+        v.addWidget(lbl_list)
+
+        self.list_targets = QListWidget()
+        self.list_targets.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        for cand in self._valid_targets:
+            rel = arch.node_relative_path(cand.id)
+            item = QListWidgetItem(f"{cand.name}  (Tier {cand.tier} · Downloads\\{rel})")
+            item.setData(Qt.ItemDataRole.UserRole, cand.id)
+            item.setData(Qt.ItemDataRole.UserRole + 1, cand.name)
+            self.list_targets.addItem(item)
+        v.addWidget(self.list_targets, 1)
+
+        name_row = QFormLayout()
+        name_row.setSpacing(6)
+        self.edit_target_name = QLineEdit()
+        self.edit_target_name.setPlaceholderText("Merged folder name...")
+        self.edit_target_name.setToolTip("Keep the target folder's name or enter a combined name")
+        name_row.addRow("Resulting Name:", self.edit_target_name)
+        v.addLayout(name_row)
+
+        self.chk_move_disk_files = QCheckBox(
+            "Also move existing files on disk from source folder into target folder"
+        )
+        self.chk_move_disk_files.setChecked(True)
+        v.addWidget(self.chk_move_disk_files)
+
+        self.list_targets.currentItemChanged.connect(self._on_target_changed)
+        if self.list_targets.count() > 0:
+            self.list_targets.setCurrentRow(0)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
+        if ok_btn is not None:
+            ok_btn.setText("Merge Folders")
+            ok_btn.setObjectName("PrimaryButton")
+            ok_btn.setEnabled(self.list_targets.count() > 0)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        v.addWidget(btns)
+
+    def _on_target_changed(self, cur: QListWidgetItem | None, _prev: QListWidgetItem | None) -> None:
+        if cur is not None:
+            self.edit_target_name.setText(str(cur.data(Qt.ItemDataRole.UserRole + 1) or ""))
+
+    def selected_target_id(self) -> str | None:
+        cur = self.list_targets.currentItem()
+        if cur is None:
+            return None
+        val = cur.data(Qt.ItemDataRole.UserRole)
+        return str(val) if val else None
+
+    def merged_name(self) -> str:
+        return self.edit_target_name.text().strip()
+
+    def move_disk_files(self) -> bool:
+        return self.chk_move_disk_files.isChecked()
+
+
+class DeleteFolderDialog(QDialog):
+    """Confirm removing a folder, especially when files or child subfolders exist on disk."""
+
+    def __init__(
+        self,
+        arch: FolderArchitecture,
+        node: ArchNode,
+        disk_info: dict[str, Any],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._arch = arch
+        self._node = node
+        self._disk_info = dict(disk_info or {})
+        self._file_count = int(self._disk_info.get("file_count", 0) or 0)
+        self._exists_on_disk = bool(self._disk_info.get("exists"))
+        self._children = arch.children_of(node.id)
+        self.list_actions: QListWidget | None = None
+        self.chk_remove_empty: QCheckBox | None = None
+        self.chk_promote_children: QCheckBox | None = None
+        self.lbl_disk_warning: QLabel | None = None
+
+        self.setObjectName("DeleteFolderDialog")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        from download_sorter.ui.theme import STYLESHEET
+
+        self.setStyleSheet(
+            STYLESHEET
+            + "\nQDialog#DeleteFolderDialog { background-color: #111113; color: #F5F5F7; }"
+        )
+        self.setWindowTitle("Remove Folder — Are you sure?")
+        self.setMinimumSize(460, 300)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 16, 16, 16)
+        v.setSpacing(10)
+
+        rel_path = arch.node_relative_path(node.id)
+        lbl_hdr = QLabel(f"Remove '{node.name}' (Downloads\\{rel_path})?")
+        lbl_hdr.setStyleSheet("font-size: 14px; font-weight: 600; color: #F5F5F7;")
+        lbl_hdr.setWordWrap(True)
+        v.addWidget(lbl_hdr)
+
+        if self._file_count > 0:
+            samples = [str(s) for s in (self._disk_info.get("sample_files") or []) if str(s).strip()]
+            sample_txt = ", ".join(samples[:3])
+            if self._file_count > min(3, len(samples)):
+                sample_txt += f", +{self._file_count - min(3, len(samples))} more"
+            sample_clause = f" ({sample_txt})" if sample_txt else ""
+            warn = QLabel(
+                f"This folder contains {self._file_count} file(s) on disk{sample_clause}. "
+                "Your files will never be deleted — choose where they should go:"
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet(
+                "background: rgba(255, 159, 10, 0.14); color: #FFB340; "
+                "border: 1px solid rgba(255, 159, 10, 0.45); border-radius: 8px; "
+                "padding: 8px 10px; font-size: 12px;"
+            )
+            self.lbl_disk_warning = warn
+            v.addWidget(warn)
+
+            self.list_actions = QListWidget()
+            self.list_actions.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+
+            parent_node = arch.get_node(node.parent_id)
+            if parent_node is not None:
+                parent_rel = arch.node_relative_path(parent_node.id)
+                parent_label = f"Downloads\\{parent_rel}"
+            else:
+                parent_rel = ""
+                parent_label = "Downloads\\"
+
+            item_evac_parent = QListWidgetItem(
+                f"Move {self._file_count} file(s) to {parent_label} and remove folder"
+            )
+            item_evac_parent.setData(Qt.ItemDataRole.UserRole, ("evacuate", parent_rel))
+            self.list_actions.addItem(item_evac_parent)
+
+            item_keep = QListWidgetItem(
+                "Keep files in place on disk (remove from Architecture diagram only)"
+            )
+            item_keep.setData(Qt.ItemDataRole.UserRole, ("keep", None))
+            self.list_actions.addItem(item_keep)
+
+            descendant_ids = {d.id for d in arch.descendants_of(node.id)}
+            for cand in arch.nodes:
+                if cand.id == node.id or cand.id in descendant_ids:
+                    continue
+                if parent_node is not None and cand.id == parent_node.id:
+                    continue
+                cand_rel = arch.node_relative_path(cand.id)
+                item_cand = QListWidgetItem(
+                    f"Move {self._file_count} file(s) into Downloads\\{cand_rel}"
+                )
+                item_cand.setData(Qt.ItemDataRole.UserRole, ("evacuate", cand_rel))
+                self.list_actions.addItem(item_cand)
+
+            self.list_actions.setCurrentRow(0)
+            v.addWidget(self.list_actions, 1)
+        elif self._exists_on_disk:
+            info = QLabel("This folder exists on disk and is currently empty (0 files).")
+            info.setStyleSheet("color: #AEAEB2; font-size: 12px;")
+            info.setWordWrap(True)
+            v.addWidget(info)
+            self.chk_remove_empty = QCheckBox("Also remove the empty folder from disk")
+            self.chk_remove_empty.setChecked(True)
+            v.addWidget(self.chk_remove_empty)
+        else:
+            info = QLabel("This folder has no files on disk yet.")
+            info.setStyleSheet("color: #AEAEB2; font-size: 12px;")
+            info.setWordWrap(True)
+            v.addWidget(info)
+
+        if self._children:
+            self.chk_promote_children = QCheckBox(
+                f"Keep {len(self._children)} child subfolder(s) by promoting them up one tier"
+            )
+            self.chk_promote_children.setChecked(True)
+            v.addWidget(self.chk_promote_children)
+
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_confirm_remove = QPushButton("Remove Folder")
+        self.btn_confirm_remove.setStyleSheet(
+            "QPushButton { background-color: #FF453A; color: #FFFFFF; border: 1px solid #FF453A; "
+            "border-radius: 7px; font-weight: 600; padding: 6px 14px; }"
+            "QPushButton:hover { background-color: #FF5B52; }"
+        )
+        self.btn_confirm_remove.clicked.connect(self.accept)
+        btns.addWidget(self.btn_cancel)
+        btns.addWidget(self.btn_confirm_remove)
+        v.addLayout(btns)
+
+    def file_action(self) -> tuple[str, str | None]:
+        if self.list_actions is None:
+            return ("none", None)
+        cur = self.list_actions.currentItem()
+        if cur is None:
+            return ("keep", None)
+        data = cur.data(Qt.ItemDataRole.UserRole)
+        if isinstance(data, tuple) and len(data) == 2:
+            return (str(data[0]), data[1] if data[1] is None else str(data[1]))
+        return ("keep", None)
+
+    def should_remove_empty_dir(self) -> bool:
+        mode, _target = self.file_action()
+        if mode == "evacuate":
+            return True
+        if self.chk_remove_empty is not None:
+            return self.chk_remove_empty.isChecked()
+        return False
+
+    def should_promote_children(self) -> bool:
+        if self.chk_promote_children is not None:
+            return self.chk_promote_children.isChecked()
+        return False
+
+
+class DetectProjectsDialog(QDialog):
+    """Interactive dialog to inspect, rename, filter, and add auto-detected project subfolders."""
+
+    def __init__(
+        self,
+        parent_node: ArchNode,
+        folder_path,  # Path
+        projects: list[DetectedProject],
+        *,
+        exclude_subdirs: set[str],
+        existing_child_names: set[str],
+        min_files: int = 3,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._parent_node = parent_node
+        self._folder_path = folder_path
+        self._exclude_subdirs = set(exclude_subdirs)
+        self._existing_child_names = {n.lower() for n in existing_child_names}
+        self._projects: list[DetectedProject] = list(projects)
+
+        self.setWindowTitle(f"Detect Projects — {parent_node.name}")
+        self.resize(780, 520)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 16, 18, 16)
+        v.setSpacing(10)
+
+        title = QLabel(f"Detected Projects in {parent_node.name}")
+        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #F5F5F7;")
+        v.addWidget(title)
+
+        self.lbl_summary = QLabel(
+            "Select the projects you want to add as child subfolders on the canvas. "
+            "Double-click a project name or its keywords to edit before adding. "
+            "No files move until you click Apply & Shift Files."
+        )
+        self.lbl_summary.setStyleSheet("font-size: 12px; color: #A1A1A6;")
+        self.lbl_summary.setWordWrap(True)
+        v.addWidget(self.lbl_summary)
+
+        # Controls bar: Min files spinbox + Select All / None
+        ctrl = QHBoxLayout()
+        ctrl.setSpacing(8)
+        lbl_min = QLabel("Min files per project:")
+        lbl_min.setStyleSheet("font-size: 12px; color: #D1D1D6;")
+        ctrl.addWidget(lbl_min)
+
+        self.spin_min_files = QSpinBox()
+        self.spin_min_files.setRange(2, 20)
+        self.spin_min_files.setValue(max(2, min(20, int(min_files))))
+        self.spin_min_files.setFixedWidth(64)
+        self.spin_min_files.setToolTip("Minimum matching files required to suggest a project")
+        self.spin_min_files.valueChanged.connect(self._on_min_files_changed)
+        ctrl.addWidget(self.spin_min_files)
+
+        self.lbl_count_badge = QLabel("")
+        self.lbl_count_badge.setStyleSheet("font-size: 12px; color: #5AC8FA; font-weight: 600;")
+        ctrl.addWidget(self.lbl_count_badge)
+        ctrl.addStretch(1)
+
+        btn_all = QPushButton("Select All")
+        btn_all.clicked.connect(lambda: self._set_all_checked(True))
+        btn_none = QPushButton("Select None")
+        btn_none.clicked.connect(lambda: self._set_all_checked(False))
+        ctrl.addWidget(btn_all)
+        ctrl.addWidget(btn_none)
+        v.addLayout(ctrl)
+
+        # Projects table
+        self.tbl = QTableWidget(0, 4)
+        self.tbl.setHorizontalHeaderLabels(["Project Subfolder", "Files & Types", "Confidence", "Auto-Route Keywords"])
+        self.tbl.setAlternatingRowColors(True)
+        self.tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tbl.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.tbl.verticalHeader().setVisible(False)
+        hdr = self.tbl.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.tbl.itemChanged.connect(self._on_item_changed)
+        self.tbl.currentCellChanged.connect(self._on_row_selected)
+        v.addWidget(self.tbl, 1)
+
+        # Sample files preview box
+        preview_box = QFrame()
+        preview_box.setStyleSheet(
+            "QFrame { background-color: #161618; border: 1px solid #2C2C2E; border-radius: 8px; }"
+        )
+        pl = QVBoxLayout(preview_box)
+        pl.setContentsMargins(10, 8, 10, 8)
+        pl.setSpacing(4)
+        self.lbl_samples_title = QLabel("Sample matching files")
+        self.lbl_samples_title.setStyleSheet("font-size: 11px; font-weight: 600; color: #8E8E93; border: none;")
+        pl.addWidget(self.lbl_samples_title)
+        self.lbl_samples = QLabel("Click a project row above to inspect its files.")
+        self.lbl_samples.setStyleSheet("font-size: 11.5px; color: #D1D1D6; border: none;")
+        self.lbl_samples.setWordWrap(True)
+        pl.addWidget(self.lbl_samples)
+        v.addWidget(preview_box)
+
+        # Action buttons
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_add = QPushButton("Add Selected Projects (0)")
+        self.btn_add.setObjectName("PrimaryButton")
+        self.btn_add.clicked.connect(self.accept)
+        btns.addWidget(self.btn_cancel)
+        btns.addWidget(self.btn_add)
+        v.addLayout(btns)
+
+        self._populate_table()
+
+    def _populate_table(self) -> None:
+        self.tbl.blockSignals(True)
+        try:
+            self.tbl.setRowCount(len(self._projects))
+            for row, proj in enumerate(self._projects):
+                already_exists = proj.name.lower() in self._existing_child_names
+                name_item = QTableWidgetItem(proj.name)
+                name_item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEditable
+                )
+                default_checked = (not already_exists) and (proj.confidence >= 75 or len(self._projects) <= 6)
+                name_item.setCheckState(Qt.CheckState.Checked if default_checked else Qt.CheckState.Unchecked)
+                name_item.setData(Qt.ItemDataRole.UserRole, row)
+                if already_exists:
+                    name_item.setToolTip("A subfolder with this name already exists under this folder")
+                self.tbl.setItem(row, 0, name_item)
+
+                ext_str = ", ".join(proj.extensions[:4])
+                if len(proj.extensions) > 4:
+                    ext_str += f" +{len(proj.extensions) - 4}"
+                files_text = f"{proj.file_count} files ({ext_str})" if ext_str else f"{proj.file_count} files"
+                if already_exists:
+                    files_text += " · exists"
+                files_item = QTableWidgetItem(files_text)
+                files_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                self.tbl.setItem(row, 1, files_item)
+
+                conf_item = QTableWidgetItem(f"{proj.confidence}% ({proj.confidence_label})")
+                conf_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                conf_color = "#30D158" if proj.confidence >= 75 else ("#FFD60A" if proj.confidence >= 55 else "#98989D")
+                conf_item.setForeground(QColor(conf_color))
+                self.tbl.setItem(row, 2, conf_item)
+
+                kw_item = QTableWidgetItem(", ".join(proj.keywords))
+                kw_item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
+                )
+                self.tbl.setItem(row, 3, kw_item)
+        finally:
+            self.tbl.blockSignals(False)
+
+        self.lbl_count_badge.setText(f"{len(self._projects)} project(s) found")
+        self._update_add_button()
+        if self._projects:
+            self.tbl.selectRow(0)
+            self._on_row_selected(0, 0, -1, -1)
+        else:
+            self.lbl_samples_title.setText("No projects detected at this threshold")
+            self.lbl_samples.setText("Try lowering 'Min files per project' to 2.")
+
+    def _on_min_files_changed(self, value: int) -> None:
+        self._projects = detect_projects_in_folder(
+            self._folder_path,
+            min_files=int(value),
+            exclude_subdirs=self._exclude_subdirs,
+        )
+        self._populate_table()
+
+    def _set_all_checked(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        self.tbl.blockSignals(True)
+        try:
+            for row in range(self.tbl.rowCount()):
+                item = self.tbl.item(row, 0)
+                if item is not None:
+                    item.setCheckState(state)
+        finally:
+            self.tbl.blockSignals(False)
+        self._update_add_button()
+
+    def _on_item_changed(self, _item: QTableWidgetItem) -> None:
+        self._update_add_button()
+
+    def _on_row_selected(self, row: int, _col: int, _prev_row: int, _prev_col: int) -> None:
+        if 0 <= row < len(self._projects):
+            proj = self._projects[row]
+            self.lbl_samples_title.setText(
+                f"Sample files for '{proj.name}' ({proj.file_count} total, {proj.distinct_count} distinct)"
+            )
+            preview = "  ·  ".join(proj.sample_files[:6])
+            if proj.file_count > 6:
+                preview += f"  (+{proj.file_count - 6} more)"
+            self.lbl_samples.setText(preview)
+
+    def _update_add_button(self) -> None:
+        count = len(self.selected_projects())
+        self.btn_add.setText(f"Add Selected Projects ({count})")
+        self.btn_add.setEnabled(count > 0)
+
+    def selected_projects(self) -> list[dict[str, Any]]:
+        chosen: list[dict[str, Any]] = []
+        for row in range(self.tbl.rowCount()):
+            name_item = self.tbl.item(row, 0)
+            kw_item = self.tbl.item(row, 3)
+            if name_item is None or name_item.checkState() != Qt.CheckState.Checked:
+                continue
+            proj = self._projects[row]
+            clean_name = name_item.text().strip().replace("/", "").replace("\\", "") or proj.name
+            raw_kws = [k.strip() for k in (kw_item.text() if kw_item else "").split(",") if k.strip()]
+            chosen.append(
+                {
+                    "name": clean_name,
+                    "keywords": raw_kws or list(proj.keywords),
+                    "extensions": list(proj.extensions),
+                }
+            )
+        return chosen
 
 
 class ShiftConfirmDialog(QDialog):
@@ -817,6 +1409,212 @@ class TemplateShelfWidget(QFrame):
             self.list_templates.addItem(li)
 
 
+class _SubfolderSuggestionPopup(QFrame):
+    """Floating Tier 2 subfolder dropdown popup (All | By File Type | By Classification) with zero QComboBox."""
+
+    suggestion_chosen = Signal(dict)
+    batch_group_chosen = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("SubfolderSuggestionPopup")
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._mode = "all"
+        self._parent_name = ""
+        self._all_suggestions: list[dict[str, Any]] = []
+        self._query = ""
+
+        self.setStyleSheet(
+            """
+            QFrame#SubfolderSuggestionPopup {
+                background-color: #18181C;
+                border: 1px solid #0A84FF;
+                border-radius: 10px;
+            }
+            """
+        )
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        hdr_row = QHBoxLayout()
+        hdr_row.setSpacing(4)
+        self.lbl_title = QLabel("Suggested Subfolders")
+        self.lbl_title.setStyleSheet("color: #AEAEB2; font-size: 10.5px; font-weight: 700;")
+        self.lbl_title.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        hdr_row.addWidget(self.lbl_title, 1)
+
+        self.lbl_custom_hint = QLabel("or type custom + Enter")
+        self.lbl_custom_hint.setStyleSheet("color: #6E6E73; font-size: 10px;")
+        self.lbl_custom_hint.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        hdr_row.addWidget(self.lbl_custom_hint)
+        outer.addLayout(hdr_row)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(4)
+        self._mode_btns: dict[str, QPushButton] = {}
+        for mkey, mlabel in (
+            ("all", "All"),
+            ("file_type", "By File Type"),
+            ("classification", "By Classification"),
+        ):
+            b = _make_pill_button(
+                mlabel,
+                checkable=True,
+                extra_css="QPushButton#ArchPillBtn { padding: 2px 7px; font-size: 10.5px; }",
+            )
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.clicked.connect(lambda _chk, m=mkey: self.set_mode(m))
+            self._mode_btns[mkey] = b
+            mode_row.addWidget(b)
+        mode_row.addStretch(1)
+        outer.addLayout(mode_row)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list_widget.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list_widget.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.list_widget.setStyleSheet(
+            """
+            QListWidget {
+                background-color: #121215;
+                border: 1px solid #2C2C2E;
+                border-radius: 7px;
+                outline: none;
+            }
+            QListWidget::item {
+                color: #F5F5F7;
+                padding: 3px 7px;
+                border-bottom: 1px solid #1E1E22;
+                font-size: 11px;
+            }
+            QListWidget::item:hover {
+                background-color: #24242A;
+            }
+            QListWidget::item:selected {
+                background-color: rgba(10, 132, 255, 65);
+                color: #FFFFFF;
+            }
+            """
+        )
+        self.list_widget.itemClicked.connect(self._on_item_clicked)
+        outer.addWidget(self.list_widget, 1)
+
+        batch_row = QHBoxLayout()
+        batch_row.setSpacing(5)
+        self.btn_add_types = _make_pill_button(
+            "+ All File Types",
+            checkable=False,
+            tooltip="Create all suggested File Type subfolders under this parent",
+            extra_css="QPushButton#ArchPillBtn { padding: 2px 7px; font-size: 10px; }",
+        )
+        self.btn_add_types.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_add_types.clicked.connect(lambda: self.batch_group_chosen.emit("file_type"))
+        batch_row.addWidget(self.btn_add_types)
+
+        self.btn_add_classes = _make_pill_button(
+            "+ All Classifications",
+            checkable=False,
+            tooltip="Create all suggested Classification subfolders under this parent",
+            extra_css="QPushButton#ArchPillBtn { padding: 2px 7px; font-size: 10px; }",
+        )
+        self.btn_add_classes.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_add_classes.clicked.connect(lambda: self.batch_group_chosen.emit("classification"))
+        batch_row.addWidget(self.btn_add_classes)
+        batch_row.addStretch(1)
+        outer.addLayout(batch_row)
+
+        self.setFixedSize(356, 254)
+        self.hide()
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        event.accept()
+
+    def set_parent_suggestions(self, parent_name: str, suggestions: list[dict[str, Any]]) -> None:
+        self._parent_name = parent_name
+        self._all_suggestions = list(suggestions)
+        self._query = ""
+        self.lbl_title.setText(f"{parent_name} Suggestions")
+        self.btn_add_types.setVisible(any(s.get("group") == "file_type" for s in suggestions))
+        self.btn_add_classes.setVisible(any(s.get("group") == "classification" for s in suggestions))
+        self.set_mode("all")
+
+    def set_mode(self, mode: str) -> None:
+        self._mode = mode
+        for mkey, btn in self._mode_btns.items():
+            btn.setChecked(mkey == mode)
+        self._rebuild_list()
+
+    def set_query(self, text: str) -> None:
+        raw = str(text or "").strip()
+        if raw.lower() in ("new subfolder", "new folder"):
+            raw = ""
+        self._query = raw.lower()
+        self._rebuild_list()
+
+    def _rebuild_list(self) -> None:
+        self.list_widget.clear()
+        q = self._query
+        for s in self._all_suggestions:
+            if self._mode != "all" and s.get("group") != self._mode:
+                continue
+            hay = f"{s.get('name', '')} {s.get('summary', '')} {' '.join(s.get('extensions', []))} {' '.join(s.get('keywords', []))}".lower()
+            if q and q not in hay:
+                continue
+            tag = "TYPE" if s.get("group") == "file_type" else "CLASS"
+            hints: list[str] = []
+            if s.get("extensions"):
+                exts = s["extensions"]
+                hints.append(", ".join(exts[:3]) + ("+" if len(exts) > 3 else ""))
+            if s.get("keywords"):
+                hints.append("kw: " + ", ".join(s["keywords"][:3]))
+            if s.get("domains"):
+                hints.append("site: " + ", ".join(s["domains"][:2]))
+            preview = " · ".join(hints)
+            label = f"[{tag}] {s['name']}   ({preview})" if preview else f"[{tag}] {s['name']}"
+            li = QListWidgetItem(label)
+            li.setToolTip(f"{s.get('summary', '')}\nClick to use '{s['name']}' and auto-fill its sorting rules.")
+            li.setData(Qt.ItemDataRole.UserRole, s)
+            self.list_widget.addItem(li)
+        if self.list_widget.count() == 0:
+            empty_li = QListWidgetItem(
+                f"Press Enter to use custom name '{self._query}'" if self._query else "Type any custom folder name + Enter"
+            )
+            empty_li.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.list_widget.addItem(empty_li)
+        self.list_widget.setCurrentRow(-1)
+
+    def move_selection(self, delta: int) -> bool:
+        selectable = [
+            i for i in range(self.list_widget.count())
+            if isinstance(self.list_widget.item(i).data(Qt.ItemDataRole.UserRole), dict)
+        ]
+        if not selectable:
+            return False
+        cur = self.list_widget.currentRow()
+        if cur not in selectable:
+            target = selectable[0] if delta > 0 else selectable[-1]
+        else:
+            pos = selectable.index(cur)
+            target = selectable[(pos + (1 if delta > 0 else -1)) % len(selectable)]
+        self.list_widget.setCurrentRow(target)
+        return True
+
+    def current_suggestion(self) -> dict[str, Any] | None:
+        item = self.list_widget.currentItem()
+        if item is None:
+            return None
+        data = item.data(Qt.ItemDataRole.UserRole)
+        return dict(data) if isinstance(data, dict) else None
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict):
+            self.suggestion_chosen.emit(dict(data))
+
+
 class FolderArchitectureCanvas(QWidget):
     """Interactive direct-manipulation QPainter multi-tier folder architecture graph."""
 
@@ -825,8 +1623,11 @@ class FolderArchitectureCanvas(QWidget):
     node_delete_requested = Signal(str)
     tier_add_requested = Signal(int)
     node_reparent_requested = Signal(str, str)  # (node_id, new_parent_id_or_empty)
+    node_merge_requested = Signal(str, str)  # (source_id, target_id)
     node_spawn_child_requested = Signal(str, str)  # (parent_id_or_empty, default_name)
     node_renamed = Signal(str, str)  # (node_id, new_name)
+    node_suggestion_applied = Signal(str, dict)  # (node_id, suggestion_dict)
+    node_suggestion_batch_requested = Signal(str, str, str)  # (editing_node_id, parent_id, group_mode)
     template_dropped = Signal(str, int, str)  # (premade_key, target_tier, parent_id_or_empty)
     zoom_changed = Signal(float)
 
@@ -836,8 +1637,8 @@ class FolderArchitectureCanvas(QWidget):
     HEADER_H = 30
     CARD_W = 166
     CARD_H = 54
-    CARD_GAP_X = 12
-    CARD_GAP_Y = 12
+    CARD_GAP_X = 18
+    CARD_GAP_Y = 18
     BAND_PAD_X = 12
     BAND_PAD_BOTTOM = 14
 
@@ -847,6 +1648,11 @@ class FolderArchitectureCanvas(QWidget):
         self._watch_label = "Downloads/"
         self._zoom = 1.0
         self._show_all_connectors = False
+        self._expanded_tier1_id: str | None = None
+        self._expand_all_tiers = False
+        self._collapse_hint_rect: QRectF | None = None
+        self._tier_collapse_rect: QRectF | None = None
+        self._hovered_collapse: bool = False
         self._selected_id: str | None = None
         self._hovered_id: str | None = None
         self._hovered_delete_id: str | None = None
@@ -854,8 +1660,16 @@ class FolderArchitectureCanvas(QWidget):
         self._hovered_tier_add: int | None = None
 
         self._node_rects: dict[str, QRectF] = {}
+        self._node_row_col: dict[str, tuple[int, int]] = {}
+        self._sub_pill_rects: dict[str, QRectF] = {}
         self._rendered_rects: dict[str, QRectF] = {}
         self._anim_from_rects: dict[str, QRectF] = {}
+        self._appearing_ids: set[str] = set()
+        self._anim_progress: float = 1.0
+        self._layout_dirty: bool = True
+        self._cached_visible_tiers: dict[int, list[ArchNode]] = {}
+        self._cached_grid_points = QPolygonF()
+        self._cached_grid_size: tuple[int, int] = (0, 0)
         self._delete_rects: dict[str, QRectF] = {}
         self._plus_rects: dict[str, QRectF] = {}
         self._tier_add_rects: dict[int, QRectF] = {}
@@ -887,18 +1701,19 @@ class FolderArchitectureCanvas(QWidget):
         self._ext_drop_valid = False
         self._ext_drop_band: int | None = None
 
-        # Layout OutCubic transition
+        # Layout OutQuart transition
         self._layout_anim = QVariantAnimation(self)
-        self._layout_anim.setDuration(220)
+        self._layout_anim.setDuration(190)
         self._layout_anim.setStartValue(0.0)
         self._layout_anim.setEndValue(1.0)
-        self._layout_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._layout_anim.setEasingCurve(QEasingCurve.Type.OutQuart)
         self._layout_anim.valueChanged.connect(self._on_layout_anim_tick)
         self._layout_anim.finished.connect(self._on_layout_anim_done)
 
-        # Inline double-click rename editor
+        # Inline double-click rename editor + Tier 2 suggestion dropdown popup
         self._editing_node_id: str | None = None
         self._inline_cancel = False
+        self._user_highlighted_suggestion = False
         self._inline_edit = QLineEdit(self)
         self._inline_edit.hide()
         self._inline_edit.setStyleSheet(
@@ -915,7 +1730,12 @@ class FolderArchitectureCanvas(QWidget):
             """
         )
         self._inline_edit.installEventFilter(self)
-        self._inline_edit.editingFinished.connect(self._commit_inline_rename)
+        self._inline_edit.textChanged.connect(self._on_inline_text_changed)
+        self._inline_edit.editingFinished.connect(self._on_inline_editing_finished)
+
+        self._suggestion_popup = _SubfolderSuggestionPopup(self)
+        self._suggestion_popup.suggestion_chosen.connect(self._on_popup_suggestion_chosen)
+        self._suggestion_popup.batch_group_chosen.connect(self._on_popup_batch_chosen)
 
         self.setMouseTracking(True)
         self.setAcceptDrops(True)
@@ -930,12 +1750,42 @@ class FolderArchitectureCanvas(QWidget):
         if abs(clamped - self._zoom) < 0.01:
             return
         self._zoom = clamped
+        self._layout_dirty = True
         self._recompute_layout(update_min_size=True)
         self.zoom_changed.emit(self._zoom)
         self.update()
 
     def snapshot_rects(self) -> dict[str, QRectF]:
         return {k: QRectF(v) for k, v in self._rendered_rects.items()}
+
+    def _start_layout_transition(
+        self,
+        prev_rects: dict[str, QRectF] | None,
+        *,
+        animate: bool = True,
+    ) -> None:
+        should_anim = (
+            animate
+            and prev_rects is not None
+            and animations_enabled()
+            and not os.environ.get("PYTEST_CURRENT_TEST")
+        )
+        self._appearing_ids.clear()
+        if should_anim:
+            self._anim_from_rects = {}
+            for nid, target in self._node_rects.items():
+                if nid in prev_rects:
+                    self._anim_from_rects[nid] = prev_rects[nid]
+                else:
+                    self._appearing_ids.add(nid)
+                    self._anim_from_rects[nid] = target.translated(0.0, -14.0)
+            self._anim_progress = 0.0
+            self._layout_anim.stop()
+            self._layout_anim.start()
+        else:
+            self._layout_anim.stop()
+            self._anim_progress = 1.0
+            self._rendered_rects = {k: QRectF(v) for k, v in self._node_rects.items()}
 
     def set_architecture(
         self,
@@ -951,25 +1801,20 @@ class FolderArchitectureCanvas(QWidget):
             self._selected_id = None
         if not self._selected_id and arch.nodes:
             self._selected_id = arch.nodes[0].id
+        if self._expanded_tier1_id and arch.get_node(self._expanded_tier1_id) is None:
+            self._expanded_tier1_id = None
+        if self._selected_id:
+            sel_node = arch.get_node(self._selected_id)
+            if sel_node is not None and sel_node.tier >= 2:
+                self._expanded_tier1_id = self._tier1_ancestor_id(sel_node.id)
+        self._layout_dirty = True
         self._recompute_layout(update_min_size=True)
-
-        should_anim = (
-            animate
-            and prev_rects
-            and animations_enabled()
-            and not os.environ.get("PYTEST_CURRENT_TEST")
-        )
-        if should_anim:
-            self._anim_from_rects = dict(prev_rects or {})
-            self._layout_anim.stop()
-            self._layout_anim.start()
-        else:
-            self._layout_anim.stop()
-            self._rendered_rects = {k: QRectF(v) for k, v in self._node_rects.items()}
+        self._start_layout_transition(prev_rects, animate=animate)
         self.update()
 
     def _on_layout_anim_tick(self, value: Any) -> None:
         t = float(value)
+        self._anim_progress = t
         blended: dict[str, QRectF] = {}
         for nid, target in self._node_rects.items():
             start = self._anim_from_rects.get(nid, target)
@@ -983,11 +1828,14 @@ class FolderArchitectureCanvas(QWidget):
         self.update()
 
     def _on_layout_anim_done(self) -> None:
+        self._anim_progress = 1.0
+        self._appearing_ids.clear()
         self._rendered_rects = {k: QRectF(v) for k, v in self._node_rects.items()}
         self.update()
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001
         super().resizeEvent(event)
+        self._layout_dirty = True
         self._recompute_layout(update_min_size=True)
 
     @property
@@ -996,26 +1844,149 @@ class FolderArchitectureCanvas(QWidget):
 
     def select_node(self, node_id: str | None) -> None:
         self._selected_id = node_id
+        if node_id:
+            node = self._arch.get_node(node_id)
+            if node is not None:
+                target_t1 = node.id if node.tier == 1 else self._tier1_ancestor_id(node.id)
+                if target_t1 != self._expanded_tier1_id:
+                    self.set_expanded_tier1(target_t1, animate=True)
         self.update()
         if node_id:
             self.node_selected.emit(node_id)
 
+    def expanded_tier1_id(self) -> str | None:
+        return self._expanded_tier1_id
+
+    def set_expanded_tier1(self, node_id: str | None, *, animate: bool = True) -> None:
+        if node_id is not None:
+            node = self._arch.get_node(node_id)
+            if node is None:
+                node_id = None
+            elif node.tier != 1:
+                node_id = self._tier1_ancestor_id(node.id)
+        if node_id == self._expanded_tier1_id:
+            return
+        prev_rects = self.snapshot_rects() if animate else None
+        self._expanded_tier1_id = node_id
+        self._layout_dirty = True
+        self._recompute_layout(update_min_size=True)
+        self._start_layout_transition(prev_rects, animate=animate)
+        self.update()
+
+    def expand_all_tiers(self) -> bool:
+        return bool(self._expand_all_tiers)
+
+    def set_expand_all_tiers(self, show_all: bool, *, animate: bool = True) -> None:
+        flag = bool(show_all)
+        if flag == self._expand_all_tiers:
+            return
+        prev_rects = self.snapshot_rects() if animate else None
+        self._expand_all_tiers = flag
+        self._layout_dirty = True
+        self._recompute_layout(update_min_size=True)
+        self._start_layout_transition(prev_rects, animate=animate)
+        self.update()
+
+    def _tier1_ancestor_id(self, node_id: str | None) -> str | None:
+        if not node_id or node_id == "__root__":
+            return None
+        cur = self._arch.get_node(node_id)
+        guard = 0
+        while cur is not None and guard < FolderArchitecture.MAX_TIERS + 2:
+            if cur.tier == 1:
+                return cur.id
+            if not cur.parent_id:
+                return None
+            cur = self._arch.get_node(cur.parent_id)
+            guard += 1
+        return None
+
+    def _position_suggestion_popup(self, rect: QRectF) -> None:
+        pw = self._suggestion_popup.width()
+        ph = self._suggestion_popup.height()
+        px = int(max(8, min(rect.left() * self._zoom, max(8, self.width() - pw - 8))))
+        below_y = int((rect.bottom() + 4) * self._zoom)
+        above_y = int(rect.top() * self._zoom) - ph - 4
+        if below_y + ph <= max(self.height(), self.minimumHeight()) - 6 or above_y < 8:
+            py = below_y
+            needed_h = py + ph + 10
+            if needed_h > self.minimumHeight():
+                self.setMinimumHeight(needed_h)
+        else:
+            py = above_y
+        self._suggestion_popup.move(px, py)
+
     def start_inline_rename(self, node_id: str) -> None:
         node = self._arch.get_node(node_id)
-        rect = self._rendered_rects.get(node_id) or self._node_rects.get(node_id)
+        rect = self._node_rects.get(node_id) or self._rendered_rects.get(node_id)
         if node is None or rect is None:
             return
         self._editing_node_id = node_id
         self._inline_cancel = False
+        self._user_highlighted_suggestion = False
+        self._inline_edit.blockSignals(True)
         self._inline_edit.setText(node.name)
+        self._inline_edit.blockSignals(False)
         sx = (rect.left() + 9) * self._zoom
         sy = (rect.top() + 5) * self._zoom
         sw = max(80.0, (rect.width() - 32) * self._zoom)
         sh = 22.0 * self._zoom
         self._inline_edit.setGeometry(int(sx), int(sy), int(sw), int(sh))
         self._inline_edit.show()
+        self._inline_edit.raise_()
         self._inline_edit.setFocus()
         self._inline_edit.selectAll()
+
+        # Attach Tier 2 subfolder suggestion dropdown (By File Type vs. By Classification) when parent has presets
+        pnode = self._arch.get_node(node.parent_id) if node.parent_id else None
+        suggestions = (
+            get_tier2_suggestions(pnode.name, pnode.kind, mode="all")
+            if (pnode is not None and node.tier >= 2)
+            else []
+        )
+        if suggestions and pnode is not None:
+            self._suggestion_popup.set_parent_suggestions(pnode.name, suggestions)
+            self._position_suggestion_popup(rect)
+            self._suggestion_popup.show()
+            self._suggestion_popup.raise_()
+        else:
+            self._suggestion_popup.hide()
+        self.update()
+
+    def _on_inline_text_changed(self, text: str) -> None:
+        self._user_highlighted_suggestion = False
+        if self._suggestion_popup.isVisible():
+            self._suggestion_popup.set_query(text)
+
+    def _on_inline_editing_finished(self) -> None:
+        if not self._inline_edit.isVisible():
+            return
+        if self._suggestion_popup.isVisible() and self._suggestion_popup.underMouse():
+            self._inline_edit.setFocus()
+            return
+        self._commit_inline_rename()
+
+    def _hide_inline_editors(self) -> None:
+        self._inline_edit.hide()
+        self._suggestion_popup.hide()
+        self._user_highlighted_suggestion = False
+
+    def _on_popup_suggestion_chosen(self, suggestion: dict[str, Any]) -> None:
+        nid = self._editing_node_id
+        self._editing_node_id = None
+        self._hide_inline_editors()
+        if nid:
+            self.node_suggestion_applied.emit(nid, dict(suggestion))
+        self.update()
+
+    def _on_popup_batch_chosen(self, group_mode: str) -> None:
+        nid = self._editing_node_id
+        node = self._arch.get_node(nid) if nid else None
+        parent_id = (node.parent_id or "") if node is not None else ""
+        self._editing_node_id = None
+        self._hide_inline_editors()
+        if nid and parent_id:
+            self.node_suggestion_batch_requested.emit(nid, parent_id, group_mode)
         self.update()
 
     def _commit_inline_rename(self) -> None:
@@ -1024,24 +1995,61 @@ class FolderArchitectureCanvas(QWidget):
         nid = self._editing_node_id
         self._editing_node_id = None
         new_name = self._inline_edit.text().strip().replace("/", "").replace("\\", "")
-        self._inline_edit.hide()
+        self._hide_inline_editors()
         if self._inline_cancel or not nid or not new_name:
             self._inline_cancel = False
             self.update()
             return
         node = self._arch.get_node(nid)
-        if node is not None and new_name != node.name:
-            self.node_renamed.emit(nid, new_name)
+        if node is not None:
+            # If user typed an exact suggestion name for a fresh empty-rule Tier 2 subfolder, apply its rules too
+            if (
+                node.parent_id
+                and not node.extensions
+                and not node.keywords
+                and not node.domains
+            ):
+                pnode = self._arch.get_node(node.parent_id)
+                if pnode is not None:
+                    exact = next(
+                        (
+                            s
+                            for s in get_tier2_suggestions(pnode.name, pnode.kind, mode="all")
+                            if s["name"].lower() == new_name.lower()
+                        ),
+                        None,
+                    )
+                    if exact is not None:
+                        self.node_suggestion_applied.emit(nid, exact)
+                        self.update()
+                        return
+            if new_name != node.name:
+                self.node_renamed.emit(nid, new_name)
         self.update()
 
     def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
         if obj is self._inline_edit and event.type() == QEvent.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Escape:
+            key = event.key()
+            if key == Qt.Key.Key_Escape:
                 self._inline_cancel = True
-                self._inline_edit.hide()
+                self._hide_inline_editors()
                 self._editing_node_id = None
                 self.update()
                 return True
+            if self._suggestion_popup.isVisible():
+                if key == Qt.Key.Key_Down:
+                    if self._suggestion_popup.move_selection(1):
+                        self._user_highlighted_suggestion = True
+                    return True
+                if key == Qt.Key.Key_Up:
+                    if self._suggestion_popup.move_selection(-1):
+                        self._user_highlighted_suggestion = True
+                    return True
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._user_highlighted_suggestion:
+                    chosen = self._suggestion_popup.current_suggestion()
+                    if chosen is not None:
+                        self._on_popup_suggestion_chosen(chosen)
+                        return True
         return super().eventFilter(obj, event)
 
     def show_all_connectors(self) -> bool:
@@ -1052,7 +2060,7 @@ class FolderArchitectureCanvas(QWidget):
         self.update()
 
     def _active_lineage_ids(self) -> tuple[str | None, set[str]]:
-        focus_id = self._dragging_id or self._hovered_id or self._selected_id
+        focus_id = self._dragging_id or self._hovered_id or self._selected_id or self._expanded_tier1_id
         if not focus_id or focus_id == "__root__":
             return None, set()
         ancestors: set[str] = set()
@@ -1066,6 +2074,73 @@ class FolderArchitectureCanvas(QWidget):
             guard += 1
         return focus_id, ancestors
 
+    def _connection_roles(self) -> tuple[str | None, dict[str, str], dict[str, str]]:
+        """Classify visible cards relative to the active node's connected paths.
+
+        Returns ``(focus_id, roles_by_id, path_accent_by_id)`` where roles are
+        ``"focus"``, ``"connected_parent"``, ``"connected_child"``, ``"dimmed"``,
+        or ``"neutral"``.
+        """
+        focus_id, ancestor_ids = self._active_lineage_ids()
+        if not focus_id:
+            return None, {}, {}
+        focus_node = self._arch.get_node(focus_id)
+        if focus_node is None:
+            return None, {}, {}
+
+        roles: dict[str, str] = {focus_id: "focus"}
+        path_accents: dict[str, str] = {}
+
+        # Upstream parents feeding into focus_id
+        for anc_id in ancestor_ids:
+            if anc_id != focus_id:
+                anc = self._arch.get_node(anc_id)
+                if anc is not None:
+                    roles[anc_id] = "connected_parent"
+                    path_accents[anc_id] = anc.accent_hex
+
+        # Downstream visible descendants fed by focus_id (BFS)
+        queue = [focus_id]
+        visited = {focus_id}
+        while queue:
+            pid = queue.pop(0)
+            pnode = self._arch.get_node(pid)
+            p_hex = pnode.accent_hex if pnode is not None else focus_node.accent_hex
+            for child in self._arch.children_of(pid):
+                if child.id in visited:
+                    continue
+                visited.add(child.id)
+                if child.id in self._node_rects:
+                    roles[child.id] = "connected_child"
+                    path_accents[child.id] = p_hex
+                    queue.append(child.id)
+
+        # Only dim unrelated cards when the active node actually has visible connections
+        has_connections = any(r in ("connected_parent", "connected_child") for r in roles.values())
+        if has_connections:
+            for nid in self._node_rects:
+                if nid != "__root__" and nid not in roles:
+                    roles[nid] = "dimmed"
+        return focus_id, roles, path_accents
+
+    def _visible_tier_nodes(self) -> dict[int, list[ArchNode]]:
+        ordered = self._ordered_tier_nodes()
+        visible: dict[int, list[ArchNode]] = {1: ordered.get(1, [])}
+        if self._expand_all_tiers:
+            for t in range(2, self._arch.tier_count + 1):
+                visible[t] = ordered.get(t, [])
+            return visible
+
+        exp_t1 = self._expanded_tier1_id
+        for t in range(2, self._arch.tier_count + 1):
+            if not exp_t1:
+                visible[t] = []
+            else:
+                visible[t] = [
+                    n for n in ordered.get(t, []) if self._tier1_ancestor_id(n.id) == exp_t1
+                ]
+        return visible
+
     def _node_tooltip(self, node: ArchNode) -> str:
         rel = self._arch.node_relative_path(node.id)
         lines = [f"{node.name} (Tier {node.tier})", f"Path: Downloads\\{rel}"]
@@ -1077,7 +2152,11 @@ class FolderArchitectureCanvas(QWidget):
             lines.append("Websites: " + ", ".join(node.domains))
         child_count = len(self._arch.children_of(node.id))
         if child_count:
-            lines.append(f"Subfolders: {child_count}")
+            if node.tier == 1 and not self._expand_all_tiers:
+                state = "Expanded" if self._expanded_tier1_id == node.id else "Click to expand"
+                lines.append(f"Subfolders: {child_count} ({state})")
+            else:
+                lines.append(f"Subfolders: {child_count}")
         lines.append("Drag card to reparent · Double-click title to rename · Double-click card for rules")
         return "\n".join(lines)
 
@@ -1105,12 +2184,17 @@ class FolderArchitectureCanvas(QWidget):
 
     def _recompute_layout(self, *, update_min_size: bool = True) -> None:
         self._node_rects.clear()
+        self._node_row_col.clear()
+        self._sub_pill_rects.clear()
         self._delete_rects.clear()
         self._plus_rects.clear()
         self._tier_add_rects.clear()
         self._tier_band_rects.clear()
+        self._collapse_hint_rect = None
+        self._tier_collapse_rect = None
 
-        ordered = self._ordered_tier_nodes()
+        visible = self._visible_tier_nodes()
+        self._cached_visible_tiers = visible
         parent_w = (self.parentWidget().width() - 4) if self.parentWidget() is not None else 740
         logical_w = max(380.0, max(self.width(), parent_w) / self._zoom)
         band_w = float(logical_w - self.MARGIN_X * 2)
@@ -1132,9 +2216,18 @@ class FolderArchitectureCanvas(QWidget):
 
         cur_band_y = band0_y + band0_h + self.TIER_GAP
 
+        # Determine which tiers 1..N to lay out
+        tiers_to_layout: list[int] = [1]
+        if self._expand_all_tiers:
+            tiers_to_layout.extend(range(2, self._arch.tier_count + 1))
+        elif self._expanded_tier1_id is not None:
+            for t in range(2, self._arch.tier_count + 1):
+                if visible.get(t) or t == 2:
+                    tiers_to_layout.append(t)
+
         # Tiers 1..N Horizontal Bands stacked Top-to-Bottom
-        for t in range(1, self._arch.tier_count + 1):
-            cards = ordered.get(t, [])
+        for t in tiers_to_layout:
+            cards = visible.get(t, [])
             rows = max(1, math.ceil(len(cards) / cols))
             band_h = float(
                 self.HEADER_H
@@ -1146,6 +2239,10 @@ class FolderArchitectureCanvas(QWidget):
             self._tier_add_rects[t] = QRectF(
                 self.MARGIN_X + band_w - 68, cur_band_y + 4, 56, 22
             )
+            if t == 2 and not self._expand_all_tiers and self._expanded_tier1_id is not None:
+                self._tier_collapse_rect = QRectF(
+                    self.MARGIN_X + band_w - 144, cur_band_y + 4, 70, 22
+                )
 
             for idx, node in enumerate(cards):
                 r_idx = idx // cols
@@ -1157,11 +2254,22 @@ class FolderArchitectureCanvas(QWidget):
                 cy = cur_band_y + self.HEADER_H + r_idx * (self.CARD_H + self.CARD_GAP_Y)
                 rect = QRectF(cx, cy, self.CARD_W, self.CARD_H)
                 self._node_rects[node.id] = rect
+                self._node_row_col[node.id] = (r_idx, c_idx)
                 self._delete_rects[node.id] = QRectF(rect.right() - 20, rect.top() + 5, 16, 16)
                 if node.tier < FolderArchitecture.MAX_TIERS:
                     self._plus_rects[node.id] = QRectF(rect.center().x() - 9, rect.bottom() - 9, 18, 18)
 
             cur_band_y += band_h + self.TIER_GAP
+
+        # Collapsed Tier 2+ hint bar when in branch mode and no Tier 1 folder is expanded
+        if (
+            not self._expand_all_tiers
+            and self._expanded_tier1_id is None
+            and any(n.tier >= 2 for n in self._arch.nodes)
+        ):
+            hint_h = 34.0
+            self._collapse_hint_rect = QRectF(self.MARGIN_X, cur_band_y - 12.0, band_w, hint_h)
+            cur_band_y += hint_h + self.TIER_GAP - 12.0
 
         if self._layout_anim.state() != QVariantAnimation.State.Running:
             self._rendered_rects = {k: QRectF(v) for k, v in self._node_rects.items()}
@@ -1170,6 +2278,7 @@ class FolderArchitectureCanvas(QWidget):
         min_w = max(380, int(380 * self._zoom))
         if update_min_size and (self.minimumWidth() != min_w or self.minimumHeight() != total_h):
             self.setMinimumSize(min_w, total_h)
+        self._layout_dirty = False
 
     def _display_rect(self, nid: str) -> QRectF | None:
         base = self._rendered_rects.get(nid) or self._node_rects.get(nid)
@@ -1183,7 +2292,7 @@ class FolderArchitectureCanvas(QWidget):
         return QPointF(pt.x() / self._zoom, pt.y() / self._zoom)
 
     def paintEvent(self, event) -> None:  # noqa: ANN001
-        if self._layout_anim.state() != QVariantAnimation.State.Running:
+        if self._layout_dirty and self._layout_anim.state() != QVariantAnimation.State.Running:
             self._recompute_layout(update_min_size=False)
 
         p = QPainter(self)
@@ -1199,13 +2308,25 @@ class FolderArchitectureCanvas(QWidget):
         logical_w = int(self.width() / self._zoom)
         logical_h = int(self.height() / self._zoom)
 
-        # Subtle dot grid
-        p.setPen(QColor(255, 255, 255, 16))
-        for gx in range(20, logical_w, 26):
-            for gy in range(20, logical_h, 26):
-                p.drawPoint(gx, gy)
+        # Subtle dot grid (batch drawn from cached points per logical viewport size)
+        if (logical_w, logical_h) != self._cached_grid_size:
+            self._cached_grid_size = (logical_w, logical_h)
+            pts = QPolygonF()
+            for gx in range(20, logical_w, 26):
+                for gy in range(20, logical_h, 26):
+                    pts.append(QPointF(gx, gy))
+            self._cached_grid_points = pts
+        if not self._cached_grid_points.isEmpty():
+            p.setPen(QColor(255, 255, 255, 16))
+            p.drawPoints(self._cached_grid_points)
 
         # Horizontal Tier Bands Top-to-Bottom
+        visible_tiers = self._cached_visible_tiers or self._visible_tier_nodes()
+        exp_t1_node = (
+            self._arch.get_node(self._expanded_tier1_id)
+            if (not self._expand_all_tiers and self._expanded_tier1_id)
+            else None
+        )
         for t in range(0, self._arch.tier_count + 1):
             band_rect = self._tier_band_rects.get(t)
             if band_rect is None:
@@ -1222,16 +2343,36 @@ class FolderArchitectureCanvas(QWidget):
             p.setPen(QColor("#0A84FF") if t == 0 else (QColor("#30D158") if promote_hi else QColor("#98989D")))
             if t == 0:
                 title = "TIER 0 · ROOT FOLDER"
+            elif t >= 2 and exp_t1_node is not None:
+                count = len(visible_tiers.get(t, []))
+                title = f"TIER {t} · {exp_t1_node.name.upper()} · {count} SUBFOLDER{'S' if count != 1 else ''}"
             else:
-                count = len(self._arch.nodes_in_tier(t))
+                count = len(visible_tiers.get(t, []))
                 title = f"TIER {t} · {count} FOLDER{'S' if count != 1 else ''}"
                 if t == 1 and self._drop_promote_tier1:
                     title += "  ·  DROP TO PROMOTE TO TIER 1"
-            p.drawText(
-                QRectF(band_rect.left() + 14, band_rect.top() + 3, band_rect.width() - 92, 24),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            title_right_pad = 156 if (t == 2 and self._tier_collapse_rect is not None) else 92
+            fm_hdr = QFontMetrics(f_hdr)
+            elided_title = fm_hdr.elidedText(
                 title,
+                Qt.TextElideMode.ElideRight,
+                max(60, int(band_rect.width() - 14 - title_right_pad)),
             )
+            p.drawText(
+                QRectF(band_rect.left() + 14, band_rect.top() + 3, band_rect.width() - title_right_pad, 24),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                elided_title,
+            )
+
+            if t == 2 and self._tier_collapse_rect is not None:
+                col_rect = self._tier_collapse_rect
+                col_hov = self._hovered_collapse
+                p.setPen(QPen(QColor("#0A84FF" if col_hov else "#3A3A3C"), 1.0))
+                p.setBrush(QColor(10, 132, 255, 45) if col_hov else QColor("#242426"))
+                p.drawRoundedRect(col_rect, 6, 6)
+                p.setFont(QFont("Segoe UI", 8.2, QFont.Weight.DemiBold))
+                p.setPen(QColor("#D1D1D6") if not col_hov else QColor("#FFFFFF"))
+                p.drawText(col_rect, Qt.AlignmentFlag.AlignCenter, "Collapse ▴")
 
             if t >= 1 and t in self._tier_add_rects:
                 add_rect = self._tier_add_rects[t]
@@ -1239,8 +2380,22 @@ class FolderArchitectureCanvas(QWidget):
                 p.setPen(QPen(QColor("#0A84FF" if hov else "#3A3A3C"), 1.0))
                 p.setBrush(QColor(10, 132, 255, 45) if hov else QColor("#242426"))
                 p.drawRoundedRect(add_rect, 6, 6)
+                p.setFont(QFont("Segoe UI", 8.5, QFont.Weight.DemiBold))
                 p.setPen(QColor("#F5F5F7"))
                 p.drawText(add_rect, Qt.AlignmentFlag.AlignCenter, "+ Add")
+
+        # Collapsed Tier 2+ prompt bar (when in Branch mode with no Tier 1 folder expanded)
+        if self._collapse_hint_rect is not None:
+            p.setPen(QPen(QColor("#232327"), 1.0, Qt.PenStyle.DashLine))
+            p.setBrush(QColor("#141417"))
+            p.drawRoundedRect(self._collapse_hint_rect, 9, 9)
+            p.setFont(QFont("Segoe UI", 8.5))
+            p.setPen(QColor("#8E8E93"))
+            p.drawText(
+                self._collapse_hint_rect,
+                Qt.AlignmentFlag.AlignCenter,
+                "Click a Tier 1 folder to reveal its lower-tier subfolders  ·  or switch to View: All",
+            )
 
         # Root Trunk (single vertical stem from Tier 0 Downloads to Tier 1 band)
         root_rect = self._display_rect("__root__")
@@ -1254,8 +2409,9 @@ class FolderArchitectureCanvas(QWidget):
             p.drawEllipse(QPointF(trunk_x, t1_band.top()), 3.2, 3.2)
 
         # Tier 2+ Orthogonal Bus Connectors (focused active lineage by default, or all when toggled)
-        focus_id, ancestor_ids = self._active_lineage_ids()
-        connector_items: list[tuple[bool, ArchNode, QRectF, QRectF]] = []
+        focus_id, conn_roles, path_accents = self._connection_roles()
+        _fid, ancestor_ids = self._active_lineage_ids()
+        connector_items: list[tuple[bool, ArchNode, ArchNode | None, QRectF, QRectF]] = []
         for node in self._arch.nodes:
             if node.tier < 2 or node.tier > self._arch.tier_count:
                 continue
@@ -1265,22 +2421,53 @@ class FolderArchitectureCanvas(QWidget):
             src_rect = self._display_rect(node.parent_id or "")
             if src_rect is None:
                 continue
+            parent_node = self._arch.get_node(node.parent_id) if node.parent_id else None
             is_hi = bool(
                 focus_id is not None
                 and (
                     node.id in ancestor_ids
                     or (node.parent_id is not None and node.parent_id == focus_id)
+                    or (
+                        conn_roles.get(node.id) == "connected_child"
+                        and conn_roles.get(node.parent_id or "") in ("focus", "connected_child")
+                    )
                 )
             )
-            if not self._show_all_connectors and not is_hi:
+            in_expanded_branch = bool(
+                not self._expand_all_tiers
+                and self._expanded_tier1_id is not None
+                and self._tier1_ancestor_id(node.id) == self._expanded_tier1_id
+            )
+            if not self._show_all_connectors and not is_hi and not in_expanded_branch:
                 continue
-            connector_items.append((is_hi, node, src_rect, dst_rect))
+            connector_items.append((is_hi, node, parent_node, src_rect, dst_rect))
+
+        # Compute open vertical routing channels per tier (between/outside Row 0 cards)
+        tier_open_channels: dict[int, list[float]] = {}
+        for tier_num, cards_in_tier in visible_tiers.items():
+            if tier_num < 2:
+                continue
+            row0_rects = sorted(
+                [
+                    r
+                    for n in cards_in_tier
+                    if self._node_row_col.get(n.id, (0, 0))[0] == 0
+                    and (r := self._display_rect(n.id)) is not None
+                ],
+                key=lambda r: r.left(),
+            )
+            if row0_rects:
+                chans = [row0_rects[0].left() - self.CARD_GAP_X * 0.5]
+                for i in range(len(row0_rects) - 1):
+                    chans.append((row0_rects[i].right() + row0_rects[i + 1].left()) * 0.5)
+                chans.append(row0_rects[-1].right() + self.CARD_GAP_X * 0.5)
+                tier_open_channels[tier_num] = chans
 
         # Assign distinct horizontal bus channels per (tier, parent) sorted by parent X
         tier_parent_lanes: dict[tuple[int, str], float] = {}
         parents_by_tier: dict[int, list[tuple[float, str]]] = {}
         seen_pid: set[tuple[int, str]] = set()
-        for _hi, node, src_rect, _dst_rect in connector_items:
+        for _hi, node, _pnode, src_rect, _dst_rect in connector_items:
             pid = node.parent_id or ""
             key = (node.tier, pid)
             if key not in seen_pid:
@@ -1301,26 +2488,66 @@ class FolderArchitectureCanvas(QWidget):
                 frac = (idx + 1) / float(total_p + 1)
                 tier_parent_lanes[(tier_num, pid)] = gutter_top + frac * (gutter_bot - gutter_top)
 
+        active_exit_ports: dict[str, tuple[QPointF, QColor]] = {}
         for want_hi in (False, True):
-            for is_hi, node, src_rect, dst_rect in connector_items:
+            for is_hi, node, parent_node, src_rect, dst_rect in connector_items:
                 if is_hi != want_hi:
                     continue
-                col = QColor(node.accent_hex)
-                col.setAlpha(230 if is_hi else 72)
+                base_hex = parent_node.accent_hex if parent_node is not None else node.accent_hex
+                col = QColor(base_hex)
+                p1 = QPointF(src_rect.center().x(), src_rect.bottom())
+                p2 = QPointF(dst_rect.center().x(), dst_rect.top())
+                bus_y = tier_parent_lanes.get((node.tier, node.parent_id or ""), (p1.y() + p2.y()) * 0.5)
+                r_idx, _c_idx = self._node_row_col.get(node.id, (0, 0))
+                desired_chan = dst_rect.left() - self.CARD_GAP_X * 0.5
+                chans = tier_open_channels.get(node.tier)
+                if r_idx >= 1 and chans:
+                    channel_x = min(chans, key=lambda cx: abs(cx - desired_chan))
+                else:
+                    channel_x = desired_chan
+                row_bus_y = dst_rect.top() - self.CARD_GAP_Y * 0.55
+                path = self._build_orthogonal_bus_path(
+                    p1,
+                    p2,
+                    bus_y,
+                    row_idx=r_idx,
+                    channel_x=channel_x,
+                    row_bus_y=row_bus_y,
+                )
+
+                if is_hi:
+                    glow = QColor(col)
+                    glow.setAlpha(48)
+                    p.setPen(QPen(glow, 5.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawPath(path)
+
+                col.setAlpha(235 if is_hi else 72)
                 p.setPen(
                     QPen(
                         col,
-                        2.2 if is_hi else 1.25,
+                        2.3 if is_hi else 1.25,
                         Qt.PenStyle.SolidLine,
                         Qt.PenCapStyle.RoundCap,
                     )
                 )
                 p.setBrush(Qt.BrushStyle.NoBrush)
-                p1 = QPointF(src_rect.center().x(), src_rect.bottom())
-                p2 = QPointF(dst_rect.center().x(), dst_rect.top())
-                bus_y = tier_parent_lanes.get((node.tier, node.parent_id or ""), (p1.y() + p2.y()) * 0.5)
-                path = self._build_orthogonal_bus_path(p1, p2, bus_y)
                 p.drawPath(path)
+
+                # Directional downward arrowhead at child's top entry port when highlighted
+                if is_hi:
+                    if node.parent_id:
+                        active_exit_ports[node.parent_id] = (p1, QColor(base_hex))
+                    arrow = QPolygonF(
+                        [
+                            QPointF(p2.x(), p2.y() - 0.5),
+                            QPointF(p2.x() - 4.2, p2.y() - 6.2),
+                            QPointF(p2.x() + 4.2, p2.y() - 6.2),
+                        ]
+                    )
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(col)
+                    p.drawPolygon(arrow)
 
         # Live '+' Handle Drag-to-Spawn Dashed Wire
         if self._spawning_from_id and self._spawn_dragging:
@@ -1353,7 +2580,14 @@ class FolderArchitectureCanvas(QWidget):
         for node in ordered_nodes:
             rect = self._display_rect(node.id)
             if rect is not None:
-                self._paint_node_card(p, node, rect)
+                self._paint_node_card(
+                    p,
+                    node,
+                    rect,
+                    role=conn_roles.get(node.id, "neutral"),
+                    path_accent=path_accents.get(node.id),
+                    has_active_out=node.id in active_exit_ports,
+                )
 
         p.restore()
 
@@ -1414,45 +2648,111 @@ class FolderArchitectureCanvas(QWidget):
         # '+' Spawn handle on bottom center
         self._paint_plus_handle(p, "__root__", root_rect)
 
-    def _paint_node_card(self, p: QPainter, node: ArchNode, rect: QRectF) -> None:
+    def _paint_node_card(
+        self,
+        p: QPainter,
+        node: ArchNode,
+        rect: QRectF,
+        *,
+        role: str = "neutral",
+        path_accent: str | None = None,
+        has_active_out: bool = False,
+    ) -> None:
         selected = node.id == self._selected_id
         hovered = node.id == self._hovered_id
         is_dragging = node.id == self._dragging_id
+        is_connected = role in ("connected_parent", "connected_child")
+        is_dimmed = role == "dimmed" and not hovered and not selected and not is_dragging
         col = QColor(node.accent_hex)
+        conn_col = QColor(path_accent or node.accent_hex)
         halo = self._drop_halo_for(node.id)
 
+        p.save()
+        alpha_mul = 1.0
+        if node.id in self._appearing_ids and self._anim_progress < 1.0:
+            alpha_mul *= max(0.05, self._anim_progress)
+        if is_dimmed:
+            alpha_mul *= 0.54
+        if alpha_mul < 0.999:
+            p.setOpacity(alpha_mul)
+
         if halo:
-            hcol = QColor("#30D158" if halo == "valid" else "#FF453A")
+            halo_hex = "#30D158" if halo == "valid" else ("#64D2FF" if halo == "merge" else "#FF453A")
+            hcol = QColor(halo_hex)
             hcol.setAlpha(75)
             p.setPen(QPen(hcol, 6))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(rect.adjusted(-2, -2, 2, 2), 12, 12)
         elif selected or is_dragging:
             hcol = QColor(col)
-            hcol.setAlpha(55)
+            hcol.setAlpha(60)
             p.setPen(QPen(hcol, 4.5))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(rect.adjusted(-1, -1, 1, 1), 11, 11)
+        elif is_connected:
+            hcol = QColor(conn_col)
+            hcol.setAlpha(42)
+            p.setPen(QPen(hcol, 3.2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(rect.adjusted(-0.8, -0.8, 0.8, 0.8), 11, 11)
 
         if halo == "valid":
             border = QColor("#30D158")
+            border_w = 1.8
+        elif halo == "merge":
+            border = QColor("#64D2FF")
+            border_w = 1.9
         elif halo == "invalid":
             border = QColor("#FF453A")
+            border_w = 1.8
         elif selected or is_dragging:
             border = col
+            border_w = 1.9
+        elif is_connected:
+            border = QColor(conn_col)
+            border.setAlpha(205)
+            border_w = 1.6
         elif hovered:
             border = QColor("#48484A")
+            border_w = 1.1
         else:
             border = QColor("#2C2C2E")
+            border_w = 1.0
 
-        p.setPen(QPen(border, 1.8 if (selected or halo or is_dragging) else 1.0))
-        p.setBrush(QColor("#25252A") if (selected or is_dragging) else (QColor("#212125") if hovered else QColor("#1C1C1E")))
+        base_fill = (
+            QColor("#25252A")
+            if (selected or is_dragging)
+            else (QColor("#212125") if (hovered or is_connected) else QColor("#1C1C1E"))
+        )
+        p.setPen(QPen(border, border_w))
+        p.setBrush(base_fill)
         p.drawRoundedRect(rect, 10, 10)
+
+        # Subtle accent surface wash on connected parent/child boxes
+        if is_connected and not halo:
+            wash = QColor(conn_col)
+            wash.setAlpha(22)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(wash)
+            p.drawRoundedRect(rect.adjusted(1.0, 1.0, -1.0, -1.0), 9.0, 9.0)
 
         # Left Accent Stripe
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(col)
         p.drawRoundedRect(QRectF(rect.left() + 0.5, rect.top() + 9, 3.5, rect.height() - 18), 1.5, 1.5)
+
+        # Top Input Connection Port on Tier 2+ cards
+        if node.tier >= 2 and not is_dragging:
+            port_pt = QPointF(rect.center().x(), rect.top())
+            port_lit = role in ("focus", "connected_child")
+            if port_lit:
+                p.setPen(QPen(QColor("#111113"), 1.3))
+                p.setBrush(conn_col)
+                p.drawEllipse(port_pt, 3.6, 3.6)
+            else:
+                p.setPen(QPen(QColor("#3A3A3C"), 1.0))
+                p.setBrush(QColor("#161618"))
+                p.drawEllipse(port_pt, 3.0, 3.0)
 
         # Folder Name (hidden while inline editing)
         if self._editing_node_id != node.id:
@@ -1466,7 +2766,7 @@ class FolderArchitectureCanvas(QWidget):
                 title,
             )
 
-        # Parent badge pill (Tier 2+) + Tier micro-footer
+        # Parent badge pill (Tier 2+) OR expandable subfolder badge (Tier 1 parents) + Tier micro-footer
         child_count = len(self._arch.children_of(node.id))
         parent_node = self._arch.get_node(node.parent_id) if (node.tier >= 2 and node.parent_id) else None
         footer = f"T{node.tier}" + (f" · {child_count} sub" if child_count else "")
@@ -1478,23 +2778,50 @@ class FolderArchitectureCanvas(QWidget):
             pill_w = min(rect.width() - 48.0, float(fm_pill.horizontalAdvance(pill_label)) + 12.0)
             pill_rect = QRectF(rect.left() + 12.0, rect.bottom() - 21.0, pill_w, 16.0)
             fill_col = QColor(p_col)
-            fill_col.setAlpha(36)
+            fill_col.setAlpha(60 if (role in ("focus", "connected_child")) else 36)
             border_col = QColor(p_col)
-            border_col.setAlpha(135)
-            p.setPen(QPen(border_col, 0.9))
+            border_col.setAlpha(200 if (role in ("focus", "connected_child")) else 135)
+            p.setPen(QPen(border_col, 1.0 if (role in ("focus", "connected_child")) else 0.9))
             p.setBrush(fill_col)
             p.drawRoundedRect(pill_rect, 4.5, 4.5)
-            p.setPen(QColor("#E5E5EA"))
+            p.setPen(QColor("#F5F5F7") if (role in ("focus", "connected_child")) else QColor("#E5E5EA"))
             p.drawText(pill_rect.adjusted(5, 0, -5, 0), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, pill_label)
 
             p.setFont(QFont("Segoe UI", 7.2))
-            p.setPen(QColor("#6E6E73"))
+            p.setPen(QColor("#8E8E93") if is_connected else QColor("#6E6E73"))
             p.drawText(
                 rect.adjusted(12, 30, -10, -5),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 footer,
             )
+        elif node.tier == 1 and child_count > 0:
+            is_expanded = self._expand_all_tiers or (self._expanded_tier1_id == node.id)
+            chev = "▾" if is_expanded else "▸"
+            pill_label = f"{child_count} sub {chev}"
+            p.setFont(QFont("Segoe UI", 7.2, QFont.Weight.DemiBold))
+            fm_pill = QFontMetrics(p.font())
+            pill_w = float(fm_pill.horizontalAdvance(pill_label)) + 12.0
+            pill_rect = QRectF(rect.left() + 12.0, rect.bottom() - 21.0, pill_w, 16.0)
+            self._sub_pill_rects[node.id] = pill_rect
+            fill_col = QColor(col)
+            fill_col.setAlpha(58 if is_expanded else 26)
+            border_col = QColor(col)
+            border_col.setAlpha(195 if is_expanded else 115)
+            p.setPen(QPen(border_col, 1.0 if is_expanded else 0.9))
+            p.setBrush(fill_col)
+            p.drawRoundedRect(pill_rect, 4.5, 4.5)
+            p.setPen(QColor("#F5F5F7") if is_expanded else QColor("#D1D1D6"))
+            p.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, pill_label)
+
+            p.setFont(QFont("Segoe UI", 7.2))
+            p.setPen(QColor("#8E8E93") if (is_expanded or is_connected) else QColor("#6E6E73"))
+            p.drawText(
+                rect.adjusted(12, 30, -10, -5),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                "T1",
+            )
         else:
+            self._sub_pill_rects.pop(node.id, None)
             p.setFont(QFont("Segoe UI", 7.5))
             p.setPen(QColor("#6E6E73"))
             p.drawText(
@@ -1517,19 +2844,83 @@ class FolderArchitectureCanvas(QWidget):
             p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
             p.drawText(del_r, Qt.AlignmentFlag.AlignCenter, "×")
 
-        # '+' Spawn handle on bottom center
+        # '+' Spawn handle / illuminated output port on bottom center
         if not is_dragging:
-            self._paint_plus_handle(p, node.id, rect)
+            self._paint_plus_handle(
+                p,
+                node.id,
+                rect,
+                active_accent=node.accent_hex if has_active_out else None,
+                has_children=child_count > 0,
+            )
+
+        p.restore()
 
     @staticmethod
-    def _build_orthogonal_bus_path(p1: QPointF, p2: QPointF, bus_y: float) -> QPainterPath:
-        """Build a clean rounded orthogonal bus connector between two cards."""
+    def _build_orthogonal_bus_path(
+        p1: QPointF,
+        p2: QPointF,
+        bus_y: float,
+        *,
+        row_idx: int = 0,
+        channel_x: float | None = None,
+        row_bus_y: float | None = None,
+    ) -> QPainterPath:
+        """Build a clean rounded orthogonal bus connector between two cards.
+
+        For cards on Row 2+ (``row_idx >= 1``), routes vertically down an open
+        inter-column channel ``channel_x`` to ``row_bus_y`` before entering ``p2``
+        so the connector never cuts across Row 0 cards.
+        """
         path = QPainterPath(p1)
-        dx = p2.x() - p1.x()
         if p1.y() >= bus_y - 2.0 or p2.y() <= bus_y + 2.0:
             dy = max(14.0, abs(p2.y() - p1.y()) * 0.45)
             path.cubicTo(QPointF(p1.x(), p1.y() + dy), QPointF(p2.x(), p2.y() - dy), p2)
             return path
+
+        if (
+            row_idx >= 1
+            and channel_x is not None
+            and row_bus_y is not None
+            and row_bus_y > bus_y + 8.0
+            and p2.y() > row_bus_y + 2.0
+        ):
+            r = 5.0
+            dx1 = channel_x - p1.x()
+            if abs(dx1) >= 2.0:
+                sx1 = 1.0 if dx1 > 0.0 else -1.0
+                r1 = min(
+                    r,
+                    abs(dx1) * 0.45,
+                    max(1.0, (bus_y - p1.y()) * 0.45),
+                    max(1.0, (row_bus_y - bus_y) * 0.45),
+                )
+                path.lineTo(p1.x(), bus_y - r1)
+                path.quadTo(QPointF(p1.x(), bus_y), QPointF(p1.x() + sx1 * r1, bus_y))
+                path.lineTo(channel_x - sx1 * r1, bus_y)
+                path.quadTo(QPointF(channel_x, bus_y), QPointF(channel_x, bus_y + r1))
+            else:
+                path.lineTo(channel_x, bus_y)
+
+            dx2 = p2.x() - channel_x
+            if abs(dx2) >= 2.0:
+                sx2 = 1.0 if dx2 > 0.0 else -1.0
+                r2 = min(
+                    r,
+                    abs(dx2) * 0.45,
+                    max(1.0, (row_bus_y - bus_y) * 0.45),
+                    max(1.0, (p2.y() - row_bus_y) * 0.45),
+                )
+                path.lineTo(channel_x, row_bus_y - r2)
+                path.quadTo(QPointF(channel_x, row_bus_y), QPointF(channel_x + sx2 * r2, row_bus_y))
+                path.lineTo(p2.x() - sx2 * r2, row_bus_y)
+                path.quadTo(QPointF(p2.x(), row_bus_y), QPointF(p2.x(), row_bus_y + r2))
+            else:
+                path.lineTo(p2.x(), row_bus_y)
+            path.lineTo(p2)
+            return path
+
+        dx = p2.x() - p1.x()
         if abs(dx) < 2.0:
             path.lineTo(p2)
             return path
@@ -1547,7 +2938,15 @@ class FolderArchitectureCanvas(QWidget):
         path.lineTo(p2)
         return path
 
-    def _paint_plus_handle(self, p: QPainter, nid: str, rect: QRectF) -> None:
+    def _paint_plus_handle(
+        self,
+        p: QPainter,
+        nid: str,
+        rect: QRectF,
+        *,
+        active_accent: str | None = None,
+        has_children: bool = False,
+    ) -> None:
         plus_r = self._plus_rects.get(nid)
         if plus_r is None:
             return
@@ -1558,15 +2957,29 @@ class FolderArchitectureCanvas(QWidget):
             or nid == self._spawning_from_id
         )
         if not is_active:
-            # Subtle output port dot
-            p.setPen(QPen(QColor("#2C2C2E"), 1.0))
-            p.setBrush(QColor("#161618"))
-            p.drawEllipse(QPointF(rect.center().x(), rect.bottom()), 3.2, 3.2)
+            port_pt = QPointF(rect.center().x(), rect.bottom())
+            if active_accent:
+                p.setPen(QPen(QColor("#111113"), 1.3))
+                p.setBrush(QColor(active_accent))
+                p.drawEllipse(port_pt, 4.0, 4.0)
+            elif has_children:
+                p.setPen(QPen(QColor("#5A5A60"), 1.2))
+                p.setBrush(QColor("#2C2C30"))
+                p.drawEllipse(port_pt, 3.5, 3.5)
+            else:
+                # Subtle output port dot
+                p.setPen(QPen(QColor("#2C2C2E"), 1.0))
+                p.setBrush(QColor("#161618"))
+                p.drawEllipse(port_pt, 3.0, 3.0)
             return
 
         hov = nid == self._hovered_plus_id or nid == self._spawning_from_id
         p.setPen(QPen(QColor("#111113"), 1.4))
-        p.setBrush(QColor("#0A84FF") if hov else QColor("#3A3A3C"))
+        p.setBrush(
+            QColor("#0A84FF")
+            if hov
+            else (QColor(active_accent) if active_accent else QColor("#3A3A3C"))
+        )
         p.drawEllipse(plus_r)
         p.setPen(QPen(QColor("#FFFFFF"), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         c = plus_r.center()
@@ -1617,14 +3030,15 @@ class FolderArchitectureCanvas(QWidget):
             self.update()
             return
 
-        # 2. Active card drag-and-drop reparenting
+        # 2. Active card drag-and-drop reparenting (or Shift+Drag merge)
         if self._press_node_id is not None:
             delta = pt - self._press_pt
             if self._dragging_id is None and delta.manhattanLength() > 6:
                 self._dragging_id = self._press_node_id
             if self._dragging_id is not None:
                 self._drag_offset = delta
-                self._evaluate_reparent_hover(pt)
+                shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                self._evaluate_reparent_hover(pt, shift_held=shift_held)
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 self.update()
                 return
@@ -1634,6 +3048,14 @@ class FolderArchitectureCanvas(QWidget):
         self._hovered_plus_id = None
         self._hovered_id = None
         self._hovered_tier_add = None
+        self._hovered_collapse = False
+
+        if self._tier_collapse_rect is not None and self._tier_collapse_rect.contains(pt):
+            self._hovered_collapse = True
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip("Collapse lower tiers back to Tier 1 overview")
+            self.update()
+            return
 
         for nid, pr in self._plus_rects.items():
             nr = self._rendered_rects.get(nid)
@@ -1685,7 +3107,7 @@ class FolderArchitectureCanvas(QWidget):
         )
         self.update()
 
-    def _evaluate_reparent_hover(self, pt: QPointF) -> None:
+    def _evaluate_reparent_hover(self, pt: QPointF, *, shift_held: bool = False) -> None:
         self._drop_target_id = None
         self._drop_state = None
         self._drop_promote_tier1 = False
@@ -1722,6 +3144,12 @@ class FolderArchitectureCanvas(QWidget):
             return
 
         if best_target is not None:
+            if shift_held:
+                self._drop_target_id = best_target
+                self._drop_state = (
+                    "merge" if self._arch.can_merge(dragged_id, best_target) else "invalid"
+                )
+                return
             if best_target == dragged.parent_id:
                 return
             self._drop_target_id = best_target
@@ -1773,7 +3201,11 @@ class FolderArchitectureCanvas(QWidget):
                 self.update()
                 return
 
-        # 2. Check tier '+ Add' pill
+        # 2. Check tier 'Collapse ▴' and '+ Add' pills
+        if self._tier_collapse_rect is not None and self._tier_collapse_rect.contains(pt):
+            self.set_expanded_tier1(None, animate=True)
+            return
+
         for t, r in self._tier_add_rects.items():
             if r.contains(pt):
                 self.tier_add_requested.emit(t)
@@ -1786,6 +3218,13 @@ class FolderArchitectureCanvas(QWidget):
                 self.node_delete_requested.emit(nid)
                 return
 
+        # 3b. Check clickable 'N sub ▾' collapse badge on expanded Tier 1 card
+        if not self._expand_all_tiers and self._expanded_tier1_id:
+            sub_r = self._sub_pill_rects.get(self._expanded_tier1_id)
+            if sub_r is not None and sub_r.contains(pt):
+                self.set_expanded_tier1(None, animate=True)
+                return
+
         # 4. Select & prepare drag on a non-root card
         for nid, rect in self._rendered_rects.items():
             if nid != "__root__" and rect.contains(pt):
@@ -1794,6 +3233,10 @@ class FolderArchitectureCanvas(QWidget):
                 self._press_pt = pt
                 self._drag_offset = QPointF()
                 return
+
+        # 5. Clicking Root card or empty canvas collapses the expanded Tier 1 branch
+        if not self._expand_all_tiers and self._expanded_tier1_id is not None:
+            self.set_expanded_tier1(None, animate=True)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
         if self._panning:
@@ -1845,6 +3288,8 @@ class FolderArchitectureCanvas(QWidget):
                 self.node_reparent_requested.emit(dragged_id, "")
             elif promote_t1:
                 self.node_reparent_requested.emit(dragged_id, "")
+            elif drop_target and drop_state == "merge":
+                self.node_merge_requested.emit(dragged_id, drop_target)
             elif drop_target and drop_state == "valid":
                 self.node_reparent_requested.emit(dragged_id, drop_target)
             elif (
@@ -2113,6 +3558,14 @@ class ArchitectureTab(QWidget):
         layer_tip.setVisible(False)
         bar_row2.addStretch(1)
 
+        self.btn_toggle_view = _make_pill_button(
+            "View: Branch",
+            checkable=True,
+            tooltip="Show only the clicked Tier 1 folder's subfolders (Branch) or lay out every tier at once (All)",
+        )
+        self.btn_toggle_view.toggled.connect(self._on_toggle_view)
+        bar_row2.addWidget(self.btn_toggle_view)
+
         self.btn_toggle_lines = _make_pill_button(
             "Lines: Focused",
             checkable=True,
@@ -2164,8 +3617,11 @@ class ArchitectureTab(QWidget):
         self.canvas.node_delete_requested.connect(self._delete_node_by_id)
         self.canvas.tier_add_requested.connect(self._on_tier_quick_add)
         self.canvas.node_reparent_requested.connect(self._on_node_reparented)
+        self.canvas.node_merge_requested.connect(self._on_nodes_merged)
         self.canvas.node_spawn_child_requested.connect(self._on_spawn_child_inline)
         self.canvas.node_renamed.connect(self._on_node_renamed)
+        self.canvas.node_suggestion_applied.connect(self._on_node_suggestion_applied)
+        self.canvas.node_suggestion_batch_requested.connect(self._on_node_suggestion_batch_requested)
         self.canvas.template_dropped.connect(self._on_template_dropped)
         self.canvas.zoom_changed.connect(lambda z: self.lbl_zoom.setText(f"{int(round(z * 100))}%"))
         self.scroll.setWidget(self.canvas)
@@ -2283,8 +3739,24 @@ class ArchitectureTab(QWidget):
         self.btn_add_child.clicked.connect(self._on_add_child_for_selected)
         il.addWidget(self.btn_add_child)
 
+        self.btn_detect_projects = InteractiveRibbonBtn("Detect Projects...", make_vector_icon("search", "#5AC8FA", 14))
+        self.btn_detect_projects.setToolTip(
+            "Scan this folder on disk to detect multi-file projects and add them as subfolders"
+        )
+        self.btn_detect_projects.clicked.connect(self._on_detect_projects_for_selected)
+        il.addWidget(self.btn_detect_projects)
+
+        self.btn_merge_node = InteractiveRibbonBtn("Merge Into...", make_vector_icon("layers", "#64D2FF", 14))
+        self.btn_merge_node.setToolTip(
+            "Merge this folder's rules, subfolders, and files into another folder (or hold Shift while dragging onto a folder)"
+        )
+        self.btn_merge_node.clicked.connect(self._on_merge_selected_clicked)
+        il.addWidget(self.btn_merge_node)
+
         self.btn_delete_node = InteractiveRibbonBtn("Remove Folder", make_vector_icon("delete", "#FF453A", 14))
-        self.btn_delete_node.setToolTip("Remove the selected folder node from your layout")
+        self.btn_delete_node.setToolTip(
+            "Remove the selected folder (confirms first if files or subfolders exist on disk)"
+        )
         self.btn_delete_node.clicked.connect(lambda: self._delete_node_by_id(self.canvas.selected_node_id or ""))
         il.addWidget(self.btn_delete_node)
 
@@ -2458,6 +3930,8 @@ class ArchitectureTab(QWidget):
                     sb.setEnabled(False)
                 self.btn_edit_node.setEnabled(False)
                 self.btn_add_child.setEnabled(False)
+                self.btn_detect_projects.setEnabled(False)
+                self.btn_merge_node.setEnabled(False)
                 self.btn_delete_node.setEnabled(False)
                 return
 
@@ -2486,9 +3960,17 @@ class ArchitectureTab(QWidget):
             self.lbl_sel_path.setToolTip(f"Downloads\\{rel}\n{summary_tip}")
             self.btn_edit_node.setEnabled(True)
             self.btn_add_child.setEnabled(node.tier < FolderArchitecture.MAX_TIERS)
+            self.btn_detect_projects.setEnabled(node.tier < FolderArchitecture.MAX_TIERS)
+            self.btn_merge_node.setEnabled(
+                any(self._arch.can_merge(node.id, cand.id) for cand in self._arch.nodes)
+            )
             self.btn_delete_node.setEnabled(True)
         finally:
             self._syncing_inspector = False
+
+    def _on_toggle_view(self, checked: bool) -> None:
+        self.canvas.set_expand_all_tiers(checked, animate=True)
+        self.btn_toggle_view.setText("View: All" if checked else "View: Branch")
 
     def _on_toggle_lines(self, checked: bool) -> None:
         self.canvas.set_show_all_connectors(checked)
@@ -2589,6 +4071,93 @@ class ArchitectureTab(QWidget):
         self._redraw_canvas()
         self.canvas.select_node(node_id)
 
+    def _on_node_suggestion_applied(self, node_id: str, suggestion: dict[str, Any]) -> None:
+        node = self._arch.get_node(node_id)
+        if node is None:
+            return
+        self._push_undo_snapshot()
+        self._arch.update_node(
+            node_id,
+            name=str(suggestion.get("name") or node.name),
+            kind=str(suggestion.get("kind") or node.kind),
+            extensions=list(suggestion.get("extensions") or ()),
+            keywords=list(suggestion.get("keywords") or ()),
+            domains=list(suggestion.get("domains") or ()),
+        )
+        self._dirty = True
+        self._redraw_canvas()
+        self.canvas.select_node(node_id)
+
+    def _on_node_suggestion_batch_requested(
+        self, editing_node_id: str, parent_id: str, group_mode: str
+    ) -> None:
+        pnode = self._arch.get_node(parent_id)
+        if pnode is None or pnode.tier >= FolderArchitecture.MAX_TIERS:
+            return
+        suggestions = get_tier2_suggestions(pnode.name, pnode.kind, mode=group_mode)
+        if not suggestions:
+            return
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
+
+        existing_names = {
+            c.name.strip().lower()
+            for c in self._arch.children_of(parent_id)
+            if c.id != editing_node_id
+        }
+        edit_node = self._arch.get_node(editing_node_id)
+        reusable_placeholder = bool(
+            edit_node is not None
+            and edit_node.parent_id == parent_id
+            and edit_node.name in ("New Subfolder", "New Folder")
+            and not edit_node.extensions
+            and not edit_node.keywords
+            and not edit_node.domains
+        )
+
+        last_node: ArchNode | None = None
+        for sug in suggestions:
+            sname = str(sug.get("name") or "").strip()
+            if not sname or sname.lower() in existing_names:
+                continue
+            existing_names.add(sname.lower())
+            if reusable_placeholder and edit_node is not None:
+                self._arch.update_node(
+                    edit_node.id,
+                    name=sname,
+                    kind=str(sug.get("kind") or pnode.kind),
+                    extensions=list(sug.get("extensions") or ()),
+                    keywords=list(sug.get("keywords") or ()),
+                    exclude_keywords=list(sug.get("exclude_keywords") or ()),
+                    domains=list(sug.get("domains") or ()),
+                )
+                last_node = edit_node
+                reusable_placeholder = False
+            else:
+                last_node = self._arch.add_custom_node(
+                    name=sname,
+                    tier=pnode.tier + 1,
+                    parent_id=parent_id,
+                    kind=str(sug.get("kind") or pnode.kind),
+                    extensions=list(sug.get("extensions") or ()),
+                    keywords=list(sug.get("keywords") or ()),
+                    exclude_keywords=list(sug.get("exclude_keywords") or ()),
+                    domains=list(sug.get("domains") or ()),
+                )
+
+        if reusable_placeholder and edit_node is not None:
+            # All suggested names already existed; drop the temporary empty placeholder cleanly
+            self._arch.remove_node(edit_node.id)
+
+        self._dirty = True
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
+        if last_node is not None and self._arch.get_node(last_node.id) is not None:
+            self.canvas.select_node(last_node.id)
+        mode_label = "File Type" if group_mode == "file_type" else "Classification"
+        self.architecture_applied.emit(
+            f"Added {mode_label} subfolders under '{pnode.name}' — click Apply & Shift Files to sync."
+        )
+
     def _on_template_dropped(self, premade_key: str, target_tier: int, parent_id: str) -> None:
         prev_rects = self.canvas.snapshot_rects()
         self._push_undo_snapshot()
@@ -2651,8 +4220,10 @@ class ArchitectureTab(QWidget):
             self.btn_scan_folders.setEnabled(True)
             self.btn_scan_folders.setText("Scan Folders")
 
+        use_tfidf = bool(getattr(self.service.config, "ai_smart_scan_keywords", True))
+
         def _work(progress) -> dict[str, Any]:  # noqa: ANN001
-            return scan_folder_architecture(watch_dir, on_progress=progress)
+            return scan_folder_architecture(watch_dir, use_tfidf=use_tfidf, on_progress=progress)
 
         def _done(result: dict[str, Any]) -> None:
             _restore_scan_btn()
@@ -2704,7 +4275,11 @@ class ArchitectureTab(QWidget):
                 if node.domains:
                     tags.append("site: " + ", ".join(node.domains[:2]))
                 detail = f"  ({'; '.join(tags)})" if tags else ""
-                preview_list.addItem(f"{indent}[T{node.tier}] {node.name}{detail}")
+                item = QListWidgetItem(f"{indent}[T{node.tier}] {node.name}{detail}")
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked)
+                item.setData(Qt.ItemDataRole.UserRole, node.id)
+                preview_list.addItem(item)
             v.addWidget(preview_list, 1)
 
             btns = QHBoxLayout()
@@ -2736,14 +4311,30 @@ class ArchitectureTab(QWidget):
                 )
                 return
 
+            checked_ids = {
+                str(preview_list.item(i).data(Qt.ItemDataRole.UserRole))
+                for i in range(preview_list.count())
+                if preview_list.item(i).checkState() == Qt.CheckState.Checked
+            }
+            kept_nodes: list[ArchNode] = []
+            kept_ids: set[str] = set()
+            for node in sorted(scanned.nodes, key=lambda n: n.tier):
+                if node.id not in checked_ids:
+                    continue
+                if node.parent_id and node.parent_id not in kept_ids:
+                    continue
+                kept_nodes.append(node)
+                kept_ids.add(node.id)
+            filtered_scan = FolderArchitecture(tier_count=scanned.tier_count, nodes=kept_nodes)
+
             prev_rects = self.canvas.snapshot_rects()
             self._push_undo_snapshot()
             self._active_preset = "scanned"
             self._update_blueprint_pills()
             if choice["mode"] == "merge":
-                self._arch = merged_preview
+                self._arch = merge_architectures(self._arch, filtered_scan)
             else:
-                self._arch = scanned
+                self._arch = filtered_scan
             self._dirty = True
             self._redraw_canvas(animate=True, prev_rects=prev_rects)
             if self._arch.nodes:
@@ -2886,6 +4477,8 @@ class ArchitectureTab(QWidget):
             sel = self._arch.get_node(self.canvas.selected_node_id)
             if sel is not None and sel.tier == tier - 1:
                 parent_id = sel.id
+            elif tier == 2 and self.canvas.expanded_tier1_id():
+                parent_id = self.canvas.expanded_tier1_id() or ""
             else:
                 prev_nodes = self._arch.nodes_in_tier(tier - 1)
                 if not prev_nodes:
@@ -2899,6 +4492,137 @@ class ArchitectureTab(QWidget):
         if node is None or node.tier >= FolderArchitecture.MAX_TIERS:
             return
         self._on_spawn_child_inline(node.id, "New Subfolder")
+
+    def apply_detected_projects(
+        self,
+        parent_id: str,
+        projects: list[dict[str, Any]],
+    ) -> list[ArchNode]:
+        """Add confirmed detected projects as child nodes under ``parent_id`` with Undo support."""
+        parent_node = self._arch.get_node(parent_id)
+        if parent_node is None or parent_node.tier >= FolderArchitecture.MAX_TIERS or not projects:
+            return []
+
+        existing_names = {c.name.lower() for c in self._arch.children_of(parent_id)}
+        to_add = [
+            p
+            for p in projects
+            if str(p.get("name") or "").strip()
+            and str(p.get("name") or "").strip().lower() not in existing_names
+        ]
+        if not to_add:
+            return []
+
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
+        added: list[ArchNode] = []
+        for proj in to_add:
+            pname = str(proj["name"]).strip()
+            if pname.lower() in existing_names:
+                continue
+            existing_names.add(pname.lower())
+            child = self._arch.add_custom_node(
+                name=pname,
+                tier=parent_node.tier + 1,
+                parent_id=parent_id,
+                kind=parent_node.kind,
+                extensions=list(proj.get("extensions") or ()),
+                keywords=list(proj.get("keywords") or ()),
+            )
+            added.append(child)
+
+        if added:
+            self._dirty = True
+            self._redraw_canvas(animate=True, prev_rects=prev_rects)
+            self.canvas.select_node(added[0].id)
+            self.architecture_applied.emit(
+                f"Added {len(added)} project folder(s) under '{parent_node.name}' — click Apply & Shift Files to organize."
+            )
+        return added
+
+    def _on_detect_projects_for_selected(self) -> None:
+        node = self._arch.get_node(self.canvas.selected_node_id)
+        if node is None or node.tier >= FolderArchitecture.MAX_TIERS:
+            return
+        rel = self._arch.node_relative_path(node.id)
+        if not rel:
+            return
+        target_dir = (self.service.watch_root / rel).resolve()
+        if not target_dir.is_dir():
+            QMessageBox.information(
+                self,
+                "Detect Projects",
+                f"Folder does not exist on disk yet:\n{target_dir}\n\n"
+                "Apply your layout or sort files into this folder first.",
+            )
+            return
+
+        # Skip existing classification/project child folders (those with keywords/domains),
+        # while scanning file-type subfolders (like STEP / Fusion 360 / 3MF / STL) together.
+        children = self._arch.children_of(node.id)
+        exclude_subdirs = {c.name.lower() for c in children if c.keywords or c.domains}
+        existing_child_names = {c.name.lower() for c in children}
+
+        self.btn_detect_projects.setEnabled(False)
+        self.btn_detect_projects.setText("Detecting...")
+
+        def _restore_btn(_msg: str = "") -> None:
+            self.btn_detect_projects.setText("Detect Projects...")
+            cur = self._arch.get_node(self.canvas.selected_node_id)
+            self.btn_detect_projects.setEnabled(cur is not None and cur.tier < FolderArchitecture.MAX_TIERS)
+
+        def _work(progress) -> dict[str, Any]:  # noqa: ANN001
+            projs = detect_projects_in_folder(
+                target_dir,
+                min_files=3,
+                exclude_subdirs=exclude_subdirs,
+                on_progress=progress,
+            )
+            used_min = 3
+            if not projs:
+                projs = detect_projects_in_folder(
+                    target_dir,
+                    min_files=2,
+                    exclude_subdirs=exclude_subdirs,
+                    on_progress=progress,
+                )
+                used_min = 2
+            return {"projects": projs, "min_files": used_min}
+
+        def _done(res: dict[str, Any]) -> None:
+            _restore_btn()
+            projs: list[DetectedProject] = res.get("projects") or []
+            used_min = int(res.get("min_files") or 3)
+            if not projs:
+                QMessageBox.information(
+                    self,
+                    f"Detect Projects — {node.name}",
+                    f"No multi-file project groups were detected inside:\n{target_dir}",
+                )
+                return
+
+            dlg = DetectProjectsDialog(
+                node,
+                target_dir,
+                projs,
+                exclude_subdirs=exclude_subdirs,
+                existing_child_names=existing_child_names,
+                min_files=used_min,
+                parent=self,
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            chosen = dlg.selected_projects()
+            if chosen:
+                self.apply_detected_projects(node.id, chosen)
+
+        self._run_background(
+            _work,
+            _done,
+            title=f"Detecting projects in {node.name}...",
+            pass_progress=True,
+            on_error=_restore_btn,
+        )
 
     def _open_premade_dialog(self, default_tier: int = 2, default_parent_id: str | None = None) -> None:
         dlg = PremadeFolderDialog(
@@ -2960,14 +4684,148 @@ class ArchitectureTab(QWidget):
             self._redraw_canvas(animate=True, prev_rects=prev_rects)
             self.canvas.select_node(node.id)
 
-    def _delete_node_by_id(self, node_id: str) -> None:
-        if not node_id or self._arch.get_node(node_id) is None:
+    def _delete_node_by_id(self, node_id: str, *, confirm: bool = True) -> None:
+        node = self._arch.get_node(node_id)
+        if not node_id or node is None:
             return
+        node_name = node.name
+        rel_path = self._arch.node_relative_path(node_id)
+        disk_info = self.service.inspect_folder_on_disk(rel_path)
+        children = self._arch.children_of(node_id)
+
+        file_action_mode = "keep"
+        evacuate_target: str | None = None
+        remove_empty_dir = False
+        promote_children = False
+
+        needs_prompt = (
+            int(disk_info.get("file_count", 0) or 0) > 0
+            or bool(disk_info.get("exists"))
+            or len(children) > 0
+            or not os.environ.get("PYTEST_CURRENT_TEST")
+        )
+        if confirm and needs_prompt:
+            dlg = DeleteFolderDialog(self._arch, node, disk_info, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            file_action_mode, evacuate_target = dlg.file_action()
+            remove_empty_dir = dlg.should_remove_empty_dir()
+            promote_children = dlg.should_promote_children()
+
         prev_rects = self.canvas.snapshot_rects()
         self._push_undo_snapshot()
-        self._arch.remove_node(node_id)
+        self._arch.remove_node(node_id, promote_children=promote_children)
         self._dirty = True
         self._redraw_canvas(animate=True, prev_rects=prev_rects)
+
+        should_touch_disk = file_action_mode == "evacuate" or (
+            remove_empty_dir
+            and bool(disk_info.get("exists"))
+            and int(disk_info.get("file_count", 0) or 0) == 0
+        )
+        if should_touch_disk and rel_path:
+            target_arg = evacuate_target if file_action_mode == "evacuate" else None
+
+            def _work(report):  # noqa: ANN001
+                return self.service.evacuate_or_remove_folder_on_disk(
+                    rel_path,
+                    target_rel=target_arg,
+                    remove_empty_dir=remove_empty_dir,
+                    on_progress=report,
+                )
+
+            def _done(res: dict[str, Any]) -> None:
+                moved_n = int(res.get("moved_count", 0) or 0)
+                if moved_n > 0:
+                    self.architecture_applied.emit(
+                        f"Removed '{node_name}' and moved {moved_n} file(s) safely (Undo available)."
+                    )
+                elif res.get("removed_dir"):
+                    self.architecture_applied.emit(
+                        f"Removed '{node_name}' and cleaned up the empty folder on disk."
+                    )
+                else:
+                    self.architecture_applied.emit(
+                        f"Removed '{node_name}' from Folder Architecture."
+                    )
+
+            self._run_background(
+                _work,
+                _done,
+                title=f"Updating files for removed '{node_name}'...",
+                pass_progress=True,
+            )
+        elif disk_info.get("exists") and file_action_mode == "keep":
+            self.architecture_applied.emit(
+                f"Removed '{node_name}' from Folder Architecture (kept files in place on disk)."
+            )
+
+    def _on_merge_selected_clicked(self) -> None:
+        src = self._arch.get_node(self.canvas.selected_node_id)
+        if src is None:
+            return
+        dlg = MergeFolderDialog(self._arch, src, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            target_id = dlg.selected_target_id()
+            if not target_id:
+                return
+            self._on_nodes_merged(
+                src.id,
+                target_id,
+                new_name=dlg.merged_name() or None,
+                move_disk=dlg.move_disk_files(),
+            )
+
+    def _on_nodes_merged(
+        self,
+        source_id: str,
+        target_id: str,
+        *,
+        new_name: str | None = None,
+        move_disk: bool = True,
+    ) -> None:
+        if not self._arch.can_merge(source_id, target_id):
+            return
+        src_node = self._arch.get_node(source_id)
+        dst_node = self._arch.get_node(target_id)
+        if src_node is None or dst_node is None:
+            return
+        src_name = src_node.name
+        src_rel = self._arch.node_relative_path(source_id)
+
+        prev_rects = self.canvas.snapshot_rects()
+        self._push_undo_snapshot()
+        merged = self._arch.merge_nodes(source_id, target_id, new_name=new_name)
+        if merged is None:
+            self._undo_stack.pop()
+            self._update_undo_redo_buttons()
+            return
+        dst_rel = self._arch.node_relative_path(merged.id)
+        self._dirty = True
+        self._redraw_canvas(animate=True, prev_rects=prev_rects)
+        self.canvas.select_node(merged.id)
+
+        src_dir = self.service.watch_root / src_rel
+        if move_disk and src_rel != dst_rel and src_dir.is_dir():
+            def _work(report):  # noqa: ANN001
+                return self.service.merge_folders_on_disk(src_rel, dst_rel, on_progress=report)
+
+            def _done(res: dict[str, Any]) -> None:
+                moved_n = int(res.get("moved_count", 0) or 0)
+                self.architecture_applied.emit(
+                    f"Merged '{src_name}' into '{merged.name}' ({moved_n} file(s) moved; click Apply & Shift Files to save rules)."
+                )
+
+            self._run_background(
+                _work,
+                _done,
+                title=f"Merging '{src_name}' into '{merged.name}'...",
+                pass_progress=True,
+            )
+        else:
+            self.architecture_applied.emit(
+                f"Merged '{src_name}' into '{merged.name}' — click Apply & Shift Files to sync."
+            )
 
     def _run_background(
         self,
@@ -3024,9 +4882,10 @@ class ArchitectureTab(QWidget):
         self._on_inspector_fields_committed()
         target_cfg = apply_architecture_to_config(self._arch, self.service.config)
         self._run_background(
-            lambda: self.service.preview_architecture_shift(target_cfg),
+            lambda report: self.service.preview_architecture_shift(target_cfg, on_progress=report),
             lambda plan: self._confirm_and_shift(target_cfg, plan),
             title="Scanning managed folders...",
+            pass_progress=True,
         )
 
     def _confirm_and_shift(self, target_cfg, plan: dict[str, Any]) -> None:  # noqa: ANN001
@@ -3040,6 +4899,7 @@ class ArchitectureTab(QWidget):
                 target_cfg,
                 shift_files=True,
                 create_empty_folders=create_empty,
+                precomputed_plan=plan,
                 on_progress=report_progress,
             )
 

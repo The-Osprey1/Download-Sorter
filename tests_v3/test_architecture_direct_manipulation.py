@@ -399,6 +399,7 @@ def test_blueprint_pills_max_depth_template_drop_swatches_and_shortcuts(v3_qapp,
         t4 = tab._arch.add_custom_node(name="L4", tier=4, parent_id=t3.id)
         t5 = tab._arch.add_custom_node(name="L5", tier=5, parent_id=t4.id)
         tab._redraw_canvas()
+        tab.canvas.select_node(t1.id)
         v3_qapp.processEvents()
 
         before_nodes = len(tab._arch.nodes)

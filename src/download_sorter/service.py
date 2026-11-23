@@ -6,6 +6,7 @@ from collections.abc import Callable
 import copy
 import dataclasses
 import logging
+import os
 from pathlib import Path
 import threading
 import time
@@ -15,9 +16,20 @@ from typing import Any
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from download_sorter.architecture import architecture_from_config
-from download_sorter.config import Config, DEFAULT_CATEGORY_MAP, load_config, save_config
+from download_sorter.architecture import (
+    PREMADE_FOLDER_CATALOG,
+    TIER2_SUGGESTIONS_BY_PARENT,
+    architecture_from_config,
+)
+from download_sorter.config import (
+    DEFAULT_CATEGORY_MAP,
+    DEFAULT_TYPE_SUBFOLDERS,
+    Config,
+    load_config,
+    save_config,
+)
 from download_sorter.db import StateDB
+from download_sorter.dest import is_under_watch_root, to_relative_dest
 from download_sorter.fs_ops import (
     ProgressCallback,
     cleanup_orphaned_staging,
@@ -34,8 +46,9 @@ from download_sorter.fs_ops import (
     undo_batch,
     undo_move,
 )
+from download_sorter.learning import TokenRouteLearner
 from download_sorter.paths import AppPaths
-from download_sorter.router import FileCandidate, RouteDecision, candidate_from_path, evaluate
+from download_sorter.router import FileCandidate, RouteDecision, RouteStep, candidate_from_path, evaluate
 
 
 class _TopLevelEventHandler(FileSystemEventHandler):
@@ -113,6 +126,32 @@ class SorterService:
         self._observer: Observer | None = None
         self._worker_thread: threading.Thread | None = None
         self._config_undo_stack: list[tuple[str, Config]] = []
+        self._cached_learner: TokenRouteLearner | None = None
+        self._cached_learner_key: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
+
+    def get_route_learner(self) -> TokenRouteLearner:
+        """Return a cached ``TokenRouteLearner`` invalidated when learned_routes or state.db changes."""
+        def _sig(p: Path) -> tuple[int, int]:
+            try:
+                st = p.stat()
+                return (int(st.st_mtime_ns), int(st.st_size))
+            except OSError:
+                return (0, 0)
+
+        key = (
+            _sig(self.paths.data_dir / "learned_routes.json"),
+            _sig(self.paths.db_file),
+            _sig(Path(f"{self.paths.db_file}-wal")),
+        )
+        with self._lock:
+            if self._cached_learner is not None and self._cached_learner_key == key:
+                return self._cached_learner
+        learner = TokenRouteLearner()
+        learner.train_from_db_and_store(self.db, self.paths.data_dir)
+        with self._lock:
+            self._cached_learner = learner
+            self._cached_learner_key = key
+        return learner
 
     @property
     def watch_root(self) -> Path:
@@ -174,9 +213,71 @@ class SorterService:
         self.update_config(loaded)
         return loaded
 
+    def _append_ml_hint(
+        self,
+        cand: FileCandidate,
+        decision: RouteDecision,
+        *,
+        learner: TokenRouteLearner | None = None,
+        cfg: Config | None = None,
+    ) -> RouteDecision:
+        if decision.match_type != "fallback":
+            return decision
+        active_cfg = cfg or self.config
+        if not active_cfg.ai_smart_hints_enabled and not active_cfg.ai_auto_route_fallback:
+            return decision
+        try:
+            model = learner or self.get_route_learner()
+            min_conf = max(0.50, min(0.95, float(active_cfg.ai_min_confidence) / 100.0))
+            pred = model.predict_folder(
+                cand.filename,
+                source_url=cand.source_url,
+                ext=cand.extension,
+                min_confidence=min_conf,
+            )
+        except Exception:
+            logging.debug("Smart hint evaluation skipped", exc_info=True)
+            return decision
+        if pred is None:
+            return decision
+        pct = int(round(pred.confidence * 100))
+        dest_display = pred.destination.replace(chr(92), "/")
+        reasons = ", ".join(pred.top_reasons)
+        if active_cfg.ai_auto_route_fallback:
+            detail = f"Auto-routing to '{dest_display}' ({pct}% match · {reasons})"
+            return RouteDecision(
+                action="move",
+                relative_dest=Path(pred.destination) / cand.filename,
+                reason=f"AI Smart Route ({pct}% match · {reasons})",
+                matched_rule="AI Smart Route",
+                match_type="ai_smart_route",
+                trace=list(decision.trace)
+                + [
+                    RouteStep(
+                        stage="Experimental AI",
+                        label="Auto-Route",
+                        matched=True,
+                        detail=detail,
+                    )
+                ],
+            )
+        detail = f"Likely '{dest_display}' ({pct}% match · {reasons})"
+        new_trace = list(decision.trace) + [
+            RouteStep(
+                stage="Smart Hint",
+                label="Learned pattern",
+                matched=False,
+                detail=detail,
+            )
+        ]
+        return dataclasses.replace(decision, trace=new_trace)
+
     def explain(self, filename: str, source_url: str = "") -> RouteDecision:
+        cand = FileCandidate(filename=filename, source_url=source_url)
         with self._lock:
-            return evaluate(FileCandidate(filename=filename, source_url=source_url), self.config)
+            cfg = self.config
+            decision = evaluate(cand, cfg)
+        return self._append_ml_hint(cand, decision, cfg=cfg)
 
     @staticmethod
     def _is_3mf_held(path: Path, cfg: Config, now: float | None = None) -> bool:
@@ -224,9 +325,11 @@ class SorterService:
         if not target.is_dir():
             return []
         results: list[tuple[Path, RouteDecision]] = []
+        learner: TokenRouteLearner | None = None
         for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
             if entry.is_file():
-                decision = evaluate(candidate_from_path(entry), cfg)
+                cand = candidate_from_path(entry)
+                decision = evaluate(cand, cfg)
                 if decision.action == "move" and self._is_3mf_held(entry, cfg):
                     planned = str(decision.relative_dest.parent) if decision.relative_dest else ""
                     decision = RouteDecision(
@@ -237,6 +340,10 @@ class SorterService:
                         match_type="hold",
                         trace=decision.trace,
                     )
+                elif decision.match_type == "fallback" and (cfg.ai_smart_hints_enabled or cfg.ai_auto_route_fallback):
+                    if learner is None:
+                        learner = self.get_route_learner()
+                    decision = self._append_ml_hint(cand, decision, learner=learner, cfg=cfg)
                 results.append((entry, decision))
         return results
 
@@ -524,6 +631,96 @@ class SorterService:
             self.db.checkpoint()
         return res
 
+    _PROJECT_MARKER_NAMES: frozenset[str] = frozenset(
+        {".git", ".gitignore", ".gitattributes", "pyproject.toml", "package.json", "cargo.toml", "cmakelists.txt"}
+    )
+    _HIST_MANAGED_SUBFOLDERS: frozenset[str] = frozenset(
+        {
+            r"audio\wav",
+            r"audio\mp3",
+            r"audio\m4a",
+            r"videos\mp4",
+            r"videos\mov",
+            r"images\vector",
+            r"images\camera",
+            r"images\photos",
+            r"images\renders",
+            r"code\web",
+            r"code\c and c++",
+            r"code\data",
+            r"code\logs",
+            r"code\python",
+            r"code\scripts & firmware",
+            r"3d models\fusion 360",
+            r"3d models\step",
+            r"3d models\g-code",
+            r"cad\cam & cnc toolpaths",
+            r"documents\school",
+            r"documents\career",
+            r"documents\receipts & invoices",
+        }
+    )
+
+    @classmethod
+    def _is_project_or_bundle_dir(cls, dir_path: Path) -> bool:
+        try:
+            with os.scandir(dir_path) as it:
+                for entry in it:
+                    if entry.name.lower() in cls._PROJECT_MARKER_NAMES:
+                        return True
+        except OSError:
+            return False
+        return False
+
+    @classmethod
+    def _managed_relative_folders(cls, *configs: Config) -> set[str]:
+        """Return all lowercase ``\\\\``-normalized managed folder paths and parent prefixes."""
+        rels: set[str] = set()
+
+        def _add_path(raw: str) -> None:
+            norm = str(raw or "").replace("/", "\\").strip("\\ ").lower()
+            if not norm or norm == "_duplicates":
+                return
+            parts = [p.strip() for p in norm.split("\\") if p.strip()]
+            for i in range(1, len(parts) + 1):
+                rels.add("\\".join(parts[:i]))
+
+        for ext, cat in DEFAULT_CATEGORY_MAP.items():
+            _add_path(cat)
+            sub = DEFAULT_TYPE_SUBFOLDERS.get(ext, "")
+            if cat and sub:
+                _add_path(f"{cat}\\{sub}")
+        for tpl in PREMADE_FOLDER_CATALOG:
+            tname = str(tpl.get("name", "")).strip()
+            pname = str(tpl.get("parent_name", "")).strip()
+            _add_path(f"{pname}\\{tname}" if pname else tname)
+        for pkey, groups in TIER2_SUGGESTIONS_BY_PARENT.items():
+            _add_path(pkey)
+            for items in groups.values():
+                for sug in items:
+                    sname = str(sug.get("name", "")).strip()
+                    if sname:
+                        _add_path(f"{pkey}\\{sname}")
+        for hist in cls._HIST_MANAGED_SUBFOLDERS:
+            _add_path(hist)
+
+        for cfg in configs:
+            if cfg.default_folder:
+                _add_path(cfg.default_folder)
+            for ext, cat in cfg.category_map.items():
+                _add_path(cat)
+                sub = cfg.type_subfolders.get(ext, "")
+                if cat and sub:
+                    _add_path(f"{cat}\\{sub}")
+            for rule in cfg.rules:
+                _add_path(rule.destination)
+            for folder in architecture_from_config(cfg).all_target_folders():
+                _add_path(folder)
+
+        rels.discard("")
+        rels.discard("_duplicates")
+        return rels
+
     @staticmethod
     def _managed_root_names(*configs: Config) -> set[str]:
         roots: set[str] = set()
@@ -550,7 +747,13 @@ class SorterService:
         roots.discard("_duplicates")
         return roots
 
-    def preview_architecture_shift(self, target_config: Config, root: Path | None = None) -> dict[str, Any]:
+    def preview_architecture_shift(
+        self,
+        target_config: Config,
+        root: Path | None = None,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         """Compute files to shift (top-level + managed folders) and folders created for ``target_config``."""
         with self._lock:
             cur_cfg = self.config
@@ -564,38 +767,67 @@ class SorterService:
         if not watch_dir.is_dir():
             return {"moves_planned": [], "folders_to_create": [], "architecture_folders": all_folders}
 
+        if on_progress is not None:
+            on_progress(0, 0, f"Listing files in {watch_dir.name}...")
+
         candidates: list[tuple[Path, bool]] = []
+        with os.scandir(watch_dir) as it:
+            top_entries = sorted(list(it), key=lambda e: e.name.lower())
+
         # 1. Top-level loose files in Downloads
-        for entry in sorted(watch_dir.iterdir(), key=lambda p: p.name.lower()):
+        for entry in top_entries:
             if entry.is_file():
-                candidates.append((entry, True))
+                candidates.append((Path(entry.path), True))
 
         # 2. Files currently inside known managed category/rule folders
         managed = self._managed_root_names(cur_cfg, target_config)
-        for entry in sorted(watch_dir.iterdir(), key=lambda p: p.name.lower()):
-            if not entry.is_dir() or entry.name.startswith("."):
+        managed_rels = self._managed_relative_folders(cur_cfg, target_config)
+        for entry in top_entries:
+            if not entry.is_dir() or entry.name.startswith((".", "_")):
                 continue
             if entry.name.lower() not in managed:
                 continue
-            for fpath in sorted(entry.rglob("*"), key=lambda p: str(p).lower()):
-                if fpath.is_file():
-                    candidates.append((fpath, False))
+            for dirroot, dirnames, filenames in os.walk(entry.path):
+                cur_rel = str(Path(dirroot).relative_to(watch_dir)).replace("/", "\\").lower()
+                dirnames[:] = sorted(
+                    [
+                        d
+                        for d in dirnames
+                        if not d.startswith((".", "_"))
+                        and f"{cur_rel}\\{d.lower()}" in managed_rels
+                        and not self._is_project_or_bundle_dir(Path(dirroot) / d)
+                    ],
+                    key=str.lower,
+                )
+                filenames.sort(key=str.lower)
+                root_p = Path(dirroot)
+                for fname in filenames:
+                    candidates.append((root_p / fname, False))
 
-        seen_paths: set[Path] = set()
-        for fpath, is_top_level in candidates:
-            resolved = fpath.resolve()
-            if resolved in seen_paths:
+        total_candidates = len(candidates)
+        seen_paths: set[str] = set()
+        for idx, (fpath, is_top_level) in enumerate(candidates, start=1):
+            if on_progress is not None and (idx == 1 or idx % 500 == 0 or idx == total_candidates):
+                on_progress(idx, max(1, total_candidates), fpath.name)
+
+            key_path = os.path.normcase(os.path.abspath(fpath))
+            if key_path in seen_paths:
                 continue
-            seen_paths.add(resolved)
+            seen_paths.add(key_path)
 
-            cand = candidate_from_path(fpath)
-            dec = evaluate(cand, target_config)
+            cand = candidate_from_path(fpath, lazy_zone=True)
+            dec = evaluate(cand, target_config, include_trace=False)
             if dec.action != "move" or dec.relative_dest is None:
                 continue
             if is_top_level and self._is_3mf_held(fpath, target_config):
                 continue
 
-            dest_full = (watch_dir / dec.relative_dest).resolve()
+            dest_candidate = watch_dir / dec.relative_dest
+            if os.path.normcase(str(dest_candidate)) == key_path:
+                continue
+
+            resolved = fpath.resolve()
+            dest_full = dest_candidate.resolve()
             if dest_full == resolved:
                 continue
 
@@ -611,9 +843,12 @@ class SorterService:
                     "src_rel": src_rel,
                     "dest_rel": dest_rel,
                     "decision": dec,
-                    "source_url": cand.source_url,
+                    "source_url": cand.ensure_source_url(),
                 }
             )
+
+        if on_progress is not None and total_candidates > 0:
+            on_progress(total_candidates, total_candidates, "Scan complete")
 
         return {
             "moves_planned": planned,
@@ -628,6 +863,7 @@ class SorterService:
         shift_files: bool = True,
         create_empty_folders: bool = False,
         batch_prefix: str = "arch",
+        precomputed_plan: dict[str, Any] | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         """Persist ``target_config`` and shift existing managed/top-level files into their expected folders."""
@@ -638,7 +874,11 @@ class SorterService:
             watch_dir = target_config.resolved_watch_folder(self.paths)
             managed_before = self._managed_root_names(prev_cfg, target_config)
 
-        plan = self.preview_architecture_shift(target_config, root=watch_dir)
+        plan = (
+            precomputed_plan
+            if precomputed_plan is not None
+            else self.preview_architecture_shift(target_config, root=watch_dir, on_progress=on_progress)
+        )
         batch_id = f"{batch_prefix}-{uuid.uuid4().hex[:8]}"
         self._config_undo_stack.append((batch_id, prev_cfg))
 
@@ -735,6 +975,223 @@ class SorterService:
             batch_prefix="arch",
         )
 
+    def merge_folders_on_disk(
+        self,
+        source_rel: str,
+        target_rel: str,
+        *,
+        root: Path | None = None,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Move all files from ``source_rel`` into ``target_rel`` inside Downloads with Undo support."""
+        watch_dir = (root or self.watch_root).resolve()
+        src_clean = to_relative_dest(source_rel, fallback="")
+        dst_clean = to_relative_dest(target_rel, fallback="")
+        if not src_clean or not dst_clean:
+            return {"ok": False, "error": "Invalid source or target folder", "moved": [], "moved_count": 0}
+        src_dir = (watch_dir / src_clean).resolve()
+        dst_dir = (watch_dir / dst_clean).resolve()
+        if (
+            src_dir == watch_dir
+            or not is_under_watch_root(src_dir, watch_dir)
+            or not is_under_watch_root(dst_dir, watch_dir)
+            or src_dir.as_posix().lower() == dst_dir.as_posix().lower()
+        ):
+            return {"ok": False, "error": "Invalid folder path inside watch folder", "moved": [], "moved_count": 0}
+
+        if not src_dir.is_dir():
+            return {"ok": True, "batch_id": "", "moved": [], "moved_count": 0}
+
+        files = [p for p in sorted(src_dir.rglob("*"), key=lambda x: x.as_posix().lower()) if p.is_file()]
+        total = len(files)
+        batch_id = f"merge-{uuid.uuid4().hex[:8]}"
+        moved: list[dict[str, Any]] = []
+        for idx, fp in enumerate(files, start=1):
+            if on_progress is not None:
+                on_progress(idx - 1, total, fp.name)
+            sub_rel = fp.relative_to(src_dir)
+            decision = RouteDecision(
+                action="move",
+                relative_dest=Path(dst_clean) / sub_rel,
+                reason=f"Merged folder '{src_clean}' into '{dst_clean}'",
+                matched_rule="Folder Merge",
+                match_type="merge",
+            )
+            try:
+                rec = execute_move(
+                    fp,
+                    decision,
+                    batch_id=batch_id,
+                    db=self.db,
+                    watch_root=watch_dir,
+                    settle_seconds=0.0,
+                )
+            except OSError as exc:
+                logging.warning("Folder merge skipped %s: %s", fp, exc)
+                continue
+            if rec is not None:
+                moved.append(rec)
+
+        if on_progress is not None and total > 0:
+            on_progress(total, total, "Complete")
+
+        for dirpath in sorted(
+            [p for p in src_dir.rglob("*") if p.is_dir()] + [src_dir],
+            key=lambda p: len(p.parts),
+            reverse=True,
+        ):
+            try:
+                if dirpath.is_dir() and not any(dirpath.iterdir()):
+                    dirpath.rmdir()
+            except OSError:
+                pass
+
+        if moved:
+            self.db.checkpoint()
+            if self.on_moves_completed is not None:
+                try:
+                    self.on_moves_completed(batch_id, moved)
+                except Exception:
+                    logging.exception("Error in on_moves_completed callback during folder merge")
+
+        return {
+            "ok": True,
+            "batch_id": batch_id if moved else "",
+            "moved": moved,
+            "moved_count": len(moved),
+        }
+
+    def inspect_folder_on_disk(
+        self,
+        rel_path: str,
+        *,
+        root: Path | None = None,
+    ) -> dict[str, Any]:
+        """Inspect whether a subfolder exists inside ``watch_root`` and count its files."""
+        watch_dir = (root or self.watch_root).resolve()
+        clean_rel = to_relative_dest(rel_path, watch_root=watch_dir, fallback="")
+        if not clean_rel:
+            return {"exists": False, "file_count": 0, "sample_files": [], "rel_path": ""}
+        folder_dir = (watch_dir / clean_rel).resolve()
+        if (
+            folder_dir == watch_dir
+            or not is_under_watch_root(folder_dir, watch_dir)
+            or not folder_dir.is_dir()
+        ):
+            return {"exists": False, "file_count": 0, "sample_files": [], "rel_path": clean_rel}
+        file_count = 0
+        sample_files: list[str] = []
+        for _dirpath, dirnames, filenames in os.walk(folder_dir):
+            dirnames.sort(key=str.lower)
+            file_count += len(filenames)
+            if len(sample_files) < 5 and filenames:
+                for fn in sorted(filenames, key=str.lower):
+                    sample_files.append(fn)
+                    if len(sample_files) >= 5:
+                        break
+        return {
+            "exists": True,
+            "file_count": file_count,
+            "sample_files": sample_files,
+            "rel_path": clean_rel,
+        }
+
+    def evacuate_or_remove_folder_on_disk(
+        self,
+        source_rel: str,
+        target_rel: str | None = None,
+        *,
+        remove_empty_dir: bool = True,
+        root: Path | None = None,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Safely move files out of a removed subfolder (never deleting user files) and tidy empty dirs."""
+        watch_dir = (root or self.watch_root).resolve()
+        src_clean = to_relative_dest(source_rel, watch_root=watch_dir, fallback="")
+        if not src_clean:
+            return {"ok": False, "error": "Invalid source folder", "moved": [], "moved_count": 0, "removed_dir": False}
+        src_dir = (watch_dir / src_clean).resolve()
+        if src_dir == watch_dir or not is_under_watch_root(src_dir, watch_dir):
+            return {"ok": False, "error": "Source folder must stay inside Downloads", "moved": [], "moved_count": 0, "removed_dir": False}
+        if not src_dir.is_dir():
+            return {"ok": True, "batch_id": "", "moved": [], "moved_count": 0, "removed_dir": True}
+
+        moved: list[dict[str, Any]] = []
+        batch_id = f"evacuate-{uuid.uuid4().hex[:8]}"
+        if target_rel is not None:
+            raw_target = str(target_rel).strip()
+            if raw_target in ("", ".", "\\", "/"):
+                dest_prefix = Path(".")
+                dest_label = "Downloads"
+            else:
+                dst_clean = to_relative_dest(raw_target, watch_root=watch_dir, fallback="")
+                if not dst_clean:
+                    return {"ok": False, "error": "Invalid destination folder", "moved": [], "moved_count": 0, "removed_dir": False}
+                dst_dir = (watch_dir / dst_clean).resolve()
+                if not is_under_watch_root(dst_dir, watch_dir) or dst_dir.as_posix().lower() == src_dir.as_posix().lower():
+                    return {"ok": False, "error": "Invalid destination folder", "moved": [], "moved_count": 0, "removed_dir": False}
+                dest_prefix = Path(dst_clean)
+                dest_label = f"Downloads\\{dst_clean}"
+
+            files = [p for p in sorted(src_dir.rglob("*"), key=lambda x: x.as_posix().lower()) if p.is_file()]
+            total = len(files)
+            for idx, fp in enumerate(files, start=1):
+                if on_progress is not None:
+                    on_progress(idx - 1, total, fp.name)
+                sub_rel = fp.relative_to(src_dir)
+                rel_dest = sub_rel if str(dest_prefix) == "." else (dest_prefix / sub_rel)
+                decision = RouteDecision(
+                    action="move",
+                    relative_dest=rel_dest,
+                    reason=f"Moved from removed folder '{src_clean}' to '{dest_label}'",
+                    matched_rule="Folder Removal",
+                    match_type="evacuate",
+                )
+                try:
+                    rec = execute_move(
+                        fp,
+                        decision,
+                        batch_id=batch_id,
+                        db=self.db,
+                        watch_root=watch_dir,
+                        settle_seconds=0.0,
+                    )
+                except OSError as exc:
+                    logging.warning("Folder evacuation skipped %s: %s", fp, exc)
+                    continue
+                if rec is not None:
+                    moved.append(rec)
+            if on_progress is not None and total > 0:
+                on_progress(total, total, "Complete")
+
+        if remove_empty_dir:
+            for dirpath in sorted(
+                [p for p in src_dir.rglob("*") if p.is_dir()] + [src_dir],
+                key=lambda p: len(p.parts),
+                reverse=True,
+            ):
+                try:
+                    if dirpath.is_dir() and not any(dirpath.iterdir()):
+                        dirpath.rmdir()
+                except OSError:
+                    pass
+
+        if moved:
+            self.db.checkpoint()
+            if self.on_moves_completed is not None:
+                try:
+                    self.on_moves_completed(batch_id, moved)
+                except Exception:
+                    logging.exception("Error in on_moves_completed callback during folder removal")
+
+        return {
+            "ok": True,
+            "batch_id": batch_id if moved else "",
+            "moved": moved,
+            "moved_count": len(moved),
+            "removed_dir": not src_dir.exists(),
+        }
+
     def undo_architecture_or_last_batch(
         self,
         *,
@@ -788,6 +1245,17 @@ class SorterService:
                 cleanup_orphaned_staging(root)
             except Exception:
                 logging.exception("Could not clean up orphaned staging directories in %s", root)
+        try:
+            self.db.prune_missing_hashes()
+        except Exception:
+            logging.debug("Could not prune missing file hashes", exc_info=True)
+        try:
+            from download_sorter.chrome_bridge import chrome_manifest_path, install_chrome_native_host
+
+            if chrome_manifest_path(self.paths.data_dir).is_file():
+                install_chrome_native_host(self.paths.data_dir)
+        except Exception:
+            logging.debug("Chrome host auto-heal skipped", exc_info=True)
         self._start_observer()
         if self.config.quick_switcher_enabled:
             self._start_quick_switcher()
@@ -995,6 +1463,7 @@ class SorterService:
         left = 0
         held = 0
         skipped_busy = 0
+        ai_learner: TokenRouteLearner | None = None
 
         total = len(paths_list)
         for index, path in enumerate(paths_list, start=1):
@@ -1013,7 +1482,11 @@ class SorterService:
                 continue
 
             cand = candidate_from_path(path)
-            decision = evaluate(cand, cfg if root == primary else extra_cfg)
+            decision = evaluate(cand, cfg if root == primary else extra_cfg, include_trace=False)
+            if decision.match_type == "fallback" and root == primary and cfg.ai_auto_route_fallback:
+                if ai_learner is None:
+                    ai_learner = self.get_route_learner()
+                decision = self._append_ml_hint(cand, decision, learner=ai_learner, cfg=cfg)
             if decision.action == "ignore":
                 ignored += 1
                 continue

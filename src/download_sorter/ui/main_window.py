@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from download_sorter.about import __version__
 from download_sorter.chrome_bridge import (
     EXTENSION_ID as CHROME_EXTENSION_ID,
     find_extension_dir,
@@ -68,9 +69,15 @@ from download_sorter.config import (
     import_v2_config,
     stored_watch_folder,
 )
-from download_sorter.learning import dismiss_suggestion, get_rule_suggestions
+from download_sorter.learning import (
+    clear_learned_routes,
+    dismiss_suggestion,
+    get_ai_model_summary,
+    get_rule_suggestions,
+)
 from download_sorter.paths import AppPaths
 from download_sorter.quick_switcher import normalize_hotkey, parse_hotkey
+from download_sorter.router import candidate_from_path, evaluate
 from download_sorter.service import SorterService
 from download_sorter import update_check, updater
 from download_sorter.ui.accessibility import name_controls_for_screen_readers
@@ -94,6 +101,7 @@ from download_sorter.ui.motion import (
     flash_rows,
     make_badge as _make_badge,
     make_vector_icon,
+    play_window_open_animation,
     slide_toggle,
 )
 from download_sorter.ui.theme import STYLESHEET
@@ -1364,6 +1372,250 @@ class DuplicateManagerDialog(QDialog):
         return res
 
 
+def _draft_rule_from_suggestion(sugg: dict[str, Any]) -> Rule:
+    """Build an editable draft ``Rule`` from a learned suggestion dictionary."""
+    host = str(sugg.get("host") or "")
+    ext = str(sugg.get("ext") or "")
+    keyword = str(sugg.get("keyword") or "")
+    if host:
+        rule_name = f"Files from {host}"
+    elif keyword:
+        rule_name = f"Files with '{keyword}'"
+    else:
+        rule_name = f"{ext.lstrip('.').upper()} files"
+    return Rule(
+        id="",
+        name=rule_name,
+        destination=str(sugg["destination"]),
+        keywords=[keyword] if (keyword and not host) else [],
+        domains=[host] if host else [],
+        extensions=[ext] if (ext and not host and not keyword) else [],
+    )
+
+
+def _confirm_clear_ai_memory(parent: QWidget, data_dir: Path, *, confirm: bool = True) -> bool:
+    """Confirm and clear locally learned AI route patterns and rule suggestions."""
+    if confirm:
+        ans = QMessageBox.question(
+            parent,
+            "Reset Experimental AI Memory",
+            "Clear all locally learned routing patterns and rule suggestions? Your Custom Rules and files stay untouched.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return False
+    clear_learned_routes(data_dir)
+    return True
+
+
+class ExperimentalAIInsightsDialog(QDialog):
+    """Inspect local Naive Bayes & TF-IDF predictions and learned rule suggestions."""
+
+    def __init__(
+        self,
+        service: SorterService,
+        *,
+        on_create_rule: Callable[[dict[str, Any]], bool] | None = None,
+        on_reset_memory: Callable[[], None] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.service = service
+        self._on_create_rule = on_create_rule
+        self._on_reset_memory = on_reset_memory
+
+        self.setObjectName("ExperimentalAIInsightsDialog")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setWindowTitle("Experimental AI Insights (100% Offline)")
+        self.setMinimumSize(700, 480)
+        self.resize(760, 520)
+        self.setStyleSheet(
+            STYLESHEET
+            + "\nQDialog#ExperimentalAIInsightsDialog { background-color: #111113; color: #F5F5F7; }"
+        )
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+
+        hdr = QHBoxLayout()
+        hdr.setSpacing(10)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        lbl_title = QLabel("Experimental AI Insights")
+        lbl_title.setObjectName("CardTitle")
+        lbl_sub = QLabel(
+            "Local statistical learning (smoothed Naive Bayes & TF-IDF) trained only on your sorting history. Zero cloud calls."
+        )
+        lbl_sub.setObjectName("MutedText")
+        lbl_sub.setWordWrap(True)
+        title_col.addWidget(lbl_title)
+        title_col.addWidget(lbl_sub)
+        hdr.addLayout(title_col, 1)
+
+        self.lbl_model_pill = _make_badge("0 moves · 0 folders", "primary")
+        hdr.addWidget(self.lbl_model_pill)
+        root.addLayout(hdr)
+
+        lbl_pred_hdr = QLabel("Live Predictions for Top-Level Downloads")
+        lbl_pred_hdr.setStyleSheet("color: #AEAEB2; font-size: 11.5px; font-weight: 600;")
+        root.addWidget(lbl_pred_hdr)
+
+        self.tbl_predictions = QTableWidget(0, 4)
+        self.tbl_predictions.setHorizontalHeaderLabels(
+            ["File", "Predicted Folder", "Confidence", "Why"]
+        )
+        _style_table(self.tbl_predictions)
+        phdr = self.tbl_predictions.horizontalHeader()
+        phdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        phdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        phdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        phdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.tbl_predictions.setColumnWidth(2, scaled_px(92))
+        self.tbl_predictions.setMinimumHeight(160)
+        root.addWidget(self.tbl_predictions, 1)
+
+        lbl_sugg_hdr = QLabel("Learned Rule Suggestions")
+        lbl_sugg_hdr.setStyleSheet("color: #AEAEB2; font-size: 11.5px; font-weight: 600;")
+        root.addWidget(lbl_sugg_hdr)
+
+        self.list_suggestions = QListWidget()
+        self.list_suggestions.setMaximumHeight(130)
+        self.list_suggestions.currentItemChanged.connect(lambda *_: self._sync_buttons())
+        root.addWidget(self.list_suggestions)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(8)
+        self.btn_reset_ai = InteractiveRibbonBtn(
+            "Reset AI Memory",
+            make_vector_icon("refresh", "#F5F5F7", 14),
+        )
+        self.btn_reset_ai.setObjectName("GhostButton")
+        self.btn_reset_ai.setToolTip("Clear learned filename tokens and manual routing tallies")
+        self.btn_reset_ai.clicked.connect(lambda: self.reset_memory(confirm=True))
+        footer.addWidget(self.btn_reset_ai)
+
+        self.btn_make_rule = InteractiveRibbonBtn(
+            "Make Rule from Selected",
+            make_vector_icon("plus", "#FFFFFF", 14),
+        )
+        self.btn_make_rule.setObjectName("PrimaryButton")
+        self.btn_make_rule.setToolTip("Create a deterministic Custom Rule from the highlighted suggestion")
+        self.btn_make_rule.clicked.connect(self._on_make_rule_clicked)
+        footer.addWidget(self.btn_make_rule)
+
+        footer.addStretch(1)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        footer.addWidget(btn_close)
+        root.addLayout(footer)
+
+        self.reload()
+
+    def reload(self) -> None:
+        learner = self.service.get_route_learner()
+        summary = get_ai_model_summary(self.service.db, self.service.paths.data_dir, learner=learner)
+        self.lbl_model_pill.setText(
+            f"{summary['sample_count']} moves · {summary['folder_count']} folders · {summary['vocab_size']} words"
+        )
+
+        cfg = self.service.config
+        min_conf = max(0.50, min(0.95, float(cfg.ai_min_confidence) / 100.0))
+
+        watch_dir = self.service.watch_root
+        files: list[Path] = []
+        if watch_dir.is_dir():
+            files = [
+                p
+                for p in sorted(watch_dir.iterdir(), key=lambda x: x.name.lower())
+                if p.is_file() and not p.name.startswith(".")
+            ][:25]
+
+        self.tbl_predictions.setRowCount(len(files))
+        for idx, fp in enumerate(files):
+            cand = candidate_from_path(fp, lazy_zone=True)
+            dec = evaluate(cand, cfg)
+            pred = learner.predict_folder(
+                fp.name,
+                source_url=cand.ensure_source_url(),
+                ext=fp.suffix,
+                min_confidence=min_conf,
+            )
+            self.tbl_predictions.setItem(idx, 0, QTableWidgetItem(fp.name))
+            if pred is not None:
+                dest_txt = pred.destination.replace("\\", "/")
+                conf_txt = f"{int(round(pred.confidence * 100))}%"
+                why_txt = ", ".join(pred.top_reasons) or "Learned move history"
+                col = QColor("#64D2FF")
+            elif dec.match_type != "fallback":
+                dest_txt = f"(Deterministic: {dec.matched_rule or dec.match_type})"
+                conf_txt = "—"
+                why_txt = dec.reason
+                col = QColor("#8E8E93")
+            else:
+                dest_txt = "Need more samples"
+                conf_txt = "—"
+                why_txt = "Move or sort a few similar files to teach this pattern"
+                col = QColor("#636366")
+            dest_item = QTableWidgetItem(dest_txt)
+            dest_item.setForeground(col)
+            conf_item = QTableWidgetItem(conf_txt)
+            conf_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.tbl_predictions.setItem(idx, 1, dest_item)
+            self.tbl_predictions.setItem(idx, 2, conf_item)
+            self.tbl_predictions.setItem(idx, 3, QTableWidgetItem(why_txt))
+
+        self.list_suggestions.clear()
+        suggestions = get_rule_suggestions(cfg, self.service.paths.data_dir)
+        if suggestions:
+            for sugg in suggestions:
+                item = QListWidgetItem(f"{sugg['summary']}  →  {sugg['destination']}")
+                item.setData(Qt.ItemDataRole.UserRole, sugg)
+                self.list_suggestions.addItem(item)
+            self.list_suggestions.setCurrentRow(0)
+        else:
+            empty = QListWidgetItem(
+                "No pending suggestions yet — manual moves or Chrome re-routes will surface new patterns here."
+            )
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.list_suggestions.addItem(empty)
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        cur = self.list_suggestions.currentItem()
+        has_sugg = cur is not None and isinstance(cur.data(Qt.ItemDataRole.UserRole), dict)
+        self.btn_make_rule.setEnabled(has_sugg)
+
+    def _on_make_rule_clicked(self) -> None:
+        cur = self.list_suggestions.currentItem()
+        if cur is None:
+            return
+        sugg = cur.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(sugg, dict):
+            return
+        created = False
+        if self._on_create_rule is not None:
+            created = bool(self._on_create_rule(sugg))
+        else:
+            dlg = RuleEditorDialog(_draft_rule_from_suggestion(sugg), parent=self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                cfg = copy.deepcopy(self.service.config)
+                cfg.rules.append(dlg.build_rule())
+                self.service.update_config(cfg)
+                created = True
+        if created:
+            self.reload()
+
+    def reset_memory(self, *, confirm: bool = True) -> bool:
+        if not _confirm_clear_ai_memory(self, self.service.paths.data_dir, confirm=confirm):
+            return False
+        if self._on_reset_memory is not None:
+            self._on_reset_memory()
+        self.reload()
+        return True
+
+
 class MainWindow(QMainWindow):
     """Unified, Apple-clean Download Sorter control window."""
 
@@ -1392,7 +1644,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._confetti = ConfettiOverlayWidget(self)
-        self.setWindowTitle("Download Sorter")
+        self.setWindowTitle(f"Download Sorter v{__version__}")
         self.resize(1100, 760)
         self.setStyleSheet(STYLESHEET)
 
@@ -1430,9 +1682,17 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root_layout.addWidget(self.tabs, 1)
 
+        footer_row = QHBoxLayout()
+        footer_row.setContentsMargins(0, 0, 0, 0)
+        footer_row.setSpacing(10)
         self.lbl_footer = QLabel("")
         self.lbl_footer.setObjectName("MutedText")
-        root_layout.addWidget(self.lbl_footer)
+        self.lbl_footer_version = QLabel(f"v{__version__}")
+        self.lbl_footer_version.setStyleSheet("color: #8E8E93; font-size: 11px; font-weight: 600;")
+        self.lbl_footer_version.setToolTip(f"Download Sorter v{__version__}")
+        footer_row.addWidget(self.lbl_footer, 1)
+        footer_row.addWidget(self.lbl_footer_version)
+        root_layout.addLayout(footer_row)
 
         self.moves_received.connect(self._on_background_moves_received)
         self.refresh_all()
@@ -1462,6 +1722,14 @@ class MainWindow(QMainWindow):
         brand_top.setSpacing(8)
         title = QLabel("Download Sorter")
         title.setObjectName("AppTitle")
+        self.lbl_version_badge = QLabel(f"v{__version__}")
+        self.lbl_version_badge.setObjectName("VersionBadge")
+        self.lbl_version_badge.setToolTip(f"Download Sorter v{__version__}")
+        self.lbl_version_badge.setStyleSheet(
+            "color: #64D2FF; background-color: rgba(10, 132, 255, 0.16); "
+            "border: 1px solid rgba(100, 210, 255, 0.38); border-radius: 6px; "
+            "padding: 1px 7px; font-size: 11px; font-weight: 700;"
+        )
         self.lbl_status_dot = QLabel("●")
         self.lbl_status_dot.setStyleSheet("color: #30D158; font-size: 11px;")
         self.lbl_status_badge = _make_badge("WATCHER ACTIVE", "success")
@@ -1469,6 +1737,7 @@ class MainWindow(QMainWindow):
         # button say the same thing.
         self.lbl_status_badge.setMinimumWidth(1)
         brand_top.addWidget(title)
+        brand_top.addWidget(self.lbl_version_badge)
         brand_top.addWidget(self.lbl_status_dot)
         brand_top.addWidget(self.lbl_status_badge)
         brand_top.addStretch(1)
@@ -2278,7 +2547,89 @@ class MainWindow(QMainWindow):
         layout.addWidget(card_chrome)
 
         # ------------------------------------------------------------------
-        # Card 5: Windows, Updates & Backup
+        # Card 5: Experimental AI Features
+        # ------------------------------------------------------------------
+        self.lbl_ai_badge = _make_badge("EXPERIMENTAL", "primary")
+        card_ai = SettingCard(
+            "Experimental AI Features",
+            "100% offline statistical machine learning (Naive Bayes & TF-IDF) trained on your own sorting history.",
+            header_right_widget=self.lbl_ai_badge,
+        )
+
+        self.chk_ai_smart_hints = MacToggle()
+        self.chk_ai_smart_hints.toggled.connect(lambda _c: self._sync_ai_badge_preview())
+        card_ai.add_row(
+            SettingRow(
+                "AI Smart Route Hints",
+                "Show explainable folder predictions from filename words and source websites in previews, Rule Tester, and Chrome.",
+                controls=self.chk_ai_smart_hints,
+            )
+        )
+
+        self.chk_ai_auto_route = MacToggle()
+        self.chk_ai_auto_route.toggled.connect(lambda _c: self._sync_ai_badge_preview())
+        card_ai.add_row(
+            SettingRow(
+                "AI Auto-Route Unmatched Files",
+                "Automatically sort files that would land in 'Other' into the AI-predicted folder when confidence meets your threshold.",
+                controls=self.chk_ai_auto_route,
+                badge_text="Experimental",
+                badge_variant="cyan",
+            )
+        )
+
+        self.spin_ai_confidence = QSpinBox()
+        self.spin_ai_confidence.setRange(50, 95)
+        self.spin_ai_confidence.setSingleStep(5)
+        self.spin_ai_confidence.setSuffix("%")
+        self.spin_ai_confidence.setFixedWidth(96)
+        self.spin_ai_confidence.setToolTip(
+            "Minimum local AI confidence (50%-95%) required before showing hints or auto-routing unmatched files"
+        )
+        self.chk_ai_scan_keywords = MacToggle()
+        self.chk_ai_scan_keywords.setToolTip(
+            "Use cross-folder TF-IDF token ranking when scanning existing folders in Folder Architecture"
+        )
+        card_ai.add_row(
+            SettingRow(
+                "Confidence Threshold / Smart Scan",
+                "Minimum match confidence (%) for AI routes, plus toggle for TF-IDF smart scan keywords.",
+                controls=[self.spin_ai_confidence, self.chk_ai_scan_keywords],
+                compact=True,
+            )
+        )
+
+        self.btn_ai_insights = InteractiveRibbonBtn(
+            "AI Insights...",
+            make_vector_icon("bolt", "#64D2FF", 14),
+        )
+        self.btn_ai_insights.setToolTip(
+            "Inspect local offline AI folder predictions, learned words, and rule suggestions"
+        )
+        self.btn_ai_insights.clicked.connect(self.open_ai_insights_dialog)
+
+        self.btn_ai_reset = InteractiveRibbonBtn(
+            "Reset AI",
+            make_vector_icon("refresh", "#F5F5F7", 14),
+        )
+        self.btn_ai_reset.setObjectName("GhostButton")
+        self.btn_ai_reset.setToolTip(
+            "Clear learned local AI route history without changing your Custom Rules or files"
+        )
+        self.btn_ai_reset.clicked.connect(lambda: self._on_reset_ai_clicked(confirm=True))
+        card_ai.add_row(
+            SettingRow(
+                "Local AI Model & Insights",
+                "Inspect offline predictions or reset locally learned route patterns.",
+                controls=[self.btn_ai_insights, self.btn_ai_reset],
+                compact=True,
+            ),
+            with_divider=False,
+        )
+        layout.addWidget(card_ai)
+
+        # ------------------------------------------------------------------
+        # Card 6: Windows, Updates & Backup
         # ------------------------------------------------------------------
         card_sys = SettingCard(
             "System, Updates & Backup",
@@ -2850,23 +3201,12 @@ class MainWindow(QMainWindow):
         btn = self.btn_rule_suggestion_compact
         menu.exec(btn.mapToGlobal(QPoint(0, btn.height())))
 
-    def _accept_rule_suggestion(self) -> None:
-        sugg = self._current_suggestion
-        if sugg is None:
-            return
-        host = str(sugg.get("host") or "")
-        ext = str(sugg.get("ext") or "")
-        draft = Rule(
-            id="",
-            name=f"Files from {host}" if host else f"{ext.lstrip('.').upper()} files",
-            destination=str(sugg["destination"]),
-            domains=[host] if host else [],
-            extensions=[ext] if ext and not host else [],
-        )
+    def _accept_rule_suggestion_dict(self, sugg: dict[str, Any]) -> bool:
+        draft = _draft_rule_from_suggestion(sugg)
         dlg = RuleEditorDialog(draft, parent=self)
         dlg.setWindowTitle("Make a Rule From What You Did")
         if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
+            return False
         cfg = copy.deepcopy(self.service.config)
         # Added last, after your own rules, so a learned rule never jumps ahead of them.
         cfg.rules.append(dlg.build_rule())
@@ -2874,6 +3214,13 @@ class MainWindow(QMainWindow):
         last = len(self.service.config.rules) - 1
         self.tbl_rules.selectRow(last)
         flash_rows(self.tbl_rules, [last], "#0A84FF")
+        return True
+
+    def _accept_rule_suggestion(self) -> None:
+        sugg = self._current_suggestion
+        if sugg is None:
+            return
+        self._accept_rule_suggestion_dict(sugg)
 
     def _dismiss_rule_suggestion(self) -> None:
         sugg = self._current_suggestion
@@ -2916,7 +3263,54 @@ class MainWindow(QMainWindow):
         self.chk_zip_keep_original.setEnabled(bool(cfg.auto_unzip_all))
         self.chk_startup.setChecked(is_startup_enabled())
         self.chk_context_menu.setChecked(is_context_menu_enabled())
+        self.chk_ai_smart_hints.setChecked(bool(cfg.ai_smart_hints_enabled))
+        self.chk_ai_auto_route.setChecked(bool(cfg.ai_auto_route_fallback))
+        self.spin_ai_confidence.setValue(max(50, min(95, int(cfg.ai_min_confidence))))
+        self.chk_ai_scan_keywords.setChecked(bool(cfg.ai_smart_scan_keywords))
+        self._sync_ai_badge_preview()
         self._refresh_chrome_status()
+
+    def _sync_ai_badge_preview(self) -> None:
+        if not hasattr(self, "lbl_ai_badge"):
+            return
+        hints_on = self.chk_ai_smart_hints.isChecked()
+        auto_on = self.chk_ai_auto_route.isChecked()
+        self.spin_ai_confidence.setEnabled(hints_on or auto_on)
+        if auto_on:
+            self.lbl_ai_badge.setText("AUTO-ROUTE ON")
+            self.lbl_ai_badge.setProperty("variant", "success")
+        elif hints_on:
+            self.lbl_ai_badge.setText("EXPERIMENTAL · ON")
+            self.lbl_ai_badge.setProperty("variant", "primary")
+        else:
+            self.lbl_ai_badge.setText("OFF")
+            self.lbl_ai_badge.setProperty("variant", "neutral")
+        _refresh_style(self.lbl_ai_badge)
+
+    def open_ai_insights_dialog(self) -> ExperimentalAIInsightsDialog:
+        """Open the local Experimental AI Insights dialog."""
+        dlg = ExperimentalAIInsightsDialog(
+            self.service,
+            on_create_rule=self._accept_rule_suggestion_dict,
+            on_reset_memory=self._after_ai_memory_reset,
+            parent=self,
+        )
+        dlg.exec()
+        return dlg
+
+    def _after_ai_memory_reset(self) -> None:
+        self._refresh_rule_suggestion()
+        self._update_live_tester()
+        self._start_snapshot()
+
+    def _on_reset_ai_clicked(self, *, confirm: bool = True) -> bool:
+        if not _confirm_clear_ai_memory(self, self.service.paths.data_dir, confirm=confirm):
+            return False
+        self._after_ai_memory_reset()
+        msg = "Cleared local Experimental AI memory."
+        self.banner.show_message(msg, kind="info")
+        self.lbl_footer.setText(msg)
+        return True
 
     def _refresh_chrome_status(self) -> None:
         if not hasattr(self, "lbl_chrome_status"):
@@ -3377,6 +3771,7 @@ class MainWindow(QMainWindow):
             or summary_msg.startswith("Scanned ")
             or summary_msg.startswith("Loaded ")
             or summary_msg.startswith("Restored ")
+            or (summary_msg.startswith("Removed ") and "moved " not in summary_msg)
         ):
             self.banner.show_message(summary_msg, kind="info")
         elif summary_msg.startswith("Undid"):
@@ -3527,6 +3922,10 @@ class MainWindow(QMainWindow):
         cfg.hold_3mf_days = int(self.spin_hold_days.value())
         cfg.auto_unzip_all = self.chk_auto_unzip_all.isChecked()
         cfg.zip_keep_original = self.chk_zip_keep_original.isChecked()
+        cfg.ai_smart_hints_enabled = self.chk_ai_smart_hints.isChecked()
+        cfg.ai_auto_route_fallback = self.chk_ai_auto_route.isChecked()
+        cfg.ai_min_confidence = int(self.spin_ai_confidence.value())
+        cfg.ai_smart_scan_keywords = self.chk_ai_scan_keywords.isChecked()
         self._commit_config(cfg)
 
         warnings: list[str] = []
@@ -3777,7 +4176,10 @@ class MainWindow(QMainWindow):
             self.open_walkthrough()
 
     def showEvent(self, event) -> None:
+        was_spontaneous = event.spontaneous() if event is not None else False
         super().showEvent(event)
+        if not was_spontaneous:
+            play_window_open_animation(self)
         if (
             not self._first_run_prompted
             and not self.service.config.tutorial_completed

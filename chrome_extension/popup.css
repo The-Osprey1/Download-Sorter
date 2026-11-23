@@ -240,7 +240,7 @@ body {
 /* --- Quick Actions Grid --- */
 .quick-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 6px;
 }
 
@@ -450,6 +450,13 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 0;
+  cursor: pointer;
+  transition: border-color 140ms var(--ease-out-cubic), background-color 140ms var(--ease-out-cubic);
+}
+
+.dest-badge:hover {
+  border-color: var(--accent-cyan);
+  background: rgba(90, 200, 250, 0.22);
 }
 
 .item-actions {
@@ -547,6 +554,13 @@ body {
 .site-test-info {
   min-width: 0;
   flex: 1;
+}
+
+.site-test-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
 }
 
 .site-test-host {

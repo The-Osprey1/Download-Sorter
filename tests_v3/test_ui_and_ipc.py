@@ -641,6 +641,10 @@ def test_top_to_bottom_architecture_and_auto_create_basic(v3_qapp, app_paths: Ap
     canvas = win.arch_tab.canvas
     assert 0 in canvas._tier_band_rects
     assert 1 in canvas._tier_band_rects
+    # Expand a Tier 1 parent folder to reveal its Tier 2 band
+    t1_parent = next(n for n in win.arch_tab._arch.nodes_in_tier(1) if win.arch_tab._arch.children_of(n.id))
+    canvas.select_node(t1_parent.id)
+    v3_qapp.processEvents()
     assert 2 in canvas._tier_band_rects
     assert canvas._tier_band_rects[0].top() < canvas._tier_band_rects[1].top() < canvas._tier_band_rects[2].top()
 

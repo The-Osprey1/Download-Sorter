@@ -43,6 +43,13 @@
         <span>Open App</span>
       </button>
 
+      <button type="button" class="btn-action" id="btn-sort-now">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M8.5 1.8L3.8 9H8L7.5 14.2L12.2 7H8L8.5 1.8Z" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/>
+        </svg>
+        <span id="sort-now-label">Sort Now</span>
+      </button>
+
       <button type="button" class="btn-action" id="btn-pause" aria-pressed="false">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <rect x="4" y="3" width="2.6" height="10" rx="1" fill="currentColor"/>
@@ -64,7 +71,12 @@
         <div class="site-test-host" id="site-test-host">Current Tab</div>
         <div class="site-test-result" id="site-test-result">Click Test to preview site routing</div>
       </div>
-      <button type="button" class="btn-item" id="btn-test-site">Test Site</button>
+      <div class="site-test-actions">
+        <select class="move-select" id="site-route-select" title="Always route downloads from this site to a folder" disabled>
+          <option value="">Pin site...</option>
+        </select>
+        <button type="button" class="btn-item" id="btn-test-site">Test Site</button>
+      </div>
     </section>
 
     <section class="recent-section">

@@ -221,3 +221,58 @@ def test_tab_url_fallback_tokens_and_new_native_actions(app_paths: AppPaths) -> 
     # undo_last runs cleanly even with no moves
     undo_resp = chrome_bridge.undo_last_from_chrome(app_paths, try_ipc=False)
     assert undo_resp["ok"] is True
+
+
+def test_chrome_v12_sort_now_reveal_recent_moves_test_tab_and_host_validation(
+    app_paths: AppPaths, monkeypatch  # noqa: ANN001
+) -> None:
+    cfg = Config.with_starter_defaults()
+    save_config(cfg, app_paths)
+
+    # 1. Manifest target existence check
+    manifest_path = chrome_bridge.chrome_manifest_path(app_paths.data_dir)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    missing_target = app_paths.data_dir / "missing_cli.exe"
+    manifest_path.write_text(json.dumps({"path": str(missing_target)}), encoding="utf-8")
+    assert chrome_bridge._manifest_target_exists(manifest_path) is False
+
+    real_target = app_paths.data_dir / "real_cli.exe"
+    real_target.write_bytes(b"stub")
+    manifest_path.write_text(json.dumps({"path": str(real_target)}), encoding="utf-8")
+    assert chrome_bridge._manifest_target_exists(manifest_path) is True
+
+    # 2. sort_now action moves top-level files when invoked from Chrome popup
+    (app_paths.downloads_dir / "chrome_sort_test.pdf").write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(chrome_bridge, "send_ipc_command", lambda *a, **k: None)
+    sort_resp = chrome_bridge.handle_native_request({"action": "sort_now"}, app_paths)
+    assert sort_resp["ok"] is True
+    assert sort_resp["moved_count"] >= 1
+
+    # 3. recent_moves returns moves from StateDB
+    recent_resp = chrome_bridge.handle_native_request({"action": "recent_moves", "limit": 5}, app_paths)
+    assert recent_resp["ok"] is True
+    assert any(m["filename"] == "chrome_sort_test.pdf" for m in recent_resp["moves"])
+
+    # 4. reveal_file resolves files inside Downloads and blocks escapes
+    first_move = next(m for m in recent_resp["moves"] if m["filename"] == "chrome_sort_test.pdf")
+    rev_ok = chrome_bridge.reveal_chrome_file(
+        {"full_path": first_move["full_path"]},
+        app_paths,
+        launch=False,
+    )
+    assert rev_ok["ok"] is True
+    assert rev_ok["is_dir"] is False
+
+    outside = app_paths.data_dir / "secret.txt"
+    outside.write_text("nope", encoding="utf-8")
+    rev_bad = chrome_bridge.reveal_chrome_file({"full_path": str(outside)}, app_paths, launch=False)
+    assert rev_bad["ok"] is False
+
+    # 5. test_tab includes has_domain_rule & smart_hint fields
+    tab_resp = chrome_bridge.handle_native_request(
+        {"action": "test_tab", "tabUrl": "https://example.org/docs", "tabTitle": "Docs"},
+        app_paths,
+    )
+    assert tab_resp["ok"] is True
+    assert "has_domain_rule" in tab_resp
+    assert "smart_hint" in tab_resp

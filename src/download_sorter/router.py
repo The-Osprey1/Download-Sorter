@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from functools import lru_cache
+import os
 from pathlib import Path
 import re
+import stat
 import time
+from typing import Any
 import unicodedata
 from urllib.parse import urlparse
 import zipfile
@@ -30,7 +34,7 @@ _UNSPACED_SCRIPT_RANGES: tuple[tuple[int, int], ...] = (
     (0x20000, 0x2FA1F),  # Han extensions B and later
 )
 _COPY_SUFFIX_RE = re.compile(r"(?:\s*-\s*copy)?(?:\s*\(\d{1,3}\))+$|\s*-\s*copy$", re.IGNORECASE)
-_GENERIC_SNIFF_EXTS = {"", ".bin", ".tmp", ".dat", ".jfif", ".download"}
+_GENERIC_SNIFF_EXTS = {"", ".bin", ".dat", ".jfif"}
 
 try:
     from PIL import ExifTags as _PilExifTags, Image as _PilImage
@@ -66,11 +70,11 @@ _MIME_BY_EXT: dict[str, str] = {
 
 def sniff_magic_extension(path: Path | None) -> str:
     """Detect common file extensions from magic bytes and ZIP container structure."""
-    if path is None or not path.is_file():
+    if path is None:
         return ""
     try:
         with path.open("rb") as fh:
-            head = fh.read(2048)
+            head = fh.read(512)
     except OSError:
         return ""
     if not head:
@@ -97,7 +101,15 @@ def sniff_magic_extension(path: Path | None) -> str:
         if head[8:12] == b"qt  ":
             return ".mov"
         return ".mp4"
-    if head.startswith(b"ID3") or (len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
+    if head.startswith(b"ID3") or (
+        len(head) >= 4
+        and head[0] == 0xFF
+        and (head[1] & 0xE0) == 0xE0
+        and (head[1] & 0x18) != 0x08  # MPEG version bits: 01 is reserved
+        and (head[1] & 0x06) == 0x02  # Layer bits: 01 is Layer III (MP3)
+        and (head[2] & 0xF0) not in (0x00, 0xF0)  # bitrate index 0000=free, 1111=bad
+        and (head[2] & 0x0C) != 0x0C  # sample rate index 11 is reserved
+    ):
         return ".mp3"
     if head.startswith(b"fLaC"):
         return ".flac"
@@ -186,18 +198,33 @@ class FileCandidate:
     content_preview: str = ""
     size_bytes: int | None = None
     age_days: float | None = None
+    _lazy_zone: bool = field(default=False, repr=False, compare=False)
+
+    def ensure_source_url(self) -> str:
+        """Resolve and cache ``Zone.Identifier`` URL on first demand when lazy."""
+        if not self.source_url and self._lazy_zone and self.path is not None:
+            url = read_zone_url(self.path)
+            object.__setattr__(self, "source_url", url)
+            object.__setattr__(self, "_lazy_zone", False)
+        return self.source_url
 
     @property
     def extension(self) -> str:
-        return Path(self.filename).suffix.lower()
+        base = self.filename
+        if "/" in base or "\\" in base:
+            base = os.path.basename(base)
+        return os.path.splitext(base)[1].lower()
 
     @property
     def stem(self) -> str:
-        return Path(self.filename).stem
+        base = self.filename
+        if "/" in base or "\\" in base:
+            base = os.path.basename(base)
+        return os.path.splitext(base)[0]
 
     @property
     def host(self) -> str:
-        return extract_host(self.source_url)
+        return extract_host(self.ensure_source_url())
 
     @property
     def tab_host(self) -> str:
@@ -262,8 +289,10 @@ def read_zone_url(path: Path) -> str:
     return host_url or referrer_url
 
 
-def candidate_from_path(path: Path) -> FileCandidate:
-    """Build a ``FileCandidate`` from a real path on disk, including Zone.Identifier."""
+def candidate_from_path(path: Path, *, lazy_zone: bool = False) -> FileCandidate:
+    """Build a ``FileCandidate`` from a real path on disk, optionally deferring ``Zone.Identifier``."""
+    if lazy_zone:
+        return FileCandidate(filename=path.name, path=path, source_url="", _lazy_zone=True)
     return FileCandidate(filename=path.name, path=path, source_url=read_zone_url(path))
 
 
@@ -333,6 +362,7 @@ def _split_word_edges(text: str) -> str:
     return "".join(out)
 
 
+@lru_cache(maxsize=8192)
 def _normalize_tokens(text: str) -> str:
     """Split CamelCase, letter/digit runs and separators into lowercase space-separated tokens.
 
@@ -344,7 +374,10 @@ def _normalize_tokens(text: str) -> str:
     return " ".join(_NON_WORD_RE.sub(" ", folded).split())
 
 
+@lru_cache(maxsize=4096)
 def _has_unspaced_script(text: str) -> bool:
+    if text.isascii():
+        return False
     for ch in text:
         code = ord(ch)
         if any(lo <= code <= hi for lo, hi in _UNSPACED_SCRIPT_RANGES):
@@ -354,7 +387,8 @@ def _has_unspaced_script(text: str) -> bool:
 
 def normalize_filename_tokens(filename: str, *, expand_aliases: bool = True) -> list[str]:
     """Return normalized lowercase tokens for a filename, stripping copy suffixes."""
-    raw_stem = Path(filename).stem
+    base = os.path.basename(filename) if ("/" in filename or "\\" in filename) else filename
+    raw_stem = os.path.splitext(base)[0]
     cleaned_stem = _COPY_SUFFIX_RE.sub("", raw_stem).strip() or raw_stem
     tokens = _normalize_tokens(cleaned_stem).split()
     if not expand_aliases or not tokens:
@@ -393,38 +427,121 @@ def _joins_consecutive_tokens(compact_kw: str, tokens: list[str]) -> bool:
     return False
 
 
+@lru_cache(maxsize=8192)
+def _prepared_stem(filename: str) -> tuple[str, str, str, tuple[str, ...], frozenset[str]]:
+    base = os.path.basename(filename) if ("/" in filename or "\\" in filename) else filename
+    raw_stem = os.path.splitext(base)[0]
+    cleaned_stem = _COPY_SUFFIX_RE.sub("", raw_stem).strip() or raw_stem
+    norm_name = _normalize_tokens(cleaned_stem)
+    if not norm_name:
+        return ("", "", "", (), frozenset())
+    return (
+        norm_name,
+        f" {norm_name} ",
+        norm_name.replace(" ", ""),
+        tuple(norm_name.split()),
+        frozenset(normalize_filename_tokens(filename, expand_aliases=True)),
+    )
+
+
+_SAFE_COMPOUND_SUFFIXES: frozenset[str] = frozenset(
+    {
+        "logo",
+        "logos",
+        "screenshot",
+        "screenshots",
+        "wallpaper",
+        "wallpapers",
+        "thumbnail",
+        "thumbnails",
+        "favicon",
+        "figurine",
+        "figurines",
+        "miniature",
+        "miniatures",
+        "diorama",
+        "dioramas",
+        "datasheet",
+        "datasheets",
+        "syllabus",
+        "syllabi",
+        "homework",
+        "invoice",
+        "invoices",
+        "receipt",
+        "receipts",
+    }
+)
+
+
+def _plural_variants(word: str) -> tuple[str, ...]:
+    """Return regular English singular/plural counterparts for words of length >= 4."""
+    if len(word) < 4 or not word.isascii() or not word.isalpha():
+        return ()
+    variants: list[str] = []
+    # Forward plural
+    if word.endswith(("s", "x", "z", "ch", "sh")):
+        variants.append(word + "es")
+    elif word.endswith("y") and word[-2] not in "aeiou":
+        variants.append(word[:-1] + "ies")
+    else:
+        variants.append(word + "s")
+    # Reverse singular
+    if word.endswith("ies") and len(word) >= 5:
+        variants.append(word[:-3] + "y")
+    elif word.endswith(("ses", "xes", "zes", "ches", "shes")) and len(word) >= 5:
+        variants.append(word[:-2])
+    elif word.endswith("s") and not word.endswith("ss") and len(word) >= 5:
+        variants.append(word[:-1])
+    return tuple(variants)
+
+
+def _token_in_expanded_set(token: str, expanded_name_set: frozenset[str]) -> bool:
+    if token in expanded_name_set:
+        return True
+    for var in _plural_variants(token):
+        if var in expanded_name_set:
+            return True
+    return False
+
+
 def _keyword_matches(filename: str, keyword: str) -> bool:
     norm_kw = _normalize_tokens(keyword)
     if not norm_kw:
         return False
-    raw_stem = Path(filename).stem
-    cleaned_stem = _COPY_SUFFIX_RE.sub("", raw_stem).strip() or raw_stem
-    norm_name = _normalize_tokens(cleaned_stem)
+    norm_name, padded_name, compact_name, name_tokens, expanded_name_set = _prepared_stem(filename)
     if not norm_name:
         return False
     # Match whole phrase boundaries so e.g. 'cv' does not match inside 'opencv' or 'csv'.
-    padded_name = f" {norm_name} "
     padded_kw = f" {norm_kw} "
     if padded_kw in padded_name:
         return True
     kw_tokens = norm_kw.split()
-    name_tokens = norm_name.split()
     # Also support compacted token matching ('lecturenotes' vs 'lecture_notes'), but
     # only along word edges: a plain substring check made 'resume' match 'presumed'.
     compact_kw = norm_kw.replace(" ", "")
-    if len(compact_kw) >= 4 and _joins_consecutive_tokens(compact_kw, name_tokens):
+    if len(compact_kw) >= 4 and _joins_consecutive_tokens(compact_kw, list(name_tokens)):
         return True
     # Chinese, Japanese, Thai and similar languages don't separate words with spaces,
     # so "請求書" has to be found inside "2026年4月請求書".
-    if _has_unspaced_script(compact_kw) and compact_kw in norm_name.replace(" ", ""):
+    if _has_unspaced_script(compact_kw) and compact_kw in compact_name:
         return True
     # Support unordered multi-word token matching (e.g. "tax return" -> "2026_Return_Tax"),
-    # including academic/engineering alias expansion (e.g. "hw" <-> "homework").
+    # including academic/engineering alias expansion (e.g. "hw" <-> "homework")
+    # and regular singular/plural forms (e.g. "icon" <-> "icons").
     # The filename's tokens are widened by one step (abbreviation <-> full word);
     # the keyword is not, so two words that only share an abbreviation never match.
-    expanded_name_set = set(normalize_filename_tokens(filename, expand_aliases=True))
-    if kw_tokens and all(t in expanded_name_set for t in kw_tokens):
+    if kw_tokens and all(_token_in_expanded_set(t, expanded_name_set) for t in kw_tokens):
         return True
+    # Unambiguous compound suffixes (e.g. 'makerworldlogo' -> 'logo', 'appwallpaper' -> 'wallpaper')
+    # without matching ambiguous substrings like 'icon' inside 'silicon' or 'mini' inside 'a1mini'.
+    if len(kw_tokens) == 1:
+        suffix_cands = [v for v in (norm_kw, *_plural_variants(norm_kw)) if v in _SAFE_COMPOUND_SUFFIXES]
+        if suffix_cands:
+            for tok in name_tokens:
+                for suf in suffix_cands:
+                    if len(tok) > len(suf) + 1 and tok.endswith(suf):
+                        return True
     # High-threshold fuzzy match for longer single-word keywords (>= 5 chars) to tolerate minor typos.
     # The first letter has to agree: a typo there is rare, and without it 'lecture'
     # matched 'electure' and similar words that merely contain the keyword.
@@ -479,13 +596,16 @@ def _domain_matches(host: str, domains: list[str]) -> str | None:
 def _candidate_stats(candidate: FileCandidate) -> tuple[int | None, float | None]:
     size = candidate.size_bytes
     age = candidate.age_days
-    if (size is None or age is None) and candidate.path is not None and candidate.path.is_file():
+    if (size is None or age is None) and candidate.path is not None:
         try:
             st = candidate.path.stat()
-            if size is None:
-                size = st.st_size
-            if age is None:
-                age = max(0.0, (time.time() - st.st_mtime) / 86400.0)
+            if stat.S_ISREG(st.st_mode):
+                if size is None:
+                    size = st.st_size
+                    object.__setattr__(candidate, "size_bytes", size)
+                if age is None:
+                    age = max(0.0, (time.time() - st.st_mtime) / 86400.0)
+                    object.__setattr__(candidate, "age_days", age)
         except OSError:
             pass
     return size, age
@@ -510,17 +630,18 @@ def _evaluate_rule(
         if _keyword_matches(candidate.stem, ex_kw):
             return False, f"Excluded by negative keyword '{ex_kw}'"
 
-    # File size & age bounds
-    size_bytes, age_days = _candidate_stats(candidate)
-    if rule.min_size_mb > 0:
-        if size_bytes is None or size_bytes < rule.min_size_mb * 1024 * 1024:
-            return False, f"File smaller than {rule.min_size_mb:g} MB"
-    if rule.max_size_mb > 0:
-        if size_bytes is None or size_bytes > rule.max_size_mb * 1024 * 1024:
-            return False, f"File larger than {rule.max_size_mb:g} MB"
-    if rule.min_age_days > 0:
-        if age_days is None or age_days < rule.min_age_days:
-            return False, f"File newer than {rule.min_age_days} day(s)"
+    # File size & age bounds (stat only when constrained by the rule)
+    if rule.min_size_mb > 0 or rule.max_size_mb > 0 or rule.min_age_days > 0:
+        size_bytes, age_days = _candidate_stats(candidate)
+        if rule.min_size_mb > 0:
+            if size_bytes is None or size_bytes < rule.min_size_mb * 1024 * 1024:
+                return False, f"File smaller than {rule.min_size_mb:g} MB"
+        if rule.max_size_mb > 0:
+            if size_bytes is None or size_bytes > rule.max_size_mb * 1024 * 1024:
+                return False, f"File larger than {rule.max_size_mb:g} MB"
+        if rule.min_age_days > 0:
+            if age_days is None or age_days < rule.min_age_days:
+                return False, f"File newer than {rule.min_age_days} day(s)"
 
     has_positive = bool(rule.keywords or rule.domains or rule.content_keywords or rule.regex_pattern)
     if not has_positive:
@@ -594,15 +715,30 @@ _SCREENSHOT_RESOLUTIONS: frozenset[tuple[int, int]] = frozenset({
     (1366, 768),
     (1920, 1080),
     (1920, 1200),
+    (2560, 1080),
     (2560, 1440),
     (2560, 1600),
     (3440, 1440),
     (3840, 2160),
+    (1080, 2340),
+    (1080, 2400),
     (1170, 2532),
+    (1179, 2556),
+    (1206, 2622),
+    (1284, 2778),
     (1290, 2796),
+    (1320, 2868),
+    (1440, 3120),
 })
-_CAD_SOFTWARE_HINTS = ("blender", "fusion", "solidworks", "keyshot", "bambu", "prusa", "orca", "cura", "rhino")
-_SCREENSHOT_HINTS = ("screenshot", "screen shot", "snip", "greenshot", "sharex", "flameshot", "lightshot")
+_CAD_SOFTWARE_HINTS = ("blender", "fusion", "solidworks", "keyshot", "rhino", "cinema 4d", "v-ray", "maya", "3ds max")
+_CAD_FILENAME_HINTS = ("render", "keyshot", "blender")
+_SCREENSHOT_HINTS = ("screenshot", "screen shot", "snip", "snipping", "greenshot", "sharex", "flameshot", "lightshot", "cleanshot", "gyazo")
+_IMAGE_METADATA_EXTS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".heic", ".tif", ".tiff"})
+_IMAGE_META_TARGET_NAMES: dict[str, frozenset[str]] = {
+    "screenshot": frozenset({"screenshots", "screenshot", "screen captures"}),
+    "camera_photo": frozenset({"photos", "photos & camera", "camera", "camera photos"}),
+    "cad_render": frozenset({"renders", "cad renders", "3d renders"}),
+}
 
 
 @dataclass(frozen=True)
@@ -650,9 +786,12 @@ def _inner_rule_match(
     if outer is not None and any(_keyword_matches(outer.stem, ex) for ex in rule.exclude_keywords):
         return False, "", "", {}
     size, age = outer_stats
+    outer_src = ""
+    if outer is not None:
+        outer_src = outer.ensure_source_url() if rule.domains else outer.source_url
     inner = FileCandidate(
         filename=inner_name,
-        source_url=outer.source_url if outer else "",
+        source_url=outer_src,
         tab_url=outer.tab_url if outer else "",
         tab_title=outer.tab_title if outer else "",
         size_bytes=size,
@@ -824,7 +963,9 @@ def inspect_image_metadata(path: Path | None) -> ImageInspection:
             suggested_destination="Images/Photos",
         )
 
-    if any(h in sw_lower or h in name_lower for h in _CAD_SOFTWARE_HINTS):
+    if any(h in sw_lower for h in _CAD_SOFTWARE_HINTS) or any(
+        _keyword_matches(path.stem, h) for h in _CAD_FILENAME_HINTS
+    ):
         return ImageInspection(
             available=True,
             category="cad_render",
@@ -837,7 +978,7 @@ def inspect_image_metadata(path: Path | None) -> ImageInspection:
 
     if (
         any(h in sw_lower or h in name_lower for h in _SCREENSHOT_HINTS)
-        or (fmt in {"PNG", "WEBP", "BMP"} and (width, height) in _SCREENSHOT_RESOLUTIONS)
+        or (fmt in {"PNG", "BMP"} and (width, height) in _SCREENSHOT_RESOLUTIONS)
     ):
         return ImageInspection(
             available=True,
@@ -860,40 +1001,92 @@ def inspect_image_metadata(path: Path | None) -> ImageInspection:
     )
 
 
-def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
+def _find_image_metadata_rule(
+    config: Config,
+    category: str,
+    ext: str,
+    candidate: FileCandidate,
+) -> Rule | None:
+    """Return an enabled rule targeting the detected image metadata category, if configured."""
+    target_names = _IMAGE_META_TARGET_NAMES.get(category)
+    if not target_names:
+        return None
+    for rule in config.rules:
+        if not rule.enabled:
+            continue
+        leaf = rule.destination.replace("/", "\\").rsplit("\\", 1)[-1].strip().lower()
+        if leaf not in target_names:
+            continue
+        if rule.extensions and ext not in rule.extensions:
+            continue
+        if any(_keyword_matches(candidate.stem, ex) for ex in rule.exclude_keywords):
+            continue
+        return rule
+    return None
+
+
+def _has_any_image_metadata_rule(config: Config, ext: str) -> bool:
+    all_targets = set().union(*_IMAGE_META_TARGET_NAMES.values())
+    for rule in config.rules:
+        if not rule.enabled:
+            continue
+        leaf = rule.destination.replace("/", "\\").rsplit("\\", 1)[-1].strip().lower()
+        if leaf in all_targets and (not rule.extensions or ext in rule.extensions):
+            return True
+    return False
+
+
+def evaluate(candidate: FileCandidate, config: Config, *, include_trace: bool = True) -> RouteDecision:
     """Evaluate a file candidate strictly top-to-bottom in 4 predictable steps."""
     trace: list[RouteStep] = []
     name_lower = candidate.filename.lower()
-    ext = candidate.extension
+    raw_ext = candidate.extension
+
+    # Step 1: Ignore Guard (check raw filename & extension BEFORE magic-byte sniffing so
+    # active/temp downloads like .tmp or .download are never hijacked by header bytes)
+    if candidate.filename.startswith("."):
+        if include_trace:
+            trace.append(RouteStep("Ignore Guard", "Hidden dotfile", True, f"'{candidate.filename}' starts with '.'"))
+        return RouteDecision("ignore", None, "Hidden file ignored", "Ignore Guard", "ignore", trace)
+    if name_lower in config.ignore_names:
+        if include_trace:
+            trace.append(RouteStep("Ignore Guard", "System file", True, f"'{candidate.filename}' is in ignore_names"))
+        return RouteDecision("ignore", None, f"Ignored system file '{candidate.filename}'", "Ignore Guard", "ignore", trace)
+    if raw_ext in config.ignore_extensions:
+        if include_trace:
+            trace.append(RouteStep("Ignore Guard", "Incomplete download", True, f"Extension '{raw_ext}' is in ignore_extensions"))
+        return RouteDecision("ignore", None, f"Ignored partial download '{raw_ext}'", "Ignore Guard", "ignore", trace)
+    if include_trace:
+        trace.append(RouteStep("Ignore Guard", "Check active/system files", False, "Passed ignore checks"))
+
+    ext = raw_ext
     if ext in (_GENERIC_SNIFF_EXTS | {".zip"}) and candidate.path is not None:
         sniffed = sniff_magic_extension(candidate.path)
         if sniffed:
             ext = sniffed
 
-    # Step 1: Ignore Guard
-    if candidate.filename.startswith("."):
-        trace.append(RouteStep("Ignore Guard", "Hidden dotfile", True, f"'{candidate.filename}' starts with '.'"))
-        return RouteDecision("ignore", None, "Hidden file ignored", "Ignore Guard", "ignore", trace)
-    if name_lower in config.ignore_names:
-        trace.append(RouteStep("Ignore Guard", "System file", True, f"'{candidate.filename}' is in ignore_names"))
-        return RouteDecision("ignore", None, f"Ignored system file '{candidate.filename}'", "Ignore Guard", "ignore", trace)
-    if ext in config.ignore_extensions:
-        trace.append(RouteStep("Ignore Guard", "Incomplete download", True, f"Extension '{ext}' is in ignore_extensions"))
-        return RouteDecision("ignore", None, f"Ignored partial download '{ext}'", "Ignore Guard", "ignore", trace)
-    trace.append(RouteStep("Ignore Guard", "Check active/system files", False, "Passed ignore checks"))
+    def _get_effective_host(*templates: str) -> str:
+        if any("{host}" in t for t in templates):
+            return candidate.host or candidate.tab_host
+        return ""
 
-    effective_host = candidate.host or candidate.tab_host
-    exif_dt = read_exif_date(candidate.path) if candidate.path is not None else None
+    def _get_exif_dt(*templates: str) -> Any:
+        if any("{exif_" in t for t in templates) and candidate.path is not None:
+            return read_exif_date(candidate.path)
+        return None
 
     # Step 2: Explicit Ordered User Rules (First Match Wins)
     for idx, rule in enumerate(config.rules, start=1):
         captured: dict[str, str] = {}
         ok, detail = _evaluate_rule(rule, candidate, effective_ext=ext, captured_groups=captured)
-        trace.append(RouteStep("User Rules", f"#{idx} {rule.name}", ok, detail))
+        if include_trace:
+            trace.append(RouteStep("User Rules", f"#{idx} {rule.name}", ok, detail))
         if ok:
             raw_dest = rule.destination
             for gk, gv in captured.items():
                 raw_dest = raw_dest.replace(f"{{{gk}}}", gv)
+            effective_host = _get_effective_host(raw_dest, rule.rename_template)
+            exif_dt = _get_exif_dt(raw_dest, rule.rename_template)
             expanded_dest = resolve_destination_tokens(
                 raw_dest,
                 host=effective_host,
@@ -917,8 +1110,8 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
                 trace=trace,
             )
 
-    # Step 2.5: Pre-routing ZIP content peek (when no explicit User Rule matched)
-    if ext == ".zip" and candidate.path is not None:
+    # Step 2.5: Optional pre-routing ZIP content peek (when enabled and no explicit User Rule matched)
+    if config.zip_peek_enabled and ext == ".zip" and candidate.path is not None:
         zip_peek = peek_zip_contents(
             candidate.path,
             rules=config.rules,
@@ -926,13 +1119,14 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
             category_map=config.category_map,
         )
         if zip_peek.has_path_traversal:
-            trace.append(RouteStep("Zip Peek", "Security check", True, "Zip Slip path traversal detected; falling back to archive rule"))
+            if include_trace:
+                trace.append(RouteStep("Zip Peek", "Security check", True, "Zip Slip path traversal detected; falling back to archive rule"))
         elif zip_peek.valid and zip_peek.suggested_destination:
             expanded_zip_dest = resolve_destination_tokens(
                 zip_peek.suggested_destination,
-                host=effective_host,
+                host=_get_effective_host(zip_peek.suggested_destination),
                 ext=ext,
-                exif_date=exif_dt,
+                exif_date=_get_exif_dt(zip_peek.suggested_destination),
             )
             folder = Path(to_relative_dest(expanded_zip_dest))
             dest_rel = folder / candidate.filename
@@ -941,7 +1135,8 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
                 if zip_peek.matched_rule
                 else f"Archive contents ({zip_peek.dominant_category}) -> '{folder}'"
             )
-            trace.append(RouteStep("Zip Peek", "Archive inspection", True, detail))
+            if include_trace:
+                trace.append(RouteStep("Zip Peek", "Archive inspection", True, detail))
             return RouteDecision(
                 action="move",
                 relative_dest=dest_rel,
@@ -951,6 +1146,54 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
                 trace=trace,
             )
 
+    # Step 2.6: Image Metadata Assist (EXIF camera/render/screenshot & lossless screen resolutions)
+    # Only runs when the user has a matching Screenshots / Photos / Renders rule configured,
+    # and always after explicit keyword rules so e.g. 4K logos still go to Logos & Icons.
+    if (
+        ext in _IMAGE_METADATA_EXTS
+        and candidate.path is not None
+        and _has_any_image_metadata_rule(config, ext)
+    ):
+        img_info = inspect_image_metadata(candidate.path)
+        if img_info.available and img_info.category in _IMAGE_META_TARGET_NAMES:
+            meta_rule = _find_image_metadata_rule(config, img_info.category, ext, candidate)
+            if meta_rule is not None:
+                effective_host = _get_effective_host(meta_rule.destination, meta_rule.rename_template)
+                exif_dt = _get_exif_dt(meta_rule.destination, meta_rule.rename_template)
+                expanded_meta_dest = resolve_destination_tokens(
+                    meta_rule.destination,
+                    host=effective_host,
+                    ext=ext,
+                    exif_date=exif_dt,
+                )
+                target_name = apply_rename_template(
+                    meta_rule.rename_template,
+                    candidate.filename,
+                    host=effective_host,
+                    exif_date=exif_dt,
+                )
+                folder = Path(to_relative_dest(expanded_meta_dest))
+                dest_rel = folder / target_name
+                if img_info.category == "screenshot":
+                    meta_detail = (
+                        f"Screenshot metadata ({img_info.software or f'{img_info.width}x{img_info.height} {img_info.image_format}'})"
+                    )
+                elif img_info.category == "camera_photo":
+                    cam_label = f"{img_info.camera_make} {img_info.camera_model}".strip()
+                    meta_detail = f"Camera EXIF ({cam_label})"
+                else:
+                    meta_detail = f"CAD render metadata ({img_info.software or img_info.category})"
+                if include_trace:
+                    trace.append(RouteStep("Image Metadata", meta_rule.name, True, meta_detail))
+                return RouteDecision(
+                    action="move",
+                    relative_dest=dest_rel,
+                    reason=f"Rule '{meta_rule.name}': {meta_detail}",
+                    matched_rule=meta_rule.name,
+                    match_type="rule",
+                    trace=trace,
+                )
+
     # Step 3: Category Extension Map (+ optional Type Subfolder)
     category = config.category_map.get(ext)
     if category:
@@ -958,14 +1201,15 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
         raw_cat = str(Path(category) / sub) if sub else category
         expanded_cat = resolve_destination_tokens(
             raw_cat,
-            host=effective_host,
+            host=_get_effective_host(raw_cat),
             ext=ext,
-            exif_date=exif_dt,
+            exif_date=_get_exif_dt(raw_cat),
         )
         folder = Path(to_relative_dest(expanded_cat))
         dest_rel = folder / candidate.filename
         detail = f"Extension '{ext}' -> '{folder}'"
-        trace.append(RouteStep("Category Map", "Extension lookup", True, detail))
+        if include_trace:
+            trace.append(RouteStep("Category Map", "Extension lookup", True, detail))
         return RouteDecision(
             action="move",
             relative_dest=dest_rel,
@@ -974,11 +1218,13 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
             match_type="extension",
             trace=trace,
         )
-    trace.append(RouteStep("Category Map", "Extension lookup", False, f"No category mapping for '{ext or '(none)'}'"))
+    if include_trace:
+        trace.append(RouteStep("Category Map", "Extension lookup", False, f"No category mapping for '{ext or '(none)'}'"))
 
     # Step 4: Fallback
     if config.fallback_mode == "leave":
-        trace.append(RouteStep("Fallback", "Unmatched behavior", True, "Configured to leave unmatched files in Downloads"))
+        if include_trace:
+            trace.append(RouteStep("Fallback", "Unmatched behavior", True, "Configured to leave unmatched files in Downloads"))
         return RouteDecision(
             action="leave",
             relative_dest=None,
@@ -990,12 +1236,13 @@ def evaluate(candidate: FileCandidate, config: Config) -> RouteDecision:
 
     expanded_default = resolve_destination_tokens(
         config.default_folder,
-        host=effective_host,
+        host=_get_effective_host(config.default_folder),
         ext=ext,
-        exif_date=exif_dt,
+        exif_date=_get_exif_dt(config.default_folder),
     )
     dest_rel = Path(to_relative_dest(expanded_default)) / candidate.filename
-    trace.append(RouteStep("Fallback", "Default folder", True, f"Routed to '{config.default_folder}'"))
+    if include_trace:
+        trace.append(RouteStep("Fallback", "Default folder", True, f"Routed to '{config.default_folder}'"))
     return RouteDecision(
         action="move",
         relative_dest=dest_rel,

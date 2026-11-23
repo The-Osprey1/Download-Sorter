@@ -22,12 +22,6 @@ PALETTE = {
 
 STYLESHEET = """
 /* === GLOBAL RESET & CANVAS (macOS Sequoia Dark Mode) === */
-QMainWindow, QDialog {
-    background-color: #111113;
-    color: #F5F5F7;
-    font-family: "SF Pro Display", "SF Pro Text", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-    font-size: 13px;
-}
 QWidget {
     background-color: transparent;
     color: #F5F5F7;
@@ -35,6 +29,12 @@ QWidget {
     font-size: 13px;
     selection-background-color: #0A84FF;
     selection-color: #FFFFFF;
+}
+QMainWindow, QDialog {
+    background-color: #111113;
+    color: #F5F5F7;
+    font-family: "SF Pro Display", "SF Pro Text", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
 }
 QDialog#WalkthroughModal {
     background-color: transparent;

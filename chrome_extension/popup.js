@@ -5,12 +5,15 @@ const statusText = document.getElementById("status-text");
 const detail = document.getElementById("status-detail");
 const routingToggle = document.getElementById("routing-toggle");
 const btnOpen = document.getElementById("btn-open");
+const btnSortNow = document.getElementById("btn-sort-now");
+const sortNowLabel = document.getElementById("sort-now-label");
 const btnPause = document.getElementById("btn-pause");
 const pauseLabel = document.getElementById("pause-label");
 const btnUndo = document.getElementById("btn-undo");
 const undoLabel = document.getElementById("undo-label");
 const btnClear = document.getElementById("btn-clear");
 const btnTestSite = document.getElementById("btn-test-site");
+const siteRouteSelect = document.getElementById("site-route-select");
 const siteTestHost = document.getElementById("site-test-host");
 const siteTestResult = document.getElementById("site-test-result");
 const recentList = document.getElementById("recent-list");
@@ -18,6 +21,7 @@ const recentCount = document.getElementById("recent-count");
 const recentEmpty = document.getElementById("recent-empty");
 
 let cachedFolders = [];
+let currentTabHost = "";
 
 function sendNative(msg) {
   return new Promise((resolve) => {
@@ -49,12 +53,14 @@ async function refreshStatus() {
   if (!resp || !resp.ok) {
     appRoot.dataset.routing = "error";
     statusText.textContent = "Disconnected";
+    btnSortNow.disabled = true;
     btnPause.disabled = true;
     btnUndo.disabled = true;
     detail.textContent = "Open Settings in Download Sorter and click 'Install / Repair Chrome Host'.";
     return;
   }
 
+  btnSortNow.disabled = false;
   btnPause.disabled = false;
   btnUndo.disabled = false;
   btnPause.setAttribute("aria-pressed", String(Boolean(resp.paused)));
@@ -77,8 +83,24 @@ async function refreshStatus() {
 
 async function refreshRecent() {
   const { recentRoutes = [] } = await chrome.storage.local.get({ recentRoutes: [] });
+  const localList = Array.isArray(recentRoutes) ? recentRoutes : [];
+
+  const nativeResp = await sendNative({ action: "recent_moves", limit: 6 });
+  const nativeList = nativeResp && nativeResp.ok && Array.isArray(nativeResp.moves) ? nativeResp.moves : [];
+
+  const merged = [];
+  const seen = new Set();
+  for (const entry of [...localList, ...nativeList]) {
+    if (!entry || !entry.filename) continue;
+    const key = String(entry.full_path || entry.relative_dest || entry.filename).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(entry);
+  }
+  merged.sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
+
   recentList.innerHTML = "";
-  const list = Array.isArray(recentRoutes) ? recentRoutes.slice(0, 6) : [];
+  const list = merged.slice(0, 6);
   recentCount.textContent = String(list.length);
 
   if (list.length === 0) {
@@ -119,7 +141,15 @@ async function refreshRecent() {
     const dest = document.createElement("span");
     dest.className = "dest-badge";
     dest.textContent = item.folder || "Downloads";
-    dest.title = `Routed to ${item.folder || "Downloads"}`;
+    dest.title = `Open ${item.folder || "Downloads"} in File Explorer`;
+    dest.addEventListener("click", async () => {
+      await sendNative({
+        action: "reveal_file",
+        folder: item.folder || "",
+        relative_dest: item.relative_dest || "",
+        full_path: item.full_path || ""
+      });
+    });
 
     top.appendChild(fileWrap);
     if (item.is_duplicate) {
@@ -136,13 +166,21 @@ async function refreshRecent() {
       const actions = document.createElement("div");
       actions.className = "item-actions";
 
-      if (typeof item.downloadId === "number") {
+      if (typeof item.downloadId === "number" || item.full_path || item.relative_dest) {
         const btnReveal = document.createElement("button");
         btnReveal.type = "button";
         btnReveal.className = "btn-item";
         btnReveal.textContent = "Reveal";
-        btnReveal.addEventListener("click", () => {
-          chrome.downloads.show(item.downloadId);
+        btnReveal.addEventListener("click", async () => {
+          const rev = await sendNative({
+            action: "reveal_file",
+            full_path: item.full_path || "",
+            relative_dest: item.relative_dest || "",
+            folder: item.folder || ""
+          });
+          if ((!rev || !rev.ok) && typeof item.downloadId === "number") {
+            chrome.downloads.show(item.downloadId);
+          }
         });
         actions.appendChild(btnReveal);
       }
@@ -238,6 +276,24 @@ btnOpen.addEventListener("click", async () => {
   window.close();
 });
 
+btnSortNow.addEventListener("click", async () => {
+  btnSortNow.disabled = true;
+  sortNowLabel.textContent = "Sorting...";
+  const res = await sendNative({ action: "sort_now" });
+  if (res && res.ok) {
+    const n = Number(res.moved_count || 0);
+    sortNowLabel.textContent = n > 0 ? `Sorted ${n} ✓` : "Clean ✓";
+    await refreshRecent();
+    await refreshStatus();
+  } else {
+    sortNowLabel.textContent = "Failed";
+  }
+  setTimeout(() => {
+    sortNowLabel.textContent = "Sort Now";
+    btnSortNow.disabled = false;
+  }, 1300);
+});
+
 btnPause.addEventListener("click", async () => {
   btnPause.disabled = true;
   await sendNative({ action: "toggle_pause" });
@@ -260,14 +316,49 @@ btnClear.addEventListener("click", async () => {
   await refreshRecent();
 });
 
+function populateSiteRouteSelect(smartHint = "") {
+  siteRouteSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = smartHint ? `Pin (Hint: ${smartHint})` : "Pin site...";
+  siteRouteSelect.appendChild(placeholder);
+  for (const f of cachedFolders) {
+    const opt = document.createElement("option");
+    opt.value = f;
+    opt.textContent = f;
+    siteRouteSelect.appendChild(opt);
+  }
+  siteRouteSelect.disabled = !currentTabHost || cachedFolders.length === 0;
+}
+
+siteRouteSelect.addEventListener("change", async () => {
+  const target = siteRouteSelect.value;
+  if (!target || !currentTabHost) return;
+  siteRouteSelect.disabled = true;
+  const res = await sendNative({
+    action: "create_rule",
+    domain: currentTabHost,
+    destination: target
+  });
+  if (res && res.ok) {
+    chrome.runtime.sendMessage({ type: "refresh_menus" });
+    await refreshStatus();
+    await runSiteTest();
+  }
+  siteRouteSelect.value = "";
+  siteRouteSelect.disabled = !currentTabHost || cachedFolders.length === 0;
+});
+
 async function runSiteTest() {
   if (!chrome.tabs || !chrome.tabs.query) return;
   try {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tab = tabs && tabs[0] ? tabs[0] : null;
     if (!tab || !tab.url) {
+      currentTabHost = "";
       siteTestHost.textContent = "Current Tab";
       siteTestResult.textContent = "No active webpage URL";
+      populateSiteRouteSelect();
       return;
     }
     const resp = await sendNative({
@@ -276,13 +367,20 @@ async function runSiteTest() {
       tabTitle: tab.title || ""
     });
     if (resp && resp.ok) {
-      siteTestHost.textContent = resp.host || "Current Tab";
-      siteTestResult.textContent = `${resp.matched_rule} → ${resp.folder}`;
+      currentTabHost = resp.host || "";
+      siteTestHost.textContent = currentTabHost || "Current Tab";
+      const hintTxt = !resp.has_domain_rule && resp.smart_hint ? ` · Hint: ${resp.smart_hint}` : "";
+      siteTestResult.textContent = `${resp.matched_rule} → ${resp.folder}${hintTxt}`;
+      populateSiteRouteSelect(resp.smart_hint || "");
     } else {
+      currentTabHost = "";
       siteTestResult.textContent = "Host disconnected";
+      populateSiteRouteSelect();
     }
   } catch {
+    currentTabHost = "";
     siteTestResult.textContent = "Unable to inspect tab";
+    populateSiteRouteSelect();
   }
 }
 

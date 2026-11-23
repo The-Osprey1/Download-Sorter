@@ -83,7 +83,7 @@ def test_zipped_folders_are_not_mistaken_for_office_or_3mf_files(app_paths: AppP
 # Zip contents are routed with the user's own file-type folders
 # ---------------------------------------------------------------------------
 def test_zip_contents_use_the_users_type_folders(app_paths: AppPaths) -> None:
-    cfg = Config()
+    cfg = Config(zip_peek_enabled=True)
     cfg.category_map[".pdf"] = "Papers"
     cfg.category_map[".stl"] = "Printing"
 
@@ -95,7 +95,7 @@ def test_zip_contents_use_the_users_type_folders(app_paths: AppPaths) -> None:
 
 
 def test_zip_contents_without_a_users_folder_stay_with_archives(app_paths: AppPaths) -> None:
-    cfg = Config()
+    cfg = Config(zip_peek_enabled=True)
     for ext in (".jpg", ".png"):
         cfg.category_map.pop(ext, None)
     photos = _zip(app_paths.downloads_dir / "photos.zip", {"a.jpg": "x", "b.png": "x"})
@@ -117,7 +117,7 @@ def _resume_rule(**overrides) -> Rule:
 
 
 def test_inner_keyword_match_routes_the_zip(app_paths: AppPaths) -> None:
-    cfg = Config(rules=[_resume_rule(extensions=[".pdf"])])
+    cfg = Config(rules=[_resume_rule(extensions=[".pdf"])], zip_peek_enabled=True)
     z = _zip(app_paths.downloads_dir / "applications.zip", {"docs/resume.pdf": "x"})
     decision = evaluate(FileCandidate(filename="applications.zip", path=z), cfg)
     assert decision.matched_rule == "Career"
@@ -138,7 +138,7 @@ def test_inner_keyword_match_routes_the_zip(app_paths: AppPaths) -> None:
 def test_inner_keyword_match_respects_the_rules_other_conditions(
     app_paths: AppPaths, zip_name: str, rule_overrides: dict
 ) -> None:
-    cfg = Config(rules=[_resume_rule(**rule_overrides)])
+    cfg = Config(rules=[_resume_rule(**rule_overrides)], zip_peek_enabled=True)
     z = _zip(app_paths.downloads_dir / zip_name, {"resume_draft.pdf": "x"})
     decision = evaluate(FileCandidate(filename=zip_name, path=z), cfg)
     assert decision.matched_rule != "Career"

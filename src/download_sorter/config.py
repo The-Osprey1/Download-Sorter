@@ -53,6 +53,7 @@ DEFAULT_CATEGORY_MAP: dict[str, str] = {
     ".tex": "Documents",
     ".bib": "Documents",
     ".pkpass": "Documents",
+    ".ics": "Documents",
     # 3D Models
     ".stl": "3D Models",
     ".3mf": "3D Models",
@@ -62,11 +63,16 @@ DEFAULT_CATEGORY_MAP: dict[str, str] = {
     ".blend": "3D Models",
     ".glb": "3D Models",
     ".gltf": "3D Models",
+    ".chitubox": "3D Models",
+    ".lys": "3D Models",
+    ".bbsflmt": "3D Models",
     ".gcode": "3D Models",
     ".bgcode": "3D Models",
     ".nc": "3D Models",
     ".tap": "3D Models",
     ".ngc": "3D Models",
+    ".cnc": "3D Models",
+    ".mks": "3D Models",
     ".gco": "3D Models",
     ".g": "3D Models",
     # CAD
@@ -83,12 +89,17 @@ DEFAULT_CATEGORY_MAP: dict[str, str] = {
     ".slddrw": "CAD",
     ".dwg": "CAD",
     ".dxf": "CAD",
+    ".lac": "CAD",
+    ".lbrn": "CAD",
+    ".lbrn2": "CAD",
     # Images
     ".jpg": "Images",
     ".jpeg": "Images",
+    ".jfif": "Images",
     ".png": "Images",
     ".gif": "Images",
     ".webp": "Images",
+    ".avif": "Images",
     ".heic": "Images",
     ".svg": "Images",
     ".bmp": "Images",
@@ -107,15 +118,19 @@ DEFAULT_CATEGORY_MAP: dict[str, str] = {
     ".flv": "Videos",
     ".wmv": "Videos",
     ".m4v": "Videos",
+    ".3gp": "Videos",
     # Audio
     ".mp3": "Audio",
     ".wav": "Audio",
     ".flac": "Audio",
     ".m4a": "Audio",
+    ".m4r": "Audio",
     ".aac": "Audio",
     ".ogg": "Audio",
     ".aiff": "Audio",
     ".wma": "Audio",
+    ".mid": "Audio",
+    ".midi": "Audio",
     # Archives
     ".zip": "Archives",
     ".rar": "Archives",
@@ -130,8 +145,13 @@ DEFAULT_CATEGORY_MAP: dict[str, str] = {
     ".exe": "Installers",
     ".msi": "Installers",
     ".msix": "Installers",
+    ".appx": "Installers",
+    ".dmg": "Installers",
+    ".pkg": "Installers",
     # Code & Data
     ".py": "Code",
+    ".m": "Code",
+    ".uf2": "Code",
     ".js": "Code",
     ".ts": "Code",
     ".jsx": "Code",
@@ -142,6 +162,7 @@ DEFAULT_CATEGORY_MAP: dict[str, str] = {
     ".c": "Code",
     ".h": "Code",
     ".hpp": "Code",
+    ".ino": "Code",
     ".cs": "Code",
     ".java": "Code",
     ".rs": "Code",
@@ -190,6 +211,8 @@ DEFAULT_TYPE_SUBFOLDERS: dict[str, str] = {
     ".nc": "CNC",
     ".tap": "CNC",
     ".ngc": "CNC",
+    ".cnc": "CNC",
+    ".mks": "CNC",
     ".gco": "G-Code",
     ".g": "G-Code",
     ".blend": "Meshes",
@@ -210,11 +233,16 @@ DEFAULT_TYPE_SUBFOLDERS: dict[str, str] = {
     ".iam": "Inventor",
     ".dwg": "2D Drawings",
     ".dxf": "2D Drawings",
+    ".lac": "2D Drawings",
+    ".lbrn": "2D Drawings",
+    ".lbrn2": "2D Drawings",
     ".jpg": "JPG",
     ".jpeg": "JPG",
+    ".jfif": "JPG",
     ".png": "PNG",
     ".gif": "GIF",
     ".webp": "WEBP",
+    ".avif": "WEBP",
     ".heic": "HEIC",
     ".svg": "SVG",
     ".bmp": "BMP",
@@ -500,6 +528,7 @@ class Config:
     hold_3mf_days: int = 7
     auto_unzip_all: bool = False
     zip_keep_original: bool = True
+    zip_peek_enabled: bool = False
     quick_switcher_enabled: bool = True
     quick_switcher_timeout_seconds: float = 300.0
     quick_switcher_3d_timeout_hours: float = 12.0
@@ -511,6 +540,11 @@ class Config:
     check_for_updates: bool = True
     # Folder Architecture and Sort Lower Tiers. Setups saved before this existed keep them.
     show_advanced_tools: bool = True
+    # Experimental 100% offline statistical AI features (Naive Bayes & TF-IDF).
+    ai_smart_hints_enabled: bool = True
+    ai_auto_route_fallback: bool = False
+    ai_min_confidence: int = 65
+    ai_smart_scan_keywords: bool = True
     rules: list[Rule] = field(default_factory=list)
     category_map: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_CATEGORY_MAP))
     type_subfolders: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TYPE_SUBFOLDERS))
@@ -530,6 +564,7 @@ class Config:
         self.ribbon_timeout_seconds = max(1.0, min(60.0, float(self.ribbon_timeout_seconds)))
         self.hold_3mf_enabled = bool(self.hold_3mf_enabled)
         self.hold_3mf_days = max(1, int(self.hold_3mf_days))
+        self.zip_peek_enabled = bool(self.zip_peek_enabled)
         self.quick_switcher_enabled = bool(self.quick_switcher_enabled)
         self.quick_switcher_timeout_seconds = max(5.0, float(self.quick_switcher_timeout_seconds))
         self.quick_switcher_3d_timeout_hours = max(0.1, float(self.quick_switcher_3d_timeout_hours))
@@ -542,15 +577,20 @@ class Config:
         self.tutorial_completed = bool(self.tutorial_completed)
         self.check_for_updates = bool(self.check_for_updates)
         self.show_advanced_tools = bool(self.show_advanced_tools)
+        self.ai_smart_hints_enabled = bool(self.ai_smart_hints_enabled)
+        self.ai_auto_route_fallback = bool(self.ai_auto_route_fallback)
+        self.ai_min_confidence = max(50, min(95, int(self.ai_min_confidence or 65)))
+        self.ai_smart_scan_keywords = bool(self.ai_smart_scan_keywords)
         self.rules = [r if isinstance(r, Rule) else Rule.from_dict(r) for r in self.rules]
         self.category_map = {
             (k if k.startswith(".") else "." + k).lower(): str(v).strip().replace("/", "\\").strip("\\")
             for k, v in (self.category_map or DEFAULT_CATEGORY_MAP).items()
             if str(k).strip() and str(v).strip()
         }
+        raw_type_subs = DEFAULT_TYPE_SUBFOLDERS if self.type_subfolders is None else self.type_subfolders
         self.type_subfolders = {
             (k if k.startswith(".") else "." + k).lower(): str(v).strip().replace("/", "\\").strip("\\")
-            for k, v in (self.type_subfolders or DEFAULT_TYPE_SUBFOLDERS).items()
+            for k, v in raw_type_subs.items()
             if str(k).strip() and str(v).strip()
         }
         self._keep_destinations_inside_watch_folder()
@@ -645,6 +685,7 @@ class Config:
             "hold_3mf_days": self.hold_3mf_days,
             "auto_unzip_all": self.auto_unzip_all,
             "zip_keep_original": self.zip_keep_original,
+            "zip_peek_enabled": self.zip_peek_enabled,
             "quick_switcher_enabled": self.quick_switcher_enabled,
             "quick_switcher_timeout_seconds": self.quick_switcher_timeout_seconds,
             "quick_switcher_3d_timeout_hours": self.quick_switcher_3d_timeout_hours,
@@ -655,6 +696,10 @@ class Config:
             "tutorial_completed": self.tutorial_completed,
             "check_for_updates": self.check_for_updates,
             "show_advanced_tools": self.show_advanced_tools,
+            "ai_smart_hints_enabled": self.ai_smart_hints_enabled,
+            "ai_auto_route_fallback": self.ai_auto_route_fallback,
+            "ai_min_confidence": self.ai_min_confidence,
+            "ai_smart_scan_keywords": self.ai_smart_scan_keywords,
             "rules": [r.to_dict() for r in self.rules],
             "category_map": dict(self.category_map),
             "type_subfolders": dict(self.type_subfolders),
@@ -680,6 +725,7 @@ class Config:
             hold_3mf_days=data.get("hold_3mf_days", 7),
             auto_unzip_all=bool(data.get("auto_unzip_all", False)),
             zip_keep_original=bool(data.get("zip_keep_original", True)),
+            zip_peek_enabled=bool(data.get("zip_peek_enabled", False)),
             quick_switcher_enabled=data.get("quick_switcher_enabled", True),
             quick_switcher_timeout_seconds=data.get("quick_switcher_timeout_seconds", 300.0),
             quick_switcher_3d_timeout_hours=data.get("quick_switcher_3d_timeout_hours", 12.0),
@@ -690,9 +736,17 @@ class Config:
             tutorial_completed=data.get("tutorial_completed", False),
             check_for_updates=data.get("check_for_updates", True),
             show_advanced_tools=bool(data.get("show_advanced_tools", True)),
+            ai_smart_hints_enabled=bool(data.get("ai_smart_hints_enabled", True)),
+            ai_auto_route_fallback=bool(data.get("ai_auto_route_fallback", False)),
+            ai_min_confidence=int(data.get("ai_min_confidence", 65) or 65),
+            ai_smart_scan_keywords=bool(data.get("ai_smart_scan_keywords", True)),
             rules=[Rule.from_dict(item) for item in data.get("rules", []) if isinstance(item, dict)],
             category_map=data.get("category_map") or dict(DEFAULT_CATEGORY_MAP),
-            type_subfolders=data.get("type_subfolders") or dict(DEFAULT_TYPE_SUBFOLDERS),
+            type_subfolders=(
+                dict(DEFAULT_TYPE_SUBFOLDERS)
+                if data.get("type_subfolders") is None
+                else data.get("type_subfolders")
+            ),
             ignore_extensions=data.get("ignore_extensions") or list(DEFAULT_IGNORE_EXTENSIONS),
             ignore_names=data.get("ignore_names") or list(DEFAULT_IGNORE_NAMES),
             architecture=data.get("architecture") or {},

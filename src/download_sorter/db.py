@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import contextmanager
 import logging
 import os
 from pathlib import Path
@@ -128,6 +129,7 @@ class StateDB:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._conn: sqlite3.Connection | None = None
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
@@ -139,8 +141,14 @@ class StateDB:
         conn.execute("PRAGMA synchronous = NORMAL;")
         return conn
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        if self._conn is None:
+            self._conn = self._connect()
+        yield self._conn
+
     def _init_schema(self) -> None:
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             conn.executescript(_SCHEMA_SQL)
             columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(moves)")}
             if "status" not in columns:
@@ -166,7 +174,7 @@ class StateDB:
         status: str = STATUS_COMPLETED,
     ) -> int:
         ts = time.time() if moved_at is None else float(moved_at)
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO moves (
@@ -230,7 +238,7 @@ class StateDB:
 
     def complete_move_intent(self, move_id: int, final_dest: str | Path) -> None:
         """Phase 2: the file is at ``final_dest``; the move is now part of history."""
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             conn.execute(
                 "UPDATE moves SET dest_path = ?, status = ? WHERE id = ?",
                 (str(final_dest), STATUS_COMPLETED, int(move_id)),
@@ -239,7 +247,7 @@ class StateDB:
 
     def rollback_move_intent(self, move_id: int) -> None:
         """The move did not happen; keep the row for diagnosis but out of history."""
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             conn.execute(
                 "UPDATE moves SET status = ? WHERE id = ? AND status = ?",
                 (STATUS_ROLLED_BACK, int(move_id), STATUS_PENDING),
@@ -247,7 +255,7 @@ class StateDB:
             conn.commit()
 
     def list_pending_moves(self) -> list[dict[str, Any]]:
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM moves WHERE status = ? ORDER BY id", (STATUS_PENDING,)
             ).fetchall()
@@ -298,28 +306,39 @@ class StateDB:
         """Fold the write-ahead log into state.db (PASSIVE never blocks writers)."""
         mode = "TRUNCATE" if truncate else "PASSIVE"
         try:
-            with self._lock, closing(self._connect()) as conn:
+            with self._lock, self._connection() as conn:
                 conn.execute(f"PRAGMA wal_checkpoint({mode});").fetchall()
         except sqlite3.Error as exc:
             logging.debug("WAL checkpoint (%s) skipped: %s", mode, exc)
 
     def close(self) -> None:
-        """Shutdown hygiene: empty the WAL file and refresh planner statistics.
+        """Shutdown hygiene: empty the WAL file, refresh planner stats, and release connection.
 
-        Connections are opened per call, so the store stays usable afterwards.
+        The persistent handle is reopened lazily if the store is queried again afterwards.
         """
-        try:
-            with self._lock, closing(self._connect()) as conn:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);").fetchall()
-                conn.execute("PRAGMA optimize;").fetchall()
-        except sqlite3.Error as exc:
-            logging.debug("StateDB close hygiene skipped: %s", exc)
+        with self._lock:
+            conn = self._conn
+            try:
+                if conn is None and self.db_path.exists():
+                    conn = self._connect()
+                if conn is not None:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE);").fetchall()
+                    conn.execute("PRAGMA optimize;").fetchall()
+            except sqlite3.Error as exc:
+                logging.debug("StateDB close hygiene skipped: %s", exc)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except sqlite3.Error:
+                        pass
+                self._conn = None
 
     # ------------------------------------------------------------------
     # History queries (only COMPLETED moves are history)
     # ------------------------------------------------------------------
     def list_active_moves(self, limit: int = 200) -> list[dict[str, Any]]:
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM moves
@@ -332,7 +351,7 @@ class StateDB:
             return [dict(r) for r in rows]
 
     def list_batches(self, limit: int = 50) -> list[dict[str, Any]]:
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT
@@ -352,7 +371,7 @@ class StateDB:
             return [dict(r) for r in rows]
 
     def get_batch_moves(self, batch_id: str | None = None) -> list[dict[str, Any]]:
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             target_batch = batch_id
             if not target_batch:
                 latest = conn.execute(
@@ -377,7 +396,7 @@ class StateDB:
             return [dict(r) for r in rows]
 
     def get_move(self, move_id: int) -> dict[str, Any] | None:
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             row = conn.execute("SELECT * FROM moves WHERE id = ?", (int(move_id),)).fetchone()
             return dict(row) if row else None
 
@@ -386,7 +405,7 @@ class StateDB:
             return
         now = time.time()
         placeholders = ",".join("?" for _ in move_ids)
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             conn.execute(
                 f"UPDATE moves SET undone_at = ? WHERE id IN ({placeholders})",
                 [now, *[int(i) for i in move_ids]],
@@ -399,7 +418,7 @@ class StateDB:
             return
         now = time.time()
         placeholders = ",".join("?" for _ in move_ids)
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             conn.execute(
                 f"UPDATE moves SET undone_at = ?, status = ? WHERE id IN ({placeholders})",
                 [now, STATUS_ORPHANED, *[int(i) for i in move_ids]],
@@ -413,7 +432,7 @@ class StateDB:
             return 0
         now = time.time()
         placeholders = ",".join("?" for _ in cleaned)
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             cur = conn.execute(
                 f"""
                 UPDATE moves
@@ -426,7 +445,7 @@ class StateDB:
             return int(cur.rowcount or 0)
 
     def stats(self) -> dict[str, Any]:
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             row = conn.execute(
                 """
                 SELECT
@@ -467,7 +486,7 @@ class StateDB:
     ) -> None:
         norm = str(Path(path).resolve())
         now = time.time()
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO file_hashes (path, size_bytes, mtime_ns, sparse_hash, full_hash, updated_at)
@@ -485,7 +504,7 @@ class StateDB:
 
     def remove_file_hash(self, path: str | Path) -> None:
         norm = str(Path(path).resolve())
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             conn.execute("DELETE FROM file_hashes WHERE path = ?", (norm,))
             conn.commit()
 
@@ -496,7 +515,7 @@ class StateDB:
         exclude_path: str | Path | None = None,
     ) -> list[dict[str, Any]]:
         excl = str(Path(exclude_path).resolve()) if exclude_path is not None else ""
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT path, size_bytes, mtime_ns, sparse_hash, full_hash, updated_at
@@ -508,7 +527,7 @@ class StateDB:
             return [dict(r) for r in rows]
 
     def prune_missing_hashes(self) -> int:
-        with self._lock, closing(self._connect()) as conn:
+        with self._lock, self._connection() as conn:
             rows = conn.execute("SELECT path FROM file_hashes").fetchall()
             missing = [str(r["path"]) for r in rows if not Path(str(r["path"])).exists()]
             if missing:
