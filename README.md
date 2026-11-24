@@ -4,6 +4,7 @@
 
 [![Release](https://img.shields.io/github/v/release/The-Osprey1/Download-Sorter?color=69E6AD&logo=github)](https://github.com/The-Osprey1/Download-Sorter/releases)
 [![CI](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions)
+[![CodeQL](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/codeql.yml/badge.svg)](https://github.com/The-Osprey1/Download-Sorter/actions/workflows/codeql.yml)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-0078D6.svg?logo=windows&logoColor=white)](https://microsoft.com/windows)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -12,6 +13,23 @@
 It watches the folder Windows uses for Downloads, even if you moved it to another drive or OneDrive moved it.
 
 Version 3 is one program with one window. [Coming from 2.x? Read this first.](#coming-from-2x)
+
+![Download Sorter Home window showing live Downloads preview and recent activity](docs/images/home.png)
+
+<details>
+<summary><strong>More screenshots: Folder Architecture &amp; Custom Rules</strong></summary>
+
+<br>
+
+**Folder Architecture** — branch-focused visual folder map with subfolder presets, **Scan Folders**, **Detect Projects**, and **Merge Into**:
+
+![Download Sorter Folder Architecture canvas](docs/images/architecture.png)
+
+**Custom Rules** — priority-ordered rules, one-click **+ Rule Pack** presets, learned move suggestions, and a live filename tester:
+
+![Download Sorter Custom Rules and live filename tester](docs/images/rules.png)
+
+</details>
 
 ---
 
@@ -27,10 +45,10 @@ You need Windows 10 or 11. Nothing else needs to be installed.
 
 ## What it does
 
-- **New downloads are filed a few seconds after they finish.** Half-finished downloads, and files another program still has open, are left alone and tried again later.
-- **Only loose files at the top of Downloads are sorted.** Anything already inside a folder is never touched.
-- **Other folders too, if you like.** Add your Desktop, Screenshots or any folder under Settings > **Also Tidy These Folders**. Each is sorted into folders inside itself; files nothing matches stay put.
-- **Home shows what would happen before it happens.** The preview lists every file in Downloads with where it will go and why. Below it, the list of sorted files has an **Undo** button on every row.
+- **New downloads are filed a few seconds after they finish.** Half-finished downloads (`.crdownload`, `.part`, `.tmp`, `.download`), and files another program still has open, are left alone and tried again later.
+- **Only loose files at the top of Downloads are sorted.** Anything already inside a folder is never touched during automatic sorting.
+- **Other folders too, if you like.** Add your Desktop, Screenshots or any folder under Settings → **Also Tidy These Folders**. Each is sorted into folders inside itself; files nothing matches stay put.
+- **Home shows what would happen before it happens.** The preview lists every file in Downloads with where it will go and why. Below it, **Recent Activity** has an **Undo** button on every row, plus **Search** (`Ctrl+Shift+Space`) and **Detox** (recycles installers older than 30 days).
 - **Files land in folders inside Downloads.** By default a main folder, then a folder for each kind of file:
 
   ```text
@@ -48,26 +66,28 @@ You need Windows 10 or 11. Nothing else needs to be installed.
   ```
 
   To keep everything one level deep, turn off the type subfolders in **Settings**. Unrecognized file types can go to `Other` or stay where they are.
-- **Folder Architecture lets you design the layout** (turn on **Show Advanced Tools** in Settings to see it). Arrange folders top to bottom in tiers, start from **Auto-Create Basic** or the premade folders, add your own folders with rules, then **Apply & Shift Files**. **Undo** and **Return to Defaults** put things back.
-- **Custom Rules send files by name or website.** A rule matches words in the file name, the website the file came from, and optionally only certain file types. Words can be in any language, and accents are optional (`resume` matches `Résumé.pdf`). Rules are checked top to bottom; the first match wins. Type a file name into the tester on that page to see where it would go.
-- **Rule packs** add ready-made rules in one click: School, Job hunting, Bills & receipts, Travel, Contracts and 3D printing. Pick them in the welcome steps or from **+ Rule Pack** on the Custom Rules page.
-- **A new `.3mf` stays in Downloads for 7 days**, so your slicer can still find it. When the days are up it also stays for as long as Bambu Studio, OrcaSlicer, PrusaSlicer or Cura is running (14 days at most). **Move Held .3MF** files them straight away.
+- **Folder Architecture lets you design the layout visually** (turn on **Show Advanced Tools** in Settings to see it). Click any folder to expand its branch (`View: Branch` / `View: All`), add subfolders with pre-filled file types or classifications, **Scan Folders** from your existing Downloads tree, save **Snapshots**, run **Detect Projects...** to group multi-file projects into subfolders, combine folders with **Merge Into...** (`Shift+Drag`), safely evacuate files when removing a folder, and **Apply & Shift Files** with full **Undo**.
+- **Custom Rules send files by name, website, or content.** A rule matches words in the file name, the website the file came from, file types, exclude words, regex patterns, size/age bounds, or words inside PDFs—and can optionally rename files with tokens (`{year}`, `{month}`, `{exif_year}`, `{host}`) or auto-unzip safe `.zip` archives. Words work in any language, and accents are optional (`resume` matches `Résumé.pdf`). Rules are checked top to bottom; the first match wins.
+- **Rule packs & offline smart hints.** Add ready-made rules in one click (**School**, **Job hunting**, **Bills & receipts**, **Travel**, **Contracts**, **3D printing**). Move similar files by hand a few times and Download Sorter offers to turn that pattern into a rule. In Settings, **Experimental AI** adds 100% offline Naive Bayes & TF-IDF route hints, optional confidence-gated auto-routing for unmatched files, and **AI Insights...**.
+- **Smart duplicate handling.** Exact copies (verified by sparse + full SHA-256 hashing) are quarantined to `_Duplicates` instead of overwriting originals, with one-click **Replace Old**, **Delete & Locate Old** (via the Recycle Bin), or **Keep Both** on the notification ribbon and in **Duplicates**.
+- **A new `.3mf` stays in Downloads for 7 days**, so your slicer can still find it. When the days are up it also stays for as long as Bambu Studio, OrcaSlicer, PrusaSlicer or Cura is running (14 days at most), and updates Bambu/Orca `recent_projects` paths when moved. **Move Held .3MF** files them straight away.
+- **Optional Chrome Extension (v1.2).** Load the unpacked companion extension (`Settings` → **Chrome Extension** → `?` **Setup Guide**) for **Sort Downloads Now**, right-click **Save & Sort to**, **Pin site...** rule creation, duplicate badges, and one-click **Reveal**.
 - **A ribbon in the top-right corner tells you what moved**, with **Undo**. Choose how long it stays in Settings; hover to pause it. It stays away while a game, a full-screen video, a presentation or the lock screen is up; the files are still sorted and listed on Home.
-- **Bigger text if you need it.** Download Sorter follows Windows' text size (Settings > Accessibility > Text size), up to 150%, and works with Narrator and other screen readers.
-- **Recent File Insert.** When another program asks you to choose a file to open or upload, a small pill offers the file Download Sorter just filed, so you don't have to go looking for it. It can be turned off in Settings.
+- **Bigger text & screen readers.** Download Sorter follows Windows' text size (Settings → Accessibility → Text size, up to 150%) and labels every button, switch, and input for Narrator, NVDA, and JAWS.
+- **Recent File Insert.** When another program asks you to choose a file to open or upload, a small pill on the right monitor offers the file Download Sorter just filed, so you don't have to go looking for it.
 
 ## How a file's folder is chosen
 
 Every file goes through the same four steps. The first step that gives an answer wins.
 
-1. **Should it be left alone?** Temporary and half-downloaded files (`.crdownload`, `.part`, ...) and ignored names are skipped.
+1. **Should it be left alone?** Temporary and half-downloaded files (`.crdownload`, `.part`, `.tmp`, `.download`, ...) and ignored names are skipped.
 2. **Where did it come from?** Windows records the website a file was downloaded from; rules that name a website are checked against it.
-3. **Your rules**, in the order shown on the Custom Rules page.
-4. **Its file type**, using the built-in list of extensions; otherwise `Other` (or left in place, if you chose that).
+3. **Your rules**, in the order shown on the Custom Rules page (plus image screenshot metadata assist when applicable).
+4. **Its file type**, using the built-in list of extensions (and magic-byte container checks when needed); otherwise optional offline **AI Auto-Route** if enabled, `Other`, or left in place.
 
 Then, before anything moves:
 
-- **Same name already there?** If the two files are identical, the new one goes to `_Duplicates`. If they differ, the new one becomes `name (2).ext`. Nothing is overwritten and nothing is deleted.
+- **Same name or exact copy already there?** If the two files are identical, the new one goes to `_Duplicates`. If they differ, the new one becomes `name (2).ext`. Nothing is overwritten and nothing is deleted.
 - **The move is written to the history first** and marked done afterwards, so a crash or power cut can't lose track of a file.
 
 Check any file name from a command line:
@@ -123,7 +143,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 ## Privacy
 
-- **Your files never leave your PC.** Rules, settings, history and the log all stay in `%LOCALAPPDATA%\download-sorter-v3`.
+- **Your files never leave your PC.** Rules, settings, history, offline route learning (`learned_routes.json`), and the log all stay in `%LOCALAPPDATA%\download-sorter-v3`. All smart hints and Experimental AI features are statistical models computed locally on your machine—never sent to any cloud or external AI service.
 - **One small network request, once a day:** Download Sorter asks GitHub which version is newest, so it can tell you when there's an update. Only the app's name and version are sent. An update is only downloaded when you click **Download and install**, and only from this project's GitHub release page. Turn it off in **Settings**, under "Check for new versions once a day".
 - No accounts, no ads, no tracking.
 
@@ -143,12 +163,12 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 ## Coming from 2.x
 
-Version 3 is a rewrite, and it is deliberately smaller.
+Version 3 is a ground-up single-process PySide6 rewrite.
 
-- **Your rules come with you.** The first time version 3 starts it copies your 2.x word rules, watched folder and .3mf hold setting into its own settings folder (`download-sorter-v3`). Your 2.x settings are left where they were, and **Carry Over v2.8 / Setup...** does the import again whenever you want. Other 2.x settings start from the version 3 defaults.
-- **Files 2.x already sorted stay where they are.** Version 3 only sorts loose files at the top of Downloads.
-- **Back since 3.2:** the Ctrl+Shift+Space search window, rule suggestions from files you move by hand, unzipping downloads, rules that read inside PDFs, old-installer cleanup (**Detox**), and photo folders by year and month.
-- **Still not in 3.x:** project folders and the Projects page, Clean up a folder (remodel), the G-code and MakerWorld checks, and the Desktop sweep. If you rely on one of these, stay on 2.8 for now and [say which](https://github.com/The-Osprey1/Download-Sorter/issues).
+- **Your rules come with you.** The first time version 3 starts it copies your 2.x word rules, watched folder and `.3mf` hold setting into its own settings folder (`download-sorter-v3`). Your 2.x settings are left where they were, and **Carry Over v2.8 / Setup...** does the import again whenever you want. Other 2.x settings start from the version 3 defaults.
+- **Files 2.x already sorted stay where they are.** Version 3 only sorts loose files at the top of Downloads unless you explicitly run **Apply & Shift Files** or **Sort Lower Tiers**.
+- **Back in 3.2–3.6:** the `Ctrl+Shift+Space` search window, rule suggestions from files you move by hand, offline **Experimental AI** route hints, **Detect Projects...** in Folder Architecture, **Also Tidy These Folders** (for Desktop, Screenshots, etc.), safe `.zip` auto-extraction, rules that read inside PDFs, old-installer cleanup (**Detox**), photo folders by year and month, and the Chrome Extension v1.2 bridge.
+- **Different from 2.x:** the standalone 2.x Projects page (use Folder Architecture → **Detect Projects...** instead), Clean up a folder (remodel), and the old G-code/MakerWorld scraping checks are not part of 3.x. If you rely on one of these, stay on 2.8 for now and [open an issue](https://github.com/The-Osprey1/Download-Sorter/issues).
 
 ---
 
@@ -181,7 +201,8 @@ Everything is in `%LOCALAPPDATA%\download-sorter-v3`:
 | File | Contents |
 |---|---|
 | `config.json` | Settings, rules and folder layout (`config.json.bak` is the previous save). |
-| `state.db` | The history of moves, used by Undo (SQLite). |
+| `state.db` | The history of moves and sparse-hash deduplication index, used by Undo (SQLite). |
+| `learned_routes.json` | Local move tallies and statistical Naive Bayes / TF-IDF route hints (resettable in Settings). |
 | `sorter_v3.log` | The log. It starts a new file at 2 MB and keeps two older ones (`.1`, `.2`). |
 | `recent_files.json` | The files Recent File Insert can offer. |
 | `updates\` | A downloaded installer, until it has been installed. |
@@ -192,33 +213,39 @@ Everything is in `%LOCALAPPDATA%\download-sorter-v3`:
 main.py                     entry point for both executables
 about.py                    name and version (the single source of truth)
 src/download_sorter/
-  router.py                 the four routing steps; no file access
-  config.py                 settings, rules, starter templates, 2.x import
-  architecture.py           the folder layout and the rules it produces
+  router.py                 the four routing steps, magic-byte/ZIP/PDF/EXIF checks; no mutations
+  config.py                 settings, rules, starter templates, 2.x carry-over
+  dest.py                   destination path sanitization, dynamic tokens, and rename templates
+  architecture.py           visual Folder Architecture tree, presets, folder scanner, and snapshots
+  project_detect.py         multi-file project clustering for Detect Projects
+  learning.py               manual-move rule suggestions and offline Naive Bayes / TF-IDF learner
   service.py                the folder watcher and the sorting loop
-  fs_ops.py                 safe moves, duplicates, undo, lock and slicer checks
-  db.py                     move history with a two-phase journal
+  fs_ops.py                 safe moves, sparse-hash duplicates, zip-bomb-safe unzip, Detox, undo
+  db.py                     move history with a two-phase SQLite journal
+  chrome_bridge.py          Chrome Native Messaging host and extension manifest registration
   ipc.py                    single-instance commands between copies
-  update_check.py, updater.py   the daily version check and verified download
+  update_check.py, updater.py   the daily version check and SHA-256-verified download
   quiet_time.py             holds ribbons during full-screen apps and presentations
   diagnostics.py            the size-capped log and unexpected-error capture
   quick_switcher.py         Recent File Insert
+  windows_integration.py    Start with Windows and Explorer folder context menu
   cli.py                    the command line
-  ui/                       window, tray, ribbons, background workers, screen-reader names
+  ui/                       window, canvas, tray, ribbons, background workers, accessibility
+chrome_extension/           unpacked Manifest V3 companion Chrome extension (v1.2.0)
 tests_v3/                   the test suite
 build_release.py            builds dist/ (PyInstaller, zip, setup file, checksums)
-installer_builder.py        the single-file setup program
+installer_builder.py        the single-file Windows setup program
 verify_release.py           release preflight
 ```
-
 
 ## Developing
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt pytest pytest-timeout pyinstaller
+.venv\Scripts\python.exe -m pip install -r requirements.txt pytest pytest-timeout pyinstaller ruff
 
 .venv\Scripts\python.exe main.py --simulate          # run from source
+.venv\Scripts\python.exe -m ruff check .             # lint check (runs on GitHub CI)
 .venv\Scripts\python.exe -m pytest tests_v3 -v       # tests
 .venv\Scripts\python.exe build_release.py            # build dist\
 .venv\Scripts\python.exe verify_release.py           # release preflight (versions, CLI, tests, built files)
@@ -228,7 +255,8 @@ A release is made by pushing a `v*` tag: the [release workflow](.github/workflow
 
 ## Contributing & Security
 
-- **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- **Beta testing guide:** see [BETA_TESTING.md](BETA_TESTING.md).
 - **Security & privacy:** see [SECURITY.md](SECURITY.md): no telemetry, local-first, and how to report a problem.
 - **Changelog:** see [CHANGELOG.md](CHANGELOG.md).
 

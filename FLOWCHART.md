@@ -8,7 +8,7 @@ How the configuration is loaded and reloaded. For how a file is sorted, see the 
 
 ## 1. How a file is sorted
 
-The flowchart of how Download Sorter decides where a file goes, and what it does with it, is in the README: [How Download Sorter decides where a file goes](README.md#how-download-sorter-decides-where-a-file-goes). It is kept in one place so it stays correct.
+The four-step routing order of how Download Sorter decides where a file goes, and what it does before moving anything, is in the README: [How a file's folder is chosen](README.md#how-a-files-folder-is-chosen). It is kept in one place so it stays accurate.
 
 ---
 
@@ -19,19 +19,25 @@ flowchart LR
     subgraph AppDataStorage ["%LOCALAPPDATA%\download-sorter-v3"]
         UserConfig["config.json (rules, folders, settings)"]
         BackupConfig["config.json.bak (previous copy)"]
-        State["state.db (move history, held files)"]
+        State["state.db (move history, sparse-hash dedup)"]
+        Learned["learned_routes.json (local route hints)"]
         Recent["recent_files.json (Recent File Insert)"]
+        Logs["sorter_v3.log (2 MB rotating log)"]
     end
 
-    Window["Main window (Settings, Custom Rules, Folder Architecture)"]
+    Window["Main window (Home, Folder Architecture, Custom Rules, Settings)"]
     Service["Sorter service (watcher + router)"]
+    Chrome["Chrome Extension (Native Messaging)"]
     V2["2.x settings (%LOCALAPPDATA%\download-sorter\config.json)"]
 
     Window -->|"Validate, write a temp file, replace config.json"| UserConfig
     UserConfig -->|"Previous copy kept"| BackupConfig
     Window -->|"Hand the new settings to the running service"| Service
+    Chrome <-->|"Local stdio IPC via DownloadSorter-cli.exe"| Service
     Service -->|"Write each move as pending, then complete"| State
+    Service -->|"Update offline pattern tallies"| Learned
     Service -->|"Note each filed file"| Recent
+    Service -->|"Record diagnostics"| Logs
     V2 -->|"Carry Over (read only, 2.x files untouched)"| UserConfig
 ```
 

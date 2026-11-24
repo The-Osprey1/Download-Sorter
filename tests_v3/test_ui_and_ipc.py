@@ -589,7 +589,7 @@ def test_upgrade_carry_over_and_export_setup(
     carried, summary = carry_over_setup(legacy_path, Config.with_starter_defaults(), merge_rules_only=False)
     assert summary["source_schema"] == 2
     assert any(r.name == "Invoices 2026" and r.destination == "Finance\\Invoices" for r in carried.rules)
-    assert any("makerworld.com" in [d.lower() for d in r.domains] for r in carried.rules)
+    assert any(d.lower() == "makerworld.com" for r in carried.rules for d in r.domains)
     assert carried.category_map.get(".dxf") == "CNC\\DXF"
     assert carried.category_map.get(".gcode") == "CNC\\GCode"
     assert carried.category_map.get(".nc") == "CNC\\Haas"
