@@ -1,10 +1,15 @@
-# Publishing to winget (issue #9)
+# Publishing to winget
 
-Winget makes the installer a known, signed-by-reputation download, which helps SmartScreen.
+Winget makes the installer easy to install (`winget install DevynFidel.DownloadSorter`) and helps build download reputation over time.
 
-1. Build the release (`build_release.py`), which writes the setup `.exe` and the version resource.
-2. Compute the setup file's hash: `certutil -hashfile DownloadSorter-Setup-vX.Y.Z-windows-x64.exe SHA256`.
-3. Copy the two YAML files here, replace every `<placeholder>`, and check them with `winget validate`.
-4. Open a pull request against `microsoft/winget-pkgs` with the files under `manifests/d/DevynFidel/DownloadSorter/<VERSION>/`.
+The three multi-file manifests in `manifests/` (`DevynFidel.DownloadSorter.yaml`, `DevynFidel.DownloadSorter.installer.yaml`, and `DevynFidel.DownloadSorter.locale.en-US.yaml`) match the single-file setup `.exe` built by `installer_builder.py` (`InstallerType: exe`, `/S`, `/SILENT`, `/D="<INSTALLPATH>"`).
 
-The templates are not submitted automatically; that is a step for the maintainer.
+## Updating for a new release
+
+1. After the GitHub release finishes publishing, read the setup installer's SHA-256 from `checksums.txt` (or run `(Get-FileHash .\DownloadSorter-Setup-vX.Y.Z-windows-x64.exe -Algorithm SHA256).Hash`).
+2. Update `PackageVersion` in all three `.yaml` files under `manifests/`, `InstallerUrl` and `InstallerSha256` (uppercase) in `DevynFidel.DownloadSorter.installer.yaml`, and `ReleaseNotesUrl` in `DevynFidel.DownloadSorter.locale.en-US.yaml`.
+3. Validate locally:
+   ```powershell
+   winget validate --manifest packaging\winget\manifests
+   ```
+4. Copy the three `.yaml` files from `manifests/` to `manifests/d/DevynFidel/DownloadSorter/<VERSION>/` in a fork of `microsoft/winget-pkgs` and open a pull request (or use `wingetcreate update DevynFidel.DownloadSorter`).

@@ -45,6 +45,8 @@ Tick these off as you go. You don't have to do them all, and anything that surpr
 **If you have time**
 
 - [ ] 3D printing: download a 3MF from MakerWorld or Printables. Was it held in Downloads, and did **Move Held .3MF** work? Did it stay put while your slicer was open?
+- [ ] Extra folders: add a test folder under Settings → **Also Tidy These Folders** and check that loose files inside it are sorted into subfolders there.
+- [ ] Chrome Extension (optional): open Settings → **Chrome Extension** → `?` (**Setup Guide**), load the unpacked extension, and test **Pin site...** or **Sort Downloads Now**.
 - [ ] Uninstall from Windows Settings → Apps. Your sorted files should stay where they are.
 
 ## 3. Tell us what you found
@@ -66,8 +68,8 @@ Tick these off as you go. You don't have to do them all, and anything that surpr
 
 ## Known issues
 
-- **Windows SmartScreen and some antivirus programs warn about the installer** (Norton, for example, may say `WS.Reputation.1`). Download Sorter isn't code-signed yet, and new apps from small developers have no "reputation" with these programs. You can check that your download is the published one with [checksums](README.md#windows-protected-your-pc). Progress on signing: [issue #9](https://github.com/The-Osprey1/Download-Sorter/issues/9).
-- **Windows 11 Smart App Control blocks unsigned apps completely.** Unlike SmartScreen, Smart App Control has no **Run anyway** button and blocks unsigned executables and library files as they load. Until Download Sorter is signed, the only way to run it when Smart App Control is active is to turn Smart App Control off in Windows Security ([details](README.md#smart-app-control)). Progress on signing: [issue #9](https://github.com/The-Osprey1/Download-Sorter/issues/9).
+- **Windows SmartScreen and some antivirus programs warn about the installer** (Norton, for example, may say `WS.Reputation.1`). Download Sorter isn't code-signed yet, and new apps from small developers have no "reputation" with these programs. You can check that your download is the published one with [checksums](README.md#windows-protected-your-pc). Details and status: [Code signing policy](README.md#code-signing-policy).
+- **Windows 11 Smart App Control blocks unsigned apps completely.** Unlike SmartScreen, Smart App Control has no **Run anyway** button and blocks unsigned executables and library files as they load. Until Download Sorter is signed, the only way to run it when Smart App Control is active is to turn Smart App Control off in Windows Security ([details](README.md#smart-app-control)). Details and status: [Code signing policy](README.md#code-signing-policy).
 - **The tray icon may be hidden** under the **^** arrow next to the clock. Drag it onto the taskbar to keep it visible.
 - **Files that are open in another program wait.** A file another program has open stays in Downloads until it's closed. That's on purpose.
 - **Windows Storage Sense** can be set to delete old files in Downloads, including sorted ones. Turn it off for Downloads if you don't want that.
