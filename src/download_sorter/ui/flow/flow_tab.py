@@ -84,6 +84,29 @@ class SortingFlowTab(QWidget):
         self._esc_shortcut.activated.connect(self._on_escape)
 
         root.addWidget(self.workspace, 1)
+        QTimer.singleShot(0, self.seed_initial_trace)
+
+    def seed_initial_trace(self) -> None:
+        """Seed the Tester Bar once with the newest real non-temp file in watch_root, if any."""
+        try:
+            root = self.service.watch_root
+            if root.is_dir():
+                ignored_exts = {".crdownload", ".part", ".tmp", ".download", ".opdownload"}
+                candidates = [
+                    p for p in root.iterdir()
+                    if p.is_file() and not p.name.startswith(".") and p.suffix.lower() not in ignored_exts
+                ]
+                if candidates:
+                    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+                    url = read_zone_url(newest)
+                    self.tester_bar.set_test_file(newest.name, url, path=newest)
+                    return
+        except OSError:
+            pass
+        if self.service.config.rules:
+            self.tester_bar.set_test_file("March_Invoice_2026.pdf", "stripe.com")
+        else:
+            self.tester_bar.set_test_file("March_Invoice_2026.pdf", "")
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

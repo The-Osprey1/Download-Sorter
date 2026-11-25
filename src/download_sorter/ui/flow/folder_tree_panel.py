@@ -226,7 +226,7 @@ class FolderTreePanel(QFrame):
         super().__init__(parent)
         self.setObjectName("SurfaceCard")
         self._row_widgets: dict[str, QWidget] = {}
-        self._expanded_parents: set[str] = {"Documents", "Images", "3D Models"}
+        self._expanded_parents: set[str] = {"Documents"}
         self._inline_parent: str | None = None
         self._pending_changes = 0
 
@@ -432,7 +432,16 @@ class FolderTreePanel(QFrame):
             else:
                 land_label = trace.filename
 
+        has_3d_activity = (
+            config.show_advanced_tools
+            or bool(config.architecture)
+            or active_target.startswith("3D Models")
+            or any("3d" in r.destination.lower() or ".3mf" in r.extensions or ".stl" in r.extensions for r in config.rules)
+        )
+
         for parent_name, children in tree.items():
+            if parent_name in ("3D Models", "CAD") and not has_3d_activity:
+                continue
             if active_target == parent_name or active_target.startswith(parent_name + "\\"):
                 self._expanded_parents.add(parent_name)
 

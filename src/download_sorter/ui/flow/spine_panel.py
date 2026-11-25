@@ -971,6 +971,14 @@ class SpinePanel(QScrollArea):
         self.body.focused = bool(focused_folder)
         self._apply_step_styles(active_step, trace.outcome, focused=bool(focused_folder))
 
+        show_3mf = (
+            config.show_advanced_tools
+            or trace.outcome == "hold"
+            or trace.filename.lower().endswith(".3mf")
+            or any("3d" in r.destination.lower() or ".3mf" in r.extensions for r in config.rules)
+        )
+        self.hold_3mf_frame.setVisible(show_3mf)
+
         is_hold_hit = (not focused_folder and self._teach_draft is None and trace.outcome == "hold")
         self.hold_port_badge.setStyleSheet(
             f"QFrame {{ background-color: #161618; border: 1px solid {'#818CF8' if is_hold_hit else '#2C2C2E'}; border-radius: 7px; }}"
@@ -1016,6 +1024,27 @@ class SpinePanel(QScrollArea):
             row.open_full_editor.connect(lambda rid: self.action_requested.emit("open_full_rule_editor", rid))
             self._rule_ports[rule.id] = row.port_badge
             self.rules_layout.addWidget(row)
+
+        if not config.rules and self._teach_draft is None:
+            empty_card = QFrame()
+            empty_card.setStyleSheet(
+                "QFrame { background-color: #161618; border: 1px dashed #2C2C2E; border-radius: 10px; }"
+            )
+            el = QVBoxLayout(empty_card)
+            el.setContentsMargins(12, 10, 12, 10)
+            el.setSpacing(4)
+            lbl_et = QLabel("No custom rules yet — sorting cleanly by file type")
+            lbl_et.setStyleSheet("color: #F5F5F7; font-size: 12.5px; font-weight: 600; border: none; background: transparent;")
+            lbl_es = QLabel(
+                "Downloads sort automatically into Documents, Images, Videos, Archives, and Installers below. "
+                "Add custom rules anytime, pick a Starter Pack, or drop a file onto any folder →"
+            )
+            lbl_es.setWordWrap(True)
+            lbl_es.setMinimumWidth(0)
+            lbl_es.setStyleSheet("color: #8E8E93; font-size: 11.5px; border: none; background: transparent;")
+            el.addWidget(lbl_et)
+            el.addWidget(lbl_es)
+            self.rules_layout.addWidget(empty_card)
 
         # Step 3 File Types
         while self.types_layout.count():
