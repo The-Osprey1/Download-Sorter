@@ -48,9 +48,9 @@ class SortingFlowTab(QWidget):
 
         # Workspace housing left spine, right folder tree, and transparent Bezier overlay
         self.workspace = QWidget(self)
-        ws_layout = QHBoxLayout(self.workspace)
-        ws_layout.setContentsMargins(0, 0, 0, 0)
-        ws_layout.setSpacing(28)
+        self._ws_layout = QHBoxLayout(self.workspace)
+        self._ws_layout.setContentsMargins(0, 0, 0, 0)
+        self._ws_layout.setSpacing(40)
 
         self.spine = SpinePanel(self.workspace)
         self.spine.config_mutated.connect(self._on_config_mutated)
@@ -59,7 +59,7 @@ class SortingFlowTab(QWidget):
         self.spine.teach_committed.connect(self._on_teach_committed)
         self.spine.teach_cancelled.connect(self.refresh)
         self.spine.action_requested.connect(self._on_spine_action)
-        ws_layout.addWidget(self.spine, 7)
+        self._ws_layout.addWidget(self.spine, 7)
 
         self.tree = FolderTreePanel(self.workspace)
         self.tree.folder_clicked.connect(self._on_folder_clicked)
@@ -70,7 +70,7 @@ class SortingFlowTab(QWidget):
         self.tree.context_action.connect(self._on_tree_context_action)
         self.tree.tool_action.connect(self._on_tree_tool_action)
         self.tree.clear_focus_requested.connect(self.clear_folder_focus)
-        ws_layout.addWidget(self.tree, 5)
+        self._ws_layout.addWidget(self.tree, 5)
 
         self.overlay = BridgeOverlay(self.workspace)
         self.overlay.raise_()
@@ -87,6 +87,7 @@ class SortingFlowTab(QWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._ws_layout.setSpacing(40 if event.size().width() >= 1020 else 26)
         self.overlay.setGeometry(self.workspace.rect())
         self.overlay.raise_()
         QTimer.singleShot(0, lambda: self._redraw_wires(animate=False))

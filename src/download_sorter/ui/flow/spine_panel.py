@@ -98,7 +98,7 @@ class _RuleRowWidget(QFrame):
         lbl_grip.setToolTip("Drag to reorder rule priority")
         top.addWidget(lbl_grip)
 
-        self.sw_enabled = MacToggle()
+        self.sw_enabled = MacToggle(quiet=True)
         self.sw_enabled.setAccessibleName(f"Enable rule {rule.name}")
         self.sw_enabled.setChecked(rule.enabled)
         self.sw_enabled.toggled.connect(lambda checked: self.toggled.emit(rule.id, checked))
@@ -539,7 +539,13 @@ class SpinePanel(QScrollArea):
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        self.setStyleSheet(
+            "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollBar:vertical { background: transparent; width: 5px; margin: 4px 0; }"
+            "QScrollBar::handle:vertical { background: rgba(255, 255, 255, 0.12); border-radius: 2px; min-height: 24px; }"
+            "QScrollBar::handle:vertical:hover { background: rgba(255, 255, 255, 0.28); }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical, QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; height: 0px; }"
+        )
 
         self._config: Config | None = None
         self._expanded_rule_id: str | None = None
@@ -567,7 +573,7 @@ class SpinePanel(QScrollArea):
         self.badge_2, self.lbl_state_2, self.card_2 = self._make_step_shell(
             "2",
             "Your rules",
-            "Drag ⋮⋮ to reorder · Click any rule to edit · Or drop a file onto a folder →",
+            "Drag ⋮⋮ to reorder · Click any rule to edit",
         )
         self.badge_3, self.lbl_state_3, self.card_3 = self._make_step_shell(
             "3",
@@ -649,7 +655,7 @@ class SpinePanel(QScrollArea):
         hrow.setContentsMargins(4, 8, 4, 4)
         hrow.setSpacing(10)
 
-        self.sw_hold_3mf = MacToggle()
+        self.sw_hold_3mf = MacToggle(quiet=True)
         self.sw_hold_3mf.setAccessibleName("Hold 3D printer project files (.3mf)")
         self.sw_hold_3mf.toggled.connect(self._on_hold_3mf_changed)
         hrow.addWidget(self.sw_hold_3mf)
@@ -661,6 +667,7 @@ class SpinePanel(QScrollArea):
         lbl_hs = QLabel("Kept at the top of Downloads so Bambu Studio / OrcaSlicer finds them")
         lbl_hs.setWordWrap(True)
         lbl_hs.setMinimumWidth(0)
+        lbl_hs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         lbl_hs.setStyleSheet("color: #8E8E93; font-size: 11.5px; border: none;")
         info.addWidget(lbl_ht)
         info.addWidget(lbl_hs)
@@ -668,7 +675,8 @@ class SpinePanel(QScrollArea):
 
         self.spin_hold_days = QSpinBox()
         self.spin_hold_days.setRange(1, 30)
-        self.spin_hold_days.setSuffix(" d")
+        self.spin_hold_days.setSuffix("d")
+        self.spin_hold_days.setFixedWidth(scaled_px(76))
         self.spin_hold_days.valueChanged.connect(self._on_hold_3mf_changed)
         hrow.addWidget(self.spin_hold_days)
 
@@ -818,7 +826,7 @@ class SpinePanel(QScrollArea):
         sub_row = QHBoxLayout()
         lbl_sub = QLabel("Group into type subfolders (e.g. Documents › PDF)")
         lbl_sub.setStyleSheet("color: #AEAEB2; font-size: 12px; border: none;")
-        self.sw_subfolders = MacToggle()
+        self.sw_subfolders = MacToggle(quiet=True)
         self.sw_subfolders.setAccessibleName("Group into type subfolders")
         self.sw_subfolders.toggled.connect(self._on_step3_toggled)
         sub_row.addWidget(lbl_sub, 1)
@@ -836,7 +844,7 @@ class SpinePanel(QScrollArea):
             "border: none; background: transparent; color: #0A84FF; font-size: 12px; font-weight: 600;"
         )
         self.btn_ai_insights.clicked.connect(lambda: self.action_requested.emit("ai_insights", ""))
-        self.sw_ai_fallback = MacToggle()
+        self.sw_ai_fallback = MacToggle(quiet=True)
         self.sw_ai_fallback.setAccessibleName("Smart fallback offline AI")
         self.sw_ai_fallback.toggled.connect(self._on_step3_toggled)
         al.addWidget(lbl_ai, 1)

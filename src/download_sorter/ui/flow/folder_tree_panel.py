@@ -280,10 +280,14 @@ class FolderTreePanel(QFrame):
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setStyleSheet(
             "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"
+            "QScrollBar:vertical { background: transparent; width: 5px; margin: 4px 0; }"
+            "QScrollBar::handle:vertical { background: rgba(255, 255, 255, 0.12); border-radius: 2px; min-height: 24px; }"
+            "QScrollBar::handle:vertical:hover { background: rgba(255, 255, 255, 0.28); }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical, QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; height: 0px; }"
         )
         self.tree_host = QWidget()
         self.tree_layout = QVBoxLayout(self.tree_host)
-        self.tree_layout.setContentsMargins(0, 0, 2, 0)
+        self.tree_layout.setContentsMargins(0, 2, 2, 14)
         self.tree_layout.setSpacing(3)
         self.tree_layout.addStretch(1)
         self.scroll.setWidget(self.tree_host)

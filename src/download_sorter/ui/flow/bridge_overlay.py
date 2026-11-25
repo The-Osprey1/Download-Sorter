@@ -76,12 +76,12 @@ class BridgeOverlay(QWidget):
         for wire in self._wires:
             if not wire.source.isVisible() or not wire.target.isVisible():
                 continue
-            src_pt = wire.source.mapTo(self, wire.source.rect().center())
-            src_right = wire.source.mapTo(self, wire.source.rect().topRight()).x()
+            src_pt = self.mapFromGlobal(wire.source.mapToGlobal(wire.source.rect().center()))
+            src_right = self.mapFromGlobal(wire.source.mapToGlobal(wire.source.rect().topRight())).x()
             p1 = QPointF(float(src_right), float(src_pt.y()))
 
             tgt_y_offset = min(18, max(8, wire.target.height() // 2))
-            tgt_pt = wire.target.mapTo(self, wire.target.rect().topLeft())
+            tgt_pt = self.mapFromGlobal(wire.target.mapToGlobal(wire.target.rect().topLeft()))
             p2 = QPointF(float(tgt_pt.x() - 2), float(tgt_pt.y() + tgt_y_offset))
 
             gap = p2.x() - p1.x()

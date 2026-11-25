@@ -77,10 +77,12 @@ class TesterBar(QFrame):
         lbl_globe.setStyleSheet("color: #8E8E93; font-size: 11px; border: none;")
         self.edit_url = QLineEdit("stripe.com")
         self.edit_url.setPlaceholderText("source site")
-        self.edit_url.setMinimumWidth(scaled_px(130))
-        self.edit_url.setMaximumWidth(scaled_px(190))
+        self.edit_url.setMinimumWidth(scaled_px(150))
+        self.edit_url.setMaximumWidth(scaled_px(220))
         self.edit_url.setStyleSheet("border: none; background: transparent; color: #AEAEB2; font-size: 12px;")
         self.edit_url.textChanged.connect(self._on_inputs_edited)
+        self.edit_url.editingFinished.connect(lambda: self.edit_url.setCursorPosition(0))
+        self.edit_filename.editingFinished.connect(lambda: self.edit_filename.setCursorPosition(0))
         site_row.addWidget(lbl_globe)
         site_row.addWidget(self.edit_url)
         in_row.addWidget(site_pill)
@@ -147,7 +149,9 @@ class TesterBar(QFrame):
         try:
             self._last_dropped_path = path
             self.edit_filename.setText(filename)
+            self.edit_filename.setCursorPosition(0)
             self.edit_url.setText(source_url)
+            self.edit_url.setCursorPosition(0)
         finally:
             self._suppress_signals = False
         self.test_changed.emit(filename.strip(), source_url.strip())
