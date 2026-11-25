@@ -82,6 +82,7 @@ from download_sorter.service import SorterService
 from download_sorter import update_check, updater
 from download_sorter.ui.accessibility import name_controls_for_screen_readers
 from download_sorter.ui.architecture_canvas import ArchitectureTab
+from download_sorter.ui.flow import SortingFlowTab
 from download_sorter.ui.text_scale import scaled_px
 from download_sorter.ui.chrome_walkthrough import ChromeExtensionWalkthroughDialog
 from download_sorter.ui.motion import (
@@ -1662,23 +1663,30 @@ class MainWindow(QMainWindow):
         self.progress_hud = SortingProgressHUD(self)
         root_layout.addWidget(self.progress_hud)
 
-        self._tab_icon_names = ["home", "layers", "rules", "settings"]
+        self._tab_icon_names = ["rules", "home", "settings"]
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_home_tab(), make_vector_icon("home", "#F5F5F7", 15), "Home")
+        self.flow_tab = SortingFlowTab(self.service, self)
+        self.flow_tab.config_committed.connect(self._on_flow_config_committed)
+        self.flow_tab.action_requested.connect(self._on_flow_action)
+        self.flow_tab.teach_move_requested.connect(self._on_flow_teach_move)
+
         self.arch_tab = ArchitectureTab(self.service, self)
+        self.arch_tab.hide()
         self.arch_tab.architecture_applied.connect(self._on_architecture_applied)
         self.arch_tab.undo_requested.connect(self.refresh_all)
         self.arch_tab.carry_over_requested.connect(self.open_carry_over_dialog)
         self.arch_tab.action_started.connect(self._on_arch_action_started)
         self.arch_tab.action_progress.connect(self._on_arch_action_progress)
         self.arch_tab.action_finished.connect(self._on_arch_action_finished)
-        self.tabs.addTab(
-            self.arch_tab,
-            make_vector_icon("layers", "#8E8E93", 15),
-            "Folder Architecture",
-        )
-        self.tabs.addTab(self._build_rules_tab(), make_vector_icon("rules", "#8E8E93", 15), "Custom Rules")
-        self.tabs.addTab(self._build_settings_tab(), make_vector_icon("settings", "#8E8E93", 15), "Settings")
+
+        self._home_tab = self._build_home_tab()
+        self._rules_tab = self._build_rules_tab()
+        self._rules_tab.hide()
+        self._settings_tab = self._build_settings_tab()
+
+        self.tabs.addTab(self.flow_tab, make_vector_icon("rules", "#F5F5F7", 15), "Sorting Flow")
+        self.tabs.addTab(self._home_tab, make_vector_icon("home", "#8E8E93", 15), "Activity")
+        self.tabs.addTab(self._settings_tab, make_vector_icon("settings", "#8E8E93", 15), "Preferences")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root_layout.addWidget(self.tabs, 1)
 
@@ -1743,13 +1751,25 @@ class MainWindow(QMainWindow):
         brand_top.addStretch(1)
         brand_col.addLayout(brand_top)
 
+        watch_row = QHBoxLayout()
+        watch_row.setContentsMargins(0, 0, 0, 0)
+        watch_row.setSpacing(6)
         self.lbl_watch_path = ElidedLabel(
             "",
             mode=Qt.TextElideMode.ElideMiddle,
             tooltip="Automatically organizes loose top-level files in this folder into subfolders.",
         )
         self.lbl_watch_path.setStyleSheet("color: #8E8E93; font-size: 11.5px;")
-        brand_col.addWidget(self.lbl_watch_path)
+        self.btn_watch_switcher = QPushButton("Switch ▾")
+        self.btn_watch_switcher.setToolTip("Switch between watched folders or add another folder to tidy")
+        self.btn_watch_switcher.setStyleSheet(
+            "QPushButton { border: none; background: transparent; color: #0A84FF; font-size: 11px; font-weight: 600; padding: 0 4px; }"
+            "QPushButton:hover { color: #64D2FF; }"
+        )
+        self.btn_watch_switcher.clicked.connect(self._open_watch_switcher_menu)
+        watch_row.addWidget(self.lbl_watch_path, 1)
+        watch_row.addWidget(self.btn_watch_switcher)
+        brand_col.addLayout(watch_row)
         row.addLayout(brand_col, 1)
 
         self.btn_pause = CollapsibleRibbonBtn(
@@ -2012,6 +2032,8 @@ class MainWindow(QMainWindow):
 
         self.tbl_activity = QTableWidget(0, 5)
         self.tbl_activity.setHorizontalHeaderLabels(["When", "File", "Moved Into Folder", "Why It Moved", "Undo"])
+        self.tbl_activity.setToolTip("Double-click any move to trace why it sorted in Sorting Flow")
+        self.tbl_activity.doubleClicked.connect(self._on_activity_trace_row)
         _style_table(self.tbl_activity)
         header = self.tbl_activity.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -2720,11 +2742,7 @@ class MainWindow(QMainWindow):
     # Refresh & Actions
     # ------------------------------------------------------------------
     def _apply_advanced_tools_visibility(self, show: bool) -> None:
-        """The simpler window (new installs) hides Folder Architecture and Sort Lower Tiers."""
-        arch_index = self.tabs.indexOf(self.arch_tab)
-        if not show and self.tabs.currentIndex() == arch_index:
-            self.tabs.setCurrentIndex(0)
-        self.tabs.setTabVisible(arch_index, show)
+        """Keep Sort Lower Tiers aligned with the advanced tools toggle."""
         self.btn_sort_tiers.setVisible(show)
 
     def _on_tab_changed(self, index: int) -> None:
@@ -2907,6 +2925,9 @@ class MainWindow(QMainWindow):
 
         self._run_simulation(snap["simulation"], hold_days=int(snap["hold_days"]))
         self._refresh_activity(snap["activity"], watch_dir=snap["watch_dir"])
+        if hasattr(self, "flow_tab"):
+            self.flow_tab.set_watch_label(Path(str(snap["watch_dir"])).name or "Downloads")
+            self.flow_tab.refresh()
 
         # A message a handler wrote to the footer while the data was being collected
         # is newer than this snapshot; do not paint the totals over it.
@@ -3172,6 +3193,8 @@ class MainWindow(QMainWindow):
                 text += f"  ({more} more suggestion{'s' if more != 1 else ''})"
             self.lbl_rule_suggestion.setText(text)
             self.btn_rule_suggestion_compact.setToolTip(text)
+        if hasattr(self, "flow_tab"):
+            self.flow_tab.set_suggestion(self._current_suggestion)
         self._place_rule_suggestion()
 
     def _place_rule_suggestion(self) -> None:
@@ -4238,3 +4261,124 @@ class MainWindow(QMainWindow):
         breathe(self.lbl_status_dot, False)
         self._preview_toast_mgr.close_all()
         super().closeEvent(event)
+
+    # ------------------------------------------------------------------
+    # Sorting Flow Integration (v4)
+    # ------------------------------------------------------------------
+    def _open_watch_switcher_menu(self) -> None:
+        menu = QMenu(self.btn_watch_switcher)
+        primary = self.service.watch_root
+        act_primary = menu.addAction(f"● {primary.name or 'Downloads'}  (Primary)")
+        act_primary.triggered.connect(lambda: self.flow_tab.set_watch_label(primary.name or "Downloads"))
+        for raw in self.service.config.extra_watch_folders:
+            p = Path(raw).expanduser()
+            act = menu.addAction(f"● {p.name or raw}")
+            act.triggered.connect(lambda _=False, lbl=(p.name or raw): self.flow_tab.set_watch_label(lbl))
+        menu.addSeparator()
+        act_add = menu.addAction("+ Watch another folder...")
+        act_add.triggered.connect(self._add_extra_folder)
+        menu.exec(self.btn_watch_switcher.mapToGlobal(self.btn_watch_switcher.rect().bottomLeft()))
+
+    def _on_activity_trace_row(self, index) -> None:  # noqa: ANN001
+        row = index.row()
+        moves = self.service.db.list_active_moves(limit=150)
+        if 0 <= row < len(moves):
+            rec = moves[row]
+            self.flow_tab.trace_from_activity(str(rec["filename"]), str(rec.get("source_url") or ""))
+            self.tabs.setCurrentWidget(self.flow_tab)
+
+    def _on_flow_config_committed(self, cfg: Config) -> None:
+        self._commit_config(cfg)
+
+    def _on_flow_teach_move(self, src_path: Path, dest_relpath: str) -> None:
+        if not src_path.is_file():
+            return
+        from download_sorter.fs_ops import move_file_safely
+
+        watch_root = self.service.watch_root
+        dest_dir = watch_root / dest_relpath.replace("/", "\\").strip("\\")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            move_file_safely(
+                src_path,
+                dest_dir / src_path.name,
+                db=self.service.db,
+                watch_root=watch_root,
+                reason=f"Teach by Example -> {dest_relpath}",
+                matched_rule="Teach by Example",
+                match_type="rule",
+            )
+            self.banner.show_message(f"Moved {src_path.name} into {dest_relpath}", "success")
+            self.refresh_all()
+        except Exception as exc:
+            QMessageBox.warning(self, "Move Failed", str(exc))
+
+    def _on_flow_action(self, action: str, arg: str) -> None:
+        if action == "apply_pack" and arg:
+            self._apply_template(arg)
+        elif action == "smart_order":
+            self._sort_rules_by_specificity()
+        elif action == "carry_over":
+            self.open_carry_over_dialog()
+        elif action == "accept_suggestion":
+            self._accept_rule_suggestion()
+        elif action == "dismiss_suggestion":
+            self._dismiss_rule_suggestion()
+        elif action == "ai_insights":
+            self._open_ai_insights()
+        elif action == "detect_projects":
+            self._open_legacy_arch_dialog("detect_projects")
+        elif action == "open_full_rule_editor" and arg:
+            for idx, r in enumerate(self.service.config.rules):
+                if r.id == arg:
+                    dlg = RuleEditorDialog(r, parent=self)
+                    if dlg.exec() == QDialog.DialogCode.Accepted:
+                        cfg = copy.deepcopy(self.service.config)
+                        cfg.rules[idx] = dlg.build_rule()
+                        self._commit_config(cfg)
+                    break
+        elif action == "tree_tool:scan_folders":
+            self._open_legacy_arch_dialog("scan_folders")
+        elif action == "tree_tool:sort_lower_tiers":
+            self._on_sort_lower_tiers()
+        elif action == "tree_tool:snapshots":
+            self._open_legacy_arch_dialog("snapshots")
+        elif action == "tree_tool:open_canvas":
+            self._open_legacy_arch_dialog("")
+        elif action == "tree_tool:defaults":
+            self.arch_tab._on_reset_defaults()
+        elif action == "tree:open_explorer" and arg:
+            target = self.service.watch_root / arg.replace("/", "\\").strip("\\")
+            if target.exists() and sys.platform == "win32" and hasattr(os, "startfile"):
+                os.startfile(str(target))
+        elif action in ("tree:rename", "tree:merge", "tree:delete") and arg:
+            self._open_legacy_arch_dialog(action, folder_path=arg)
+
+    def _open_legacy_arch_dialog(self, trigger: str = "", *, folder_path: str = "") -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Folder Architecture Canvas")
+        dlg.resize(1120, 740)
+        dlg.setStyleSheet(STYLESHEET)
+        dl = QVBoxLayout(dlg)
+        dl.setContentsMargins(12, 12, 12, 12)
+        dl.addWidget(self.arch_tab, 1)
+        self.arch_tab.setVisible(True)
+        if folder_path:
+            for node in self.arch_tab._arch.nodes:
+                if self.arch_tab._arch.node_relative_path(node.id).replace("/", "\\") == folder_path.replace("/", "\\"):
+                    self.arch_tab.canvas.select_node(node.id)
+                    break
+        if trigger == "detect_projects":
+            QTimer.singleShot(60, self.arch_tab._on_detect_projects)
+        elif trigger == "scan_folders":
+            QTimer.singleShot(60, self.arch_tab._on_scan_folders)
+        elif trigger == "snapshots":
+            QTimer.singleShot(60, self.arch_tab._on_snapshots)
+        elif trigger == "tree:merge":
+            QTimer.singleShot(60, self.arch_tab._on_merge_selected)
+        elif trigger == "tree:delete":
+            QTimer.singleShot(60, self.arch_tab._on_delete_selected)
+        dlg.exec()
+        self.arch_tab.setParent(self)
+        self.arch_tab.setVisible(False)
+        self.refresh_all()

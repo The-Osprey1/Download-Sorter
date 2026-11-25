@@ -436,8 +436,8 @@ def test_folder_architecture_tiers_premade_custom_shift_undo_and_defaults(
 
     svc = SorterService(app_paths)
     win = MainWindow(svc)
-    assert win.tabs.count() == 4
-    assert win.tabs.tabText(1) == "Folder Architecture"
+    assert win.tabs.count() == 3
+    assert win.tabs.tabText(0) == "Sorting Flow"
     assert not win.arch_tab.btn_arch_undo.isHidden()
     assert not win.arch_tab.btn_arch_defaults.isHidden()
 
@@ -634,7 +634,8 @@ def test_top_to_bottom_architecture_and_auto_create_basic(v3_qapp, app_paths: Ap
     svc = SorterService(app_paths)
     win = MainWindow(svc)
     win.show()
-    win.tabs.setCurrentWidget(win.arch_tab)
+    win.arch_tab.setGeometry(0, 0, 960, 660)
+    win.arch_tab.show()
     win.arch_tab.canvas.resize(920, 620)
     v3_qapp.processEvents()
 

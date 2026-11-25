@@ -37,7 +37,7 @@ def test_simple_window_hides_folder_architecture_and_sort_lower_tiers(service_in
     cfg.show_advanced_tools = False
     service_instance.update_config(cfg)
     win = MainWindow(service_instance)
-    assert win.tabs.isTabVisible(_arch_index(win)) is False
+    assert win.tabs.count() == 3
     assert win.btn_sort_tiers.isHidden() is True
     assert win.chk_show_advanced.isChecked() is False
     win.close()
@@ -53,7 +53,7 @@ def test_turning_the_switch_on_shows_them(service_instance, v3_qapp) -> None:
     win.chk_show_advanced.setChecked(True)
     win._save_settings_form()
     assert service_instance.config.show_advanced_tools is True
-    assert win.tabs.isTabVisible(_arch_index(win)) is True
+    assert win.tabs.count() == 3
     assert win.btn_sort_tiers.isHidden() is False
     win.close()
 
@@ -62,7 +62,7 @@ def test_full_window_is_unchanged_for_existing_setups(service_instance, v3_qapp)
     from download_sorter.ui.main_window import MainWindow
 
     win = MainWindow(service_instance)
-    assert win.tabs.isTabVisible(_arch_index(win)) is True
+    assert win.tabs.count() == 3
     assert win.btn_sort_tiers.isHidden() is False
     win.close()
 
