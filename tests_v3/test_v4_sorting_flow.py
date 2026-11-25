@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from download_sorter.config import Config, Rule, save_config
 from download_sorter.paths import AppPaths
 from download_sorter.pipeline import build_rule_from_cues, infer_teach_cues, trace_file
@@ -163,5 +165,30 @@ def test_sorting_flow_tab_live_trace_focus_teach_and_activity_trace(
         fname, url, _ = win.flow_tab.tester_bar.current_inputs()
         assert fname == "custom_trace_file.pdf"
         assert url == "https://example.org/file"
+    finally:
+        win.close()
+
+
+@pytest.mark.shipped_defaults
+def test_v4_clean_install_minimal_defaults(v3_qapp, app_paths: AppPaths) -> None:
+    from download_sorter.ui.main_window import MainWindow
+
+    save_config(Config.new_install(), app_paths)
+    svc = SorterService(app_paths)
+    win = MainWindow(svc)
+    try:
+        win.show()
+        v3_qapp.processEvents()
+
+        # Universal starter tree hides 3D Models & CAD on a clean install
+        assert "Documents" in win.flow_tab.tree._row_widgets
+        assert "3D Models" not in win.flow_tab.tree._row_widgets
+        assert "CAD" not in win.flow_tab.tree._row_widgets
+        assert win.flow_tab.spine.hold_3mf_frame.isHidden() is True
+
+        # Tracing a .3mf file progressively surfaces Step 1 hold controls
+        win.flow_tab.tester_bar.set_test_file("benchy.3mf", "")
+        v3_qapp.processEvents()
+        assert win.flow_tab.spine.hold_3mf_frame.isHidden() is False
     finally:
         win.close()

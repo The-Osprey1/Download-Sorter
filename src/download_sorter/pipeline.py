@@ -249,6 +249,8 @@ def trace_file(
             dest_folder = ""
         final_name = decision.relative_dest.name
 
+    dest_pretty = (dest_folder or "Downloads").replace("\\", " › ")
+
     # Step 2: Explicit User Rules
     if decision.match_type == "rule":
         winning_rule_id = ""
@@ -270,7 +272,7 @@ def trace_file(
             blocked_rules=blocked,
             dest_folder=dest_folder,
             final_filename=final_name,
-            human_reason=f"Moves into {dest_folder or 'Downloads'} — {decision.reason}",
+            human_reason=f"Moves into {dest_pretty} — {decision.reason}",
         )
 
     # Step 3: Offline AI Smart Route
@@ -285,7 +287,7 @@ def trace_file(
             ai_matched=True,
             dest_folder=dest_folder,
             final_filename=final_name,
-            human_reason=f"Classified offline into {dest_folder} — {decision.reason}",
+            human_reason=f"Classified offline into {dest_pretty} — {decision.reason}",
         )
 
     # Step 3: Built-in File Type Routing or Fallback
@@ -301,7 +303,7 @@ def trace_file(
             matched_bucket_id=bucket_id,
             dest_folder=dest_folder,
             final_filename=final_name,
-            human_reason=f"Moves into {dest_folder} by file type ({ext or 'detected'}).",
+            human_reason=f"Moves into {dest_pretty} by file type ({ext or 'detected'}).",
         )
 
     if decision.action == "move":
@@ -314,7 +316,7 @@ def trace_file(
             blocked_rules=blocked,
             dest_folder=dest_folder,
             final_filename=final_name,
-            human_reason=f"Unrecognized extension — moves into {dest_folder or 'Other'}.",
+            human_reason=f"Unrecognized extension — moves into {dest_pretty or 'Other'}.",
         )
 
     return PipelineTrace(
