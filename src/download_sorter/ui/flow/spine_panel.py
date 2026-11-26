@@ -1114,8 +1114,19 @@ class SpinePanel(QScrollArea):
             if item.widget():
                 item.widget().deleteLater()
 
+        has_3d_activity = (
+            config.show_advanced_tools
+            or config.hold_3mf_enabled
+            or bool(config.architecture)
+            or trace.matched_bucket_id == "t-3d"
+            or trace.dest_folder.startswith("3D Models")
+            or any("3d" in r.destination.lower() or ".3mf" in r.extensions or ".stl" in r.extensions for r in config.rules)
+        )
+
         type_feed_count = 0
         for bucket in TYPE_BUCKETS:
+            if bucket.id == "t-3d" and not has_3d_activity:
+                continue
             targets = bucket_target_folders(bucket, config)
             is_winner = (not focused_folder and self._teach_draft is None and trace.matched_bucket_id == bucket.id)
             is_feeder = bool(norm_focus and norm_focus in targets)

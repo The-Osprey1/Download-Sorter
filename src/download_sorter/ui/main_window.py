@@ -2296,6 +2296,15 @@ class MainWindow(QMainWindow):
             )
         )
 
+        self.chk_auto_align_existing = MacToggle()
+        card_watch.add_row(
+            SettingRow(
+                "Keep Existing Loose Files Aligned",
+                "Automatically organize existing loose files in Downloads whenever your rules change.",
+                controls=self.chk_auto_align_existing,
+            )
+        )
+
         self.edit_watch_folder = QLineEdit()
         self.edit_watch_folder.setMinimumWidth(180)
         btn_browse = InteractiveRibbonBtn("Browse...")
@@ -2552,7 +2561,7 @@ class MainWindow(QMainWindow):
         self.btn_close_ribbons.clicked.connect(self._on_close_all_ribbons)
         notif_sub.add_row(
             SettingRow(
-                "Auto-Dismiss & Preview",
+                "Auto-Dismiss && Preview",
                 "Seconds before alerts fade away.",
                 controls=[self.spin_ribbon_timeout, self.btn_preview_ribbon, self.btn_close_ribbons],
                 compact=True,
@@ -2574,18 +2583,18 @@ class MainWindow(QMainWindow):
         self.spin_qs_timeout.setDecimals(0)
         self.spin_qs_timeout.setSingleStep(30.0)
         self.spin_qs_timeout.setSuffix(" s")
-        self.spin_qs_timeout.setFixedWidth(78)
+        self.spin_qs_timeout.setFixedWidth(94)
         self.spin_qs_3d_hours = QDoubleSpinBox()
         self.spin_qs_3d_hours.setRange(0.5, 72.0)
         self.spin_qs_3d_hours.setDecimals(1)
         self.spin_qs_3d_hours.setSingleStep(1.0)
         self.spin_qs_3d_hours.setSuffix(" hrs")
-        self.spin_qs_3d_hours.setFixedWidth(78)
+        self.spin_qs_3d_hours.setFixedWidth(104)
         self.edit_qs_hotkey = QLineEdit()
-        self.edit_qs_hotkey.setFixedWidth(76)
+        self.edit_qs_hotkey.setFixedWidth(78)
         qs_sub.add_row(
             SettingRow(
-                "Offer Window & Hotkey",
+                "Offer Window && Hotkey",
                 "General seconds, 3D/CAD hours, and keyboard shortcut (e.g. Ctrl+G).",
                 controls=[self.spin_qs_timeout, self.spin_qs_3d_hours, self.edit_qs_hotkey],
                 compact=True,
@@ -2715,6 +2724,7 @@ class MainWindow(QMainWindow):
         # Instant-apply when user clicks any toggle switch directly (programmatic setChecked is unaffected)
         for sw in (
             self.chk_auto_sort,
+            self.chk_auto_align_existing,
             self.chk_type_subfolders,
             self.chk_project_grouping,
             self.chk_hold_3mf,
@@ -3268,7 +3278,9 @@ class MainWindow(QMainWindow):
     def _refresh_settings_fields(self) -> None:
         cfg = self.service.config
         self.chk_auto_sort.setChecked(not cfg.paused)
+        self.chk_auto_align_existing.setChecked(bool(cfg.auto_align_existing))
         self.edit_watch_folder.setText(display_watch_folder(cfg.watch_folder))
+        self.edit_watch_folder.setCursorPosition(0)
         self.list_extra_folders.clear()
         self.list_extra_folders.addItems(cfg.extra_watch_folders)
         self.spin_settle.setValue(cfg.settle_seconds)
@@ -3926,6 +3938,7 @@ class MainWindow(QMainWindow):
     def _save_settings_form(self) -> None:
         cfg = copy.deepcopy(self.service.config)
         cfg.paused = not self.chk_auto_sort.isChecked()
+        cfg.auto_align_existing = self.chk_auto_align_existing.isChecked()
         typed = self.edit_watch_folder.text().strip()
         cfg.watch_folder = stored_watch_folder(typed)
         cfg.extra_watch_folders = [
@@ -3962,6 +3975,8 @@ class MainWindow(QMainWindow):
         cfg.ai_min_confidence = int(self.spin_ai_confidence.value())
         cfg.ai_smart_scan_keywords = self.chk_ai_scan_keywords.isChecked()
         self._commit_config(cfg)
+        if cfg.auto_align_existing and not cfg.paused and not os.environ.get("PYTEST_CURRENT_TEST"):
+            QTimer.singleShot(150, self.on_clean_now)
 
         warnings: list[str] = []
         want_startup = self.chk_startup.isChecked()
@@ -4002,8 +4017,8 @@ class MainWindow(QMainWindow):
             if dec.action == "move":
                 what = "Will Move"
                 badge_variant = "primary"
-                dest_text = planned_dest or "Sorted folder"
-                why_text = dec.reason
+                dest_text = (planned_dest or "Sorted folder").replace("\\", " › ")
+                why_text = dec.reason.replace("\\", " › ")
             elif dec.match_type == "hold":
                 what = "3D Print Hold"
                 badge_variant = "warning"
@@ -4301,6 +4316,8 @@ class MainWindow(QMainWindow):
 
     def _on_flow_config_committed(self, cfg: Config) -> None:
         self._commit_config(cfg)
+        if cfg.auto_align_existing and not cfg.paused and not os.environ.get("PYTEST_CURRENT_TEST"):
+            QTimer.singleShot(150, self.on_clean_now)
 
     def _on_flow_teach_move(self, src_path: Path, dest_relpath: str) -> None:
         if not src_path.is_file():

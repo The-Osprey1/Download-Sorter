@@ -206,6 +206,13 @@ class FolderRowWidget(QFrame):
             return
         super().mousePressEvent(event)
 
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.context_action.emit("open_explorer", self.folder_path)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def enterEvent(self, event) -> None:  # noqa: N802
         self.hover_entered.emit(self.folder_path)
         super().enterEvent(event)

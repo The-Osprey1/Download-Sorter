@@ -530,6 +530,7 @@ class Config:
     hold_3mf_enabled: bool = True
     hold_3mf_days: int = 7
     project_grouping_enabled: bool = False
+    auto_align_existing: bool = False
     auto_unzip_all: bool = False
     zip_keep_original: bool = True
     zip_peek_enabled: bool = False
@@ -690,6 +691,7 @@ class Config:
             "hold_3mf_enabled": self.hold_3mf_enabled,
             "hold_3mf_days": self.hold_3mf_days,
             "project_grouping_enabled": self.project_grouping_enabled,
+            "auto_align_existing": self.auto_align_existing,
             "auto_unzip_all": self.auto_unzip_all,
             "zip_keep_original": self.zip_keep_original,
             "zip_peek_enabled": self.zip_peek_enabled,
@@ -731,6 +733,7 @@ class Config:
             hold_3mf_enabled=data.get("hold_3mf_enabled", True),
             hold_3mf_days=data.get("hold_3mf_days", 7),
             project_grouping_enabled=bool(data.get("project_grouping_enabled", False)),
+            auto_align_existing=bool(data.get("auto_align_existing", False)),
             auto_unzip_all=bool(data.get("auto_unzip_all", False)),
             zip_keep_original=bool(data.get("zip_keep_original", True)),
             zip_peek_enabled=bool(data.get("zip_peek_enabled", False)),
