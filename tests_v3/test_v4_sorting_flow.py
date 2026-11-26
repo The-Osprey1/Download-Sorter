@@ -324,3 +324,61 @@ def test_scan_folder_architecture_prevents_small_folder_extension_hijack(tmp_pat
     dec = evaluate(FileCandidate("random_plate.3mf"), cfg)
     assert dec.relative_dest is not None
     assert str(dec.relative_dest.parent).replace("/", "\\") == "3D Models\\3MF"
+
+
+def test_scan_and_shift_protect_game_bundles_extension_ids_and_curated_folders(
+    app_paths: AppPaths,
+) -> None:
+    from download_sorter.architecture import apply_architecture_to_config, scan_folder_architecture
+    from download_sorter.router import FileCandidate, evaluate
+
+    dl = app_paths.downloads_dir
+    assert dl is not None
+
+    # 1. Installed game bundle under Games/ must never be raided or scanned into rules
+    game_dir = dl / "Games" / "SampleGame"
+    game_dir.mkdir(parents=True)
+    (game_dir / "SampleGame.exe").write_bytes(b"MZ")
+    (game_dir / "ReadMe.txt").write_text("do not move", encoding="utf-8")
+    (game_dir / "Icon.ico").write_bytes(b"ico")
+
+    # 2. Curated topic subfolder with PDFs (some lacking inferred keywords) + generic PDF bucket
+    school = dl / "Documents" / "School & Coursework"
+    school.mkdir(parents=True)
+    (school / "homework_1.pdf").write_bytes(b"%PDF")
+    (school / "homework_2.pdf").write_bytes(b"%PDF")
+    (school / "Capacitance_Lab_Report.pdf").write_bytes(b"%PDF")
+
+    pdf_dir = dl / "Documents" / "PDF"
+    pdf_dir.mkdir(parents=True)
+    (pdf_dir / "general_1.pdf").write_bytes(b"%PDF")
+    (pdf_dir / "general_2.pdf").write_bytes(b"%PDF")
+    (pdf_dir / "homework_3_from_pdf.pdf").write_bytes(b"%PDF")
+
+    # 3. Standard Installers root with a couple of setup .exes still routes ALL .exe files
+    inst = dl / "Installers"
+    inst.mkdir(parents=True)
+    (inst / "setup_a.exe").write_bytes(b"MZ")
+    (inst / "setup_b.exe").write_bytes(b"MZ")
+
+    scanned = scan_folder_architecture(dl)["architecture"]
+    svc = SorterService(app_paths)
+    try:
+        target_cfg = apply_architecture_to_config(scanned, Config(rules=[], hold_3mf_enabled=False))
+
+        # Any .exe still routes to Installers (Tier-1 category_map preserved)
+        exe_dec = evaluate(FileCandidate("random_tool_v2.exe"), target_cfg)
+        assert exe_dec.relative_dest is not None
+        assert str(exe_dec.relative_dest.parent).replace("/", "\\") == "Installers"
+
+        plan = svc.preview_architecture_shift(target_cfg, root=dl)
+        planned_srcs = {m["src"].name for m in plan["moves_planned"]}
+
+        # Game files untouched; curated Capacitance_Lab_Report.pdf NOT demoted to Documents\PDF;
+        # matching homework_3_from_pdf.pdf UPGRADED from Documents\PDF -> Documents\School & Coursework!
+        assert "ReadMe.txt" not in planned_srcs
+        assert "Icon.ico" not in planned_srcs
+        assert "Capacitance_Lab_Report.pdf" not in planned_srcs
+        assert "homework_3_from_pdf.pdf" in planned_srcs
+    finally:
+        svc.stop()

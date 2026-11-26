@@ -2178,7 +2178,36 @@ def scan_folder_architecture(
     from collections import Counter
     import os
 
+    from download_sorter.config import DEFAULT_CATEGORY_MAP, DEFAULT_TYPE_SUBFOLDERS
     from download_sorter.router import _normalize_tokens, extract_host, read_zone_url
+    from download_sorter.service import SorterService
+
+    _GENERIC_DOMAIN_SUFFIXES = (
+        "drive.google.com",
+        "drive.usercontent.google.com",
+        "googleusercontent.com",
+        "docs.google.com",
+        "mail.google.com",
+        "dropbox.com",
+        "dropboxusercontent.com",
+        "onedrive.live.com",
+        "1drv.ms",
+        "icloud.com",
+        "amazonaws.com",
+        "cloudfront.net",
+        "githubusercontent.com",
+        "archive.org",
+        "bblmw.com",
+        "makerworld.com",
+        "printables.com",
+        "thingiverse.com",
+    )
+
+    def _is_generic_or_invalid_host(h: str) -> bool:
+        hl = h.strip().lower()
+        if not hl or "." not in hl:
+            return True
+        return any(hl == suf or hl.endswith("." + suf) for suf in _GENERIC_DOMAIN_SUFFIXES)
 
     root = watch_root.resolve()
     max_tiers = max(1, min(FolderArchitecture.MAX_TIERS, int(max_depth)))
@@ -2201,7 +2230,13 @@ def scan_folder_architecture(
         rel = cur.relative_to(root)
         depth = len(rel.parts)
         dirnames[:] = sorted(
-            [d for d in dirnames if not d.startswith(".") and d.lower() not in _SCAN_SKIP_DIRS],
+            [
+                d
+                for d in dirnames
+                if not d.startswith(".")
+                and d.lower() not in _SCAN_SKIP_DIRS
+                and not (depth >= 1 and SorterService._is_project_or_bundle_dir(cur / d))
+            ],
             key=str.lower,
         )
         if depth >= max_tiers:
@@ -2230,7 +2265,7 @@ def scan_folder_architecture(
                     global_token_counts[tok] += 1
             if idx < 40:
                 host = extract_host(read_zone_url(fp))
-                if host:
+                if host and not _is_generic_or_invalid_host(host):
                     domain_counts[host] += 1
                     global_domain_counts[host] += 1
 
@@ -2308,28 +2343,54 @@ def scan_folder_architecture(
         ]
 
         # Dedicated format subfolders (e.g. "PDF", "3MF", "STL", "ZIP", "Word", "Spreadsheets")
-        # should act as clean file-type buckets rather than restricting on incidental filename words.
-        from download_sorter.config import DEFAULT_TYPE_SUBFOLDERS
+        # and standard Tier-1 category roots (e.g. "Documents", "Images", "Installers")
+        # should act as clean type buckets rather than locking onto incidental filename words.
+        standard_tier1_cats: dict[str, list[str]] = {}
+        for d_ext, d_cat in DEFAULT_CATEGORY_MAP.items():
+            top_c = d_cat.split("\\")[0].strip()
+            standard_tier1_cats.setdefault(top_c.lower(), []).append(d_ext)
 
         known_type_sub_names = {
             "".join(ch for ch in sub.lower() if ch.isalnum())
             for sub in DEFAULT_TYPE_SUBFOLDERS.values()
         }
         rec_name_norm = "".join(ch for ch in rec["name"].lower() if ch.isalnum())
+        is_standard_tier1 = rec["tier"] == 1 and (
+            rec["name"].lower() in standard_tier1_cats or rec["name"].lower() == "other"
+        )
+        canonical_sub_exts = [
+            d_ext
+            for d_ext, sub in DEFAULT_TYPE_SUBFOLDERS.items()
+            if "".join(ch for ch in sub.lower() if ch.isalnum()) == rec_name_norm
+        ]
         is_format_bucket = (
             rec["tier"] >= 2
-            and bool(raw_exts)
+            and (bool(raw_exts) or bool(canonical_sub_exts))
             and (
                 rec_name_norm in known_type_sub_names
                 or any(rec_name_norm == e.lstrip(".").lower() for e in raw_exts)
             )
         )
-        if is_format_bucket:
+        if is_standard_tier1:
             inferred_kws = []
             inferred_domains = []
-
-        # Only let a keyword-less / domain-less folder claim extensions it actually owns
-        if not inferred_kws and not inferred_domains:
+            merged_exts = list(standard_tier1_cats.get(rec["name"].lower(), []))
+            for extra_e in raw_exts:
+                if extra_e not in merged_exts and dominant_ext_owner.get(extra_e, (parts, (0, 0, 0)))[0] == parts:
+                    merged_exts.append(extra_e)
+            inferred_exts = merged_exts
+        elif is_format_bucket:
+            inferred_kws = []
+            inferred_domains = []
+            merged_sub_exts: list[str] = []
+            for cand_ext in list(raw_exts) + canonical_sub_exts:
+                owner_parts = dominant_ext_owner.get(cand_ext, (parts, (0, 0, 0)))[0]
+                # Claim canonical sibling extensions (e.g. .stp alongside .step, .xls alongside .xlsx)
+                # unless another deeper Tier 2+ folder explicitly owns more of them
+                if cand_ext not in merged_sub_exts and (owner_parts == parts or len(owner_parts) < 2):
+                    merged_sub_exts.append(cand_ext)
+            inferred_exts = merged_sub_exts
+        elif not inferred_kws and not inferred_domains:
             inferred_exts = [
                 ext for ext in raw_exts
                 if dominant_ext_owner.get(ext, (parts, (0, 0, 0)))[0] == parts
