@@ -1986,9 +1986,10 @@ class MainWindow(QMainWindow):
         preview_actions_row.addWidget(self.btn_refresh_preview)
         sim_card, sim_layout = _make_surface_card(
             "Downloads Folder Preview",
-            self.lbl_sim_summary,
             right_widget=preview_actions,
         )
+        self.lbl_sim_summary.setVisible(True)
+        sim_layout.addWidget(self.lbl_sim_summary)
 
         self.tbl_sim = QTableWidget(0, 4)
         self.tbl_sim.setHorizontalHeaderLabels(
@@ -2255,7 +2256,7 @@ class MainWindow(QMainWindow):
             outer = QHBoxLayout(vp)
             outer.setContentsMargins(2, 0, 8, 14)
             col = QWidget()
-            col.setMaximumWidth(700)
+            col.setMaximumWidth(860)
             vl = QVBoxLayout(col)
             vl.setContentsMargins(0, 0, 0, 0)
             vl.setSpacing(12)
@@ -4387,6 +4388,11 @@ class MainWindow(QMainWindow):
                     break
         elif action == "tree_tool:align_downloads":
             self._open_align_preview_dialog()
+        elif action == "tree_tool:apply_shift":
+            self._apply_flow_pending_folder_shift()
+        elif action == "flow_notice" and arg:
+            self.banner.show_message(arg, kind="info", timeout_ms=3200)
+            self.lbl_footer.setText(arg)
         elif action == "open_prefs_section":
             self.tabs.setCurrentWidget(self._settings_tab)
             if hasattr(self, "select_preferences_section"):
@@ -4408,6 +4414,91 @@ class MainWindow(QMainWindow):
                 os.startfile(str(target))
         elif action in ("tree:rename", "tree:merge", "tree:delete") and arg:
             self._open_legacy_arch_dialog(action, folder_path=arg)
+
+    def _apply_flow_pending_folder_shift(self) -> None:
+        """Apply pending drag-and-drop folder moves from Sorting Flow with full Undo support."""
+        from download_sorter.fs_ops import move_file_safely
+        import uuid
+
+        target_cfg = self.flow_tab._pending_cfg
+        renames = list(self.flow_tab._pending_folder_renames)
+        if target_cfg is None:
+            self.flow_tab.discard_pending_folder_shift()
+            return
+
+        watch_root = self.service.watch_root
+        batch_id = f"flow-arch-{uuid.uuid4().hex[:8]}"
+
+        def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
+            moved_direct = 0
+            for old_rel, new_rel in renames:
+                src_dir = watch_root / old_rel
+                dst_dir = watch_root / new_rel
+                if not src_dir.is_dir():
+                    continue
+                files = [p for p in src_dir.rglob("*") if p.is_file()]
+                total = max(1, len(files))
+                for idx, fp in enumerate(files, start=1):
+                    report(idx, total, fp.name)
+                    rel_tail = fp.relative_to(src_dir)
+                    dest_file = dst_dir / rel_tail
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        res = move_file_safely(
+                            fp,
+                            dest_file,
+                            db=self.service.db,
+                            watch_root=watch_root,
+                            reason=f"Moved folder {old_rel} -> {new_rel}",
+                            matched_rule="Sorting Flow Folder Move",
+                            match_type="architecture",
+                            batch_id=batch_id,
+                        )
+                        if res is not None:
+                            moved_direct += 1
+                    except OSError:
+                        continue
+                # Prune empty leftover directories bottom-up
+                for sub in sorted([d for d in src_dir.rglob("*") if d.is_dir()], key=lambda p: len(p.parts), reverse=True):
+                    try:
+                        sub.rmdir()
+                    except OSError:
+                        pass
+                try:
+                    src_dir.rmdir()
+                except OSError:
+                    pass
+
+            shift_res = self.service.apply_architecture_and_shift(
+                target_cfg,
+                shift_files=True,
+                create_empty_folders=False,
+                on_progress=report,
+            )
+            shift_res["moved_direct"] = moved_direct
+            return shift_res
+
+        def _done(res: dict[str, Any]) -> None:
+            self.flow_tab.discard_pending_folder_shift()
+            total_shifted = int(res.get("shifted_count", 0)) + int(res.get("moved_direct", 0))
+            msg = f"Updated folder structure and moved {total_shifted} file(s)."
+            self.refresh_all(
+                then=lambda: self.banner.show_message(
+                    msg,
+                    kind="success",
+                    action_text="Undo",
+                    action=self._on_undo_last,
+                )
+            )
+            self.lbl_footer.setText(msg)
+
+        self._run_service_action(
+            _work,
+            _done,
+            busy_text="Moving folder & updating Sorting Flow...",
+            pass_progress=True,
+            finish_text="Folder Structure Updated",
+        )
 
     def _open_align_preview_dialog(self) -> None:
         """Simulate loose root files off the UI thread, show AlignPreviewDialog, and move checked items."""

@@ -382,3 +382,176 @@ def test_scan_and_shift_protect_game_bundles_extension_ids_and_curated_folders(
         assert "homework_3_from_pdf.pdf" in planned_srcs
     finally:
         svc.stop()
+
+
+def test_bridge_overlay_deleted_widget_crash_regression_and_mactoggle_sync(
+    v3_qapp,
+    app_paths: AppPaths,
+) -> None:
+    from PySide6.QtWidgets import QFrame
+    from shiboken6 import delete as qt_delete
+
+    from download_sorter.ui.flow.bridge_overlay import BridgeWire
+    from download_sorter.ui.main_window import MainWindow
+    from download_sorter.ui.settings_widgets import MacToggle
+
+    # 1. MacToggle must reflect setChecked(True) even when blockSignals(True) is active
+    sw = MacToggle(quiet=True)
+    sw.blockSignals(True)
+    sw.setChecked(True)
+    sw.blockSignals(False)
+    sw.grab()
+    assert sw._thumb_pos == 1.0
+
+    # 2. BridgeOverlay.paintEvent must never raise RuntimeError or crash when a C++ QFrame is deleted
+    save_config(Config.new_install(), app_paths)
+    svc = SorterService(app_paths)
+    win = MainWindow(svc)
+    try:
+        win.show()
+        v3_qapp.processEvents()
+
+        ghost_src = QFrame(win.flow_tab.workspace)
+        ghost_tgt = QFrame(win.flow_tab.workspace)
+        ghost_src.show()
+        ghost_tgt.show()
+        win.flow_tab.overlay._wires = [BridgeWire(source=ghost_src, target=ghost_tgt)]
+        win.flow_tab.overlay.set_drag_wire(ghost_src, snap_target=ghost_tgt)
+
+        # Destroy underlying C++ QFrames before paintEvent runs
+        qt_delete(ghost_src)
+        qt_delete(ghost_tgt)
+
+        # Must silently prune dead wrappers and end QPainter cleanly
+        win.flow_tab.overlay.grab()
+        win.flow_tab.refresh()
+        v3_qapp.processEvents()
+        assert win.flow_tab.overlay._wires == [] or all(
+            w.source is not None for w in win.flow_tab.overlay._wires
+        )
+    finally:
+        win.close()
+        svc.stop()
+
+
+def test_sorting_flow_drag_and_drop_adjustments(
+    v3_qapp,
+    app_paths: AppPaths,
+) -> None:
+    from PySide6.QtCore import QMimeData, QPointF, Qt
+    from PySide6.QtGui import QDropEvent
+
+    from download_sorter.router import FileCandidate, evaluate
+    from download_sorter.ui.flow.folder_tree_panel import MIME_FOLDER_PATH
+    from download_sorter.ui.flow.spine_panel import MIME_BUCKET_ID, MIME_RULE_ID
+    from download_sorter.ui.main_window import MainWindow
+
+    cfg = Config.new_install()
+    cfg.rules = [
+        Rule(id="r_a", name="Broad Invoices", destination="Documents", keywords=["invoice"], enabled=True),
+        Rule(id="r_b", name="Stripe Invoices", destination="Documents\\PDF", keywords=["invoice", "stripe"], enabled=True),
+    ]
+    save_config(cfg, app_paths)
+
+    svc = SorterService(app_paths)
+    win = MainWindow(svc)
+    try:
+        win.show()
+        v3_qapp.processEvents()
+        flow = win.flow_tab
+
+        # 1. Reorder rule via QDropEvent (drop r_b onto upper half of r_a -> r_b moves first)
+        row_a = flow.spine.rules_layout.itemAt(0).widget()
+        assert row_a is not None
+        mime_reorder = QMimeData()
+        mime_reorder.setData(MIME_RULE_ID, b"r_b")
+        drop_ev = QDropEvent(
+            QPointF(10.0, 2.0),
+            Qt.DropAction.MoveAction,
+            mime_reorder,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        row_a.dropEvent(drop_ev)
+        v3_qapp.processEvents()
+        v3_qapp.processEvents()
+        assert [r.id for r in svc.config.rules] == ["r_b", "r_a"]
+
+        # 2. Drag a Rule onto a Folder in the Downloads tree to re-route its destination
+        target_row = flow.tree.folder_widget("Archives")
+        assert target_row is not None
+        mime_route_rule = QMimeData()
+        mime_route_rule.setData(MIME_RULE_ID, b"r_b")
+        drop_rule_folder = QDropEvent(
+            QPointF(12.0, 12.0),
+            Qt.DropAction.MoveAction,
+            mime_route_rule,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        target_row.dropEvent(drop_rule_folder)
+        v3_qapp.processEvents()
+        v3_qapp.processEvents()
+        assert svc.config.rules[0].destination == "Archives"
+
+        # 3. Drag a File-Type bucket (Images -> t-imgs) onto a subfolder (Documents\Word)
+        sub_row = flow.tree.folder_widget("Documents\\Word")
+        assert sub_row is not None
+        mime_bucket = QMimeData()
+        mime_bucket.setData(MIME_BUCKET_ID, b"t-imgs")
+        drop_bucket = QDropEvent(
+            QPointF(12.0, 12.0),
+            Qt.DropAction.MoveAction,
+            mime_bucket,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        sub_row.dropEvent(drop_bucket)
+        v3_qapp.processEvents()
+        v3_qapp.processEvents()
+        dec_img = evaluate(FileCandidate("photo.png"), svc.config)
+        assert dec_img.relative_dest is not None
+        assert str(dec_img.relative_dest.parent).replace("/", "\\") == "Documents\\Word"
+
+        # Reset bucket back to default Images
+        assert flow.reset_bucket_route("t-imgs") is True
+        v3_qapp.processEvents()
+        dec_img_reset = evaluate(FileCandidate("photo.png"), svc.config)
+        assert dec_img_reset.relative_dest is not None
+        assert str(dec_img_reset.relative_dest.parent).replace("/", "\\").startswith("Images")
+
+        # 4. Drag a virtual subfolder (Documents\Presentations) onto Downloads header to promote to top-level,
+        #    then nest it inside Archives via folder-on-folder drop!
+        mime_promote = QMimeData()
+        mime_promote.setData(MIME_FOLDER_PATH, b"Documents\\Presentations")
+        drop_promote = QDropEvent(
+            QPointF(10.0, 8.0),
+            Qt.DropAction.MoveAction,
+            mime_promote,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        flow.tree.hdr_drop.dropEvent(drop_promote)
+        v3_qapp.processEvents()
+        v3_qapp.processEvents()
+        assert "Presentations" in flow.tree._row_widgets
+
+        arch_row = flow.tree.folder_widget("Archives")
+        assert arch_row is not None
+        mime_nest = QMimeData()
+        mime_nest.setData(MIME_FOLDER_PATH, b"Presentations")
+        drop_nest = QDropEvent(
+            QPointF(10.0, 10.0),
+            Qt.DropAction.MoveAction,
+            mime_nest,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        arch_row.dropEvent(drop_nest)
+        v3_qapp.processEvents()
+        v3_qapp.processEvents()
+        assert "Archives\\Presentations" in flow.tree._row_widgets
+    finally:
+        win.close()
+        svc.stop()
+

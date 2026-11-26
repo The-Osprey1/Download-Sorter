@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from PySide6.QtCore import (
+    QAbstractAnimation,
     QEasingCurve,
     QPoint,
     QRectF,
@@ -45,6 +46,17 @@ class MacToggle(QCheckBox):
     def hitButton(self, pos: QPoint) -> bool:
         return self.rect().contains(pos)
 
+    def checkStateSet(self) -> None:  # noqa: N802
+        super().checkStateSet()
+        if self.signalsBlocked() or not animations_enabled():
+            if prev := getattr(self, "_motion_mac_toggle", None):
+                try:
+                    prev.stop()
+                except RuntimeError:
+                    pass
+            self._thumb_pos = 1.0 if self.isChecked() else 0.0
+            self.update()
+
     def _animate_thumb(self, checked: bool) -> None:
         target = 1.0 if checked else 0.0
         if not animations_enabled():
@@ -66,6 +78,10 @@ class MacToggle(QCheckBox):
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:
+        anim = getattr(self, "_motion_mac_toggle", None)
+        if anim is None or anim.state() != QAbstractAnimation.State.Running:
+            self._thumb_pos = 1.0 if self.isChecked() else 0.0
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 

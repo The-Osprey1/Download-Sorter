@@ -5,8 +5,8 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-from PySide6.QtCore import QMimeData, QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QDrag, QPainter, QPen
+from PySide6.QtCore import QMimeData, QPoint, QPointF, QRectF, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QDrag, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -35,6 +35,52 @@ from download_sorter.router import apply_rename_template
 from download_sorter.ui.motion import InteractiveRibbonBtn, make_vector_icon
 from download_sorter.ui.settings_widgets import MacToggle
 from download_sorter.ui.text_scale import scaled_px
+
+MIME_RULE_ID = "application/x-ds-rule-id"
+MIME_BUCKET_ID = "application/x-ds-bucket-id"
+
+
+def make_flow_drag_pixmap(title: str, subtitle: str = "", accent: str = "#0A84FF") -> QPixmap:
+    """Render a crisp macOS Sequoia dark-mode drag ghost pill for Sorting Flow."""
+    w, h = 236, (46 if subtitle else 32)
+    pix = QPixmap(w, h)
+    pix.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    bg = QColor("#1C1C1E")
+    bg.setAlpha(238)
+    bdr = QColor(accent)
+    bdr.setAlpha(210)
+    p.setBrush(bg)
+    p.setPen(QPen(bdr, 1.4))
+    p.drawRoundedRect(QRectF(1.0, 1.0, w - 2.0, h - 2.0), 9.0, 9.0)
+
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(accent))
+    p.drawEllipse(QPointF(12.0, 15.0 if subtitle else h / 2.0), 3.2, 3.2)
+
+    f_title = QFont("Segoe UI", 9)
+    f_title.setBold(True)
+    p.setFont(f_title)
+    p.setPen(QColor("#F5F5F7"))
+    fm_t = QFontMetrics(f_title)
+    p.drawText(
+        QRectF(21.0, 5.0 if subtitle else 4.0, w - 28.0, 18.0 if subtitle else h - 8.0),
+        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        fm_t.elidedText(title, Qt.TextElideMode.ElideRight, w - 30),
+    )
+    if subtitle:
+        f_sub = QFont("Segoe UI", 8)
+        p.setFont(f_sub)
+        p.setPen(QColor("#98989D"))
+        fm_s = QFontMetrics(f_sub)
+        p.drawText(
+            QRectF(21.0, 23.0, w - 28.0, 17.0),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            fm_s.elidedText(subtitle, Qt.TextElideMode.ElideRight, w - 30),
+        )
+    p.end()
+    return pix
 
 
 class _GripDotsWidget(QWidget):
@@ -83,7 +129,9 @@ class _RuleRowWidget(QFrame):
     expand_requested = Signal(str)
     hover_entered = Signal(str, str)  # (rule_id, destination)
     hover_left = Signal()
-    reordered = Signal(str, str)  # (dragged_rule_id, target_rule_id)
+    reordered = Signal(str, str, bool)  # (dragged_rule_id, target_rule_id, insert_after)
+    flow_drag_started = Signal(object, str)  # (port_widget, color)
+    flow_drag_finished = Signal()
     rule_updated = Signal(str, dict)
     rule_deleted = Signal(str)
     open_full_editor = Signal(str)
@@ -110,19 +158,20 @@ class _RuleRowWidget(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         if is_expanded:
-            self.setStyleSheet(
+            self._base_qss = (
                 "_RuleRowWidget { background-color: #161618; border: 1px solid #3D3D41; border-radius: 11px; }"
             )
         elif is_winner or is_focus_feeder:
-            self.setStyleSheet(
+            self._base_qss = (
                 "_RuleRowWidget { background-color: rgba(10, 132, 255, 0.11); "
                 "border: 1px solid rgba(10, 132, 255, 0.45); border-radius: 11px; }"
             )
         else:
-            self.setStyleSheet(
+            self._base_qss = (
                 "_RuleRowWidget { background-color: transparent; border: 1px solid transparent; border-radius: 11px; }"
                 "_RuleRowWidget:hover { background-color: #161618; }"
             )
+        self.setStyleSheet(self._base_qss)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 7, 8, 7)
@@ -194,9 +243,13 @@ class _RuleRowWidget(QFrame):
         mid.addLayout(sub_row)
         top.addLayout(mid, 1)
 
-        # Flush-right Destination Port Badge
+        # Flush-right Destination Port Badge (draggable onto any folder on the right)
         dest_leaf = rule.destination.replace("/", "\\").split("\\")[-1] or "Downloads"
         self.port_badge = QFrame()
+        self.port_badge.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.port_badge.setToolTip(
+            f"Routes to {rule.destination} — drag onto any folder on the right to re-route, or drag up/down to reorder"
+        )
         b_col = "#0A84FF" if (is_winner or is_focus_feeder) else "#2C2C2E"
         t_col = "#F5F5F7" if (is_winner or is_focus_feeder) else "#98989D"
         self.port_badge.setStyleSheet(
@@ -399,17 +452,27 @@ class _RuleRowWidget(QFrame):
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if (
-            not self._is_expanded
-            and self._drag_start is not None
+            self._drag_start is not None
             and (event.buttons() & Qt.MouseButton.LeftButton)
             and (event.position().toPoint() - self._drag_start).manhattanLength() >= 10
         ):
-            drag = QDrag(self)
-            mime = QMimeData()
-            mime.setData("application/x-ds-rule-id", self.rule.id.encode("utf-8"))
-            drag.setMimeData(mime)
-            drag.exec(Qt.DropAction.MoveAction)
             self._drag_start = None
+            drag = QDrag(self.window() or self)
+            mime = QMimeData()
+            mime.setData(MIME_RULE_ID, self.rule.id.encode("utf-8"))
+            drag.setMimeData(mime)
+            ghost = make_flow_drag_pixmap(
+                f"Rule: {self.rule.name}",
+                "Drop on rule to reorder · Drop on folder to route",
+                "#0A84FF",
+            )
+            drag.setPixmap(ghost)
+            drag.setHotSpot(QPoint(18, ghost.height() // 2))
+            self.flow_drag_started.emit(self.port_badge, "#0A84FF")
+            try:
+                drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction)
+            finally:
+                self.flow_drag_finished.emit()
             return
         super().mouseMoveEvent(event)
 
@@ -428,28 +491,59 @@ class _RuleRowWidget(QFrame):
         self.hover_left.emit()
         super().leaveEvent(event)
 
+    def _update_drop_indicator(self, pos_y: float) -> bool:
+        insert_after = pos_y > (self.height() / 2.0)
+        edge = "border-bottom: 2px solid #0A84FF;" if insert_after else "border-top: 2px solid #0A84FF;"
+        self.setStyleSheet(
+            f"_RuleRowWidget {{ background-color: rgba(10, 132, 255, 0.10); {edge} border-radius: 9px; }}"
+        )
+        return insert_after
+
     def dragEnterEvent(self, event) -> None:  # noqa: N802
-        if event.mimeData().hasFormat("application/x-ds-rule-id"):
+        if event.mimeData().hasFormat(MIME_RULE_ID):
+            dragged_id = bytes(event.mimeData().data(MIME_RULE_ID)).decode("utf-8", "ignore")
+            if dragged_id and dragged_id != self.rule.id:
+                self._update_drop_indicator(event.position().y())
             event.acceptProposedAction()
             return
         super().dragEnterEvent(event)
 
-    def dropEvent(self, event) -> None:  # noqa: N802
-        if event.mimeData().hasFormat("application/x-ds-rule-id"):
-            dragged_id = bytes(event.mimeData().data("application/x-ds-rule-id")).decode("utf-8", "ignore")
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasFormat(MIME_RULE_ID):
+            dragged_id = bytes(event.mimeData().data(MIME_RULE_ID)).decode("utf-8", "ignore")
             if dragged_id and dragged_id != self.rule.id:
-                self.reordered.emit(dragged_id, self.rule.id)
+                self._update_drop_indicator(event.position().y())
             event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self.setStyleSheet(self._base_qss)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        self.setStyleSheet(self._base_qss)
+        if event.mimeData().hasFormat(MIME_RULE_ID):
+            dragged_id = bytes(event.mimeData().data(MIME_RULE_ID)).decode("utf-8", "ignore")
+            insert_after = event.position().y() > (self.height() / 2.0)
+            target_id = self.rule.id
+            event.acceptProposedAction()
+            if dragged_id and dragged_id != target_id:
+                QTimer.singleShot(0, lambda d=dragged_id, t=target_id, a=insert_after: self.reordered.emit(d, t, a))
             return
         super().dropEvent(event)
 
 
 class _TypeRowWidget(QFrame):
-    """Single-column Step 3 file-type row with right-aligned port badge."""
+    """Single-column Step 3 file-type row with draggable destination port badge."""
 
     hover_entered = Signal(str, str)  # (bucket_id, target_folder)
     hover_left = Signal()
     unzip_toggled = Signal()
+    flow_drag_started = Signal(object, str)  # (port_widget, color)
+    flow_drag_finished = Signal()
+    route_to_folder_requested = Signal(str, str)  # (bucket_id, folder_path)
+    reset_route_requested = Signal(str)  # bucket_id
 
     def __init__(
         self,
@@ -460,11 +554,20 @@ class _TypeRowWidget(QFrame):
         is_focus_feeder: bool = False,
         dimmed: bool = False,
         auto_unzip_all: bool = False,
+        folder_choices: list[str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.bucket = bucket
         self.target_folder = target_folder
+        self._folder_choices = list(folder_choices or [])
+        self._drag_start = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+        self.setToolTip(
+            f"Drag {bucket.name} onto any folder on the right to change where its files go (or right-click)"
+        )
 
         if is_winner or is_focus_feeder:
             self.setStyleSheet(
@@ -478,8 +581,12 @@ class _TypeRowWidget(QFrame):
             )
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(8, 5, 8, 5)
-        row.setSpacing(8)
+        row.setContentsMargins(6, 4, 8, 4)
+        row.setSpacing(7)
+
+        grip = _GripDotsWidget()
+        grip.setToolTip(f"Drag {bucket.name} onto any folder on the right to change destination")
+        row.addWidget(grip)
 
         lbl_name = QLabel(bucket.name)
         lbl_name.setStyleSheet(f"color: {'#636366' if dimmed else '#F5F5F7'}; font-size: 12.5px; font-weight: 600;")
@@ -491,6 +598,7 @@ class _TypeRowWidget(QFrame):
 
         if bucket.unzippable:
             btn_uz = QPushButton("✓ Auto-extract" if auto_unzip_all else "Auto-extract: off")
+            btn_uz.setToolTip("Automatically unpack .zip archives into a subfolder")
             btn_uz.setStyleSheet(
                 f"padding: 2px 7px; font-size: 11px; border-radius: 6px; "
                 f"color: {'#0A84FF' if auto_unzip_all else '#8E8E93'}; border: 1px solid #2C2C2E;"
@@ -500,6 +608,8 @@ class _TypeRowWidget(QFrame):
 
         leaf = target_folder.replace("/", "\\").split("\\")[-1] or bucket.default_folder
         self.port_badge = QFrame()
+        self.port_badge.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.port_badge.setToolTip(f"Drag onto any folder in Downloads to route {bucket.name} there")
         b_col = "#0A84FF" if (is_winner or is_focus_feeder) else "#2C2C2E"
         t_col = "#F5F5F7" if (is_winner or is_focus_feeder) else "#98989D"
         self.port_badge.setStyleSheet(
@@ -514,6 +624,52 @@ class _TypeRowWidget(QFrame):
         pb.addWidget(lbl_d)
         pb.addWidget(lbl_dot)
         row.addWidget(self.port_badge)
+
+    def _show_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        sub = menu.addMenu(f"Route {self.bucket.name} to Folder")
+        for ch in self._folder_choices[:24]:
+            act = sub.addAction(ch.replace("\\", " › "))
+            act.triggered.connect(lambda _=False, dest=ch: self.route_to_folder_requested.emit(self.bucket.id, dest))
+        menu.addSeparator()
+        act_reset = menu.addAction(f"Reset to Default ({self.bucket.default_folder})")
+        act_reset.triggered.connect(lambda: self.reset_route_requested.emit(self.bucket.id))
+        menu.exec(self.mapToGlobal(pos))
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if (
+            self._drag_start is not None
+            and (event.buttons() & Qt.MouseButton.LeftButton)
+            and (event.position().toPoint() - self._drag_start).manhattanLength() >= 10
+        ):
+            self._drag_start = None
+            drag = QDrag(self.window() or self)
+            mime = QMimeData()
+            mime.setData(MIME_BUCKET_ID, self.bucket.id.encode("utf-8"))
+            drag.setMimeData(mime)
+            ghost = make_flow_drag_pixmap(
+                f"{self.bucket.name}",
+                "Drop onto any folder on the right to route",
+                "#3B82F6",
+            )
+            drag.setPixmap(ghost)
+            drag.setHotSpot(QPoint(18, ghost.height() // 2))
+            self.flow_drag_started.emit(self.port_badge, "#3B82F6")
+            try:
+                drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction)
+            finally:
+                self.flow_drag_finished.emit()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._drag_start = None
+        super().mouseReleaseEvent(event)
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self.hover_entered.emit(self.bucket.id, self.target_folder)
@@ -567,6 +723,10 @@ class SpinePanel(QScrollArea):
     config_mutated = Signal(object)  # emits new Config
     rule_port_hovered = Signal(object, str)  # (port_widget, destination_folder)
     port_hover_left = Signal()
+    flow_drag_started = Signal(object, str)  # (port_widget, color)
+    flow_drag_finished = Signal()
+    bucket_routed = Signal(str, str)  # (bucket_id, folder_path)
+    bucket_reset = Signal(str)  # bucket_id
     teach_committed = Signal(object, bool, object)  # (Rule, also_move_now, source_path)
     teach_cancelled = Signal()
     action_requested = Signal(str, str)  # (action, arg)
@@ -599,7 +759,7 @@ class SpinePanel(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.body_layout = QVBoxLayout(self.body)
         self.body_layout.setContentsMargins(0, 0, 8, 8)
-        self.body_layout.setSpacing(14)
+        self.body_layout.setSpacing(10)
 
         # Build the 3 step containers (Step 1 is strictly opt-in and hidden by default)
         self.step1_row, self.badge_1, self.lbl_state_1, self.card_1 = self._make_step_shell(
@@ -610,12 +770,12 @@ class SpinePanel(QScrollArea):
         self.step2_row, self.badge_2, self.lbl_state_2, self.card_2 = self._make_step_shell(
             "1",
             "Your rules",
-            "Matched first, top to bottom · Click any rule to edit",
+            "Matched first · Drag to reorder or drop onto a folder →",
         )
         self.step3_row, self.badge_3, self.lbl_state_3, self.card_3 = self._make_step_shell(
             "2",
             "Sort the rest by file type",
-            "Everything else sorts automatically by format",
+            "Drag any format group onto a folder on the right to re-route",
         )
         self.body.badges = [self.badge_1, self.badge_2, self.badge_3]
 
@@ -673,8 +833,8 @@ class SpinePanel(QScrollArea):
         card = QFrame()
         card.setObjectName("SurfaceCard")
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(14, 12, 14, 12)
-        cl.setSpacing(8)
+        cl.setContentsMargins(12, 10, 12, 10)
+        cl.setSpacing(6)
 
         hdr = QHBoxLayout()
         hdr.setSpacing(8)
@@ -1000,6 +1160,7 @@ class SpinePanel(QScrollArea):
         *,
         focused_folder: str | None = None,
         folder_choices: list[str] | None = None,
+        disk_state: dict | None = None,
     ) -> None:
         self._config = config
         self._rule_ports.clear()
@@ -1083,6 +1244,8 @@ class SpinePanel(QScrollArea):
             row.hover_entered.connect(lambda rid, dest: self.rule_port_hovered.emit(self._rule_ports.get(rid), dest))
             row.hover_left.connect(self.port_hover_left.emit)
             row.reordered.connect(self._on_rule_reordered)
+            row.flow_drag_started.connect(self.flow_drag_started.emit)
+            row.flow_drag_finished.connect(self.flow_drag_finished.emit)
             row.rule_updated.connect(self._update_rule_fields)
             row.rule_deleted.connect(self._on_rule_deleted)
             row.open_full_editor.connect(lambda rid: self.action_requested.emit("open_full_rule_editor", rid))
@@ -1114,10 +1277,13 @@ class SpinePanel(QScrollArea):
             if item.widget():
                 item.widget().deleteLater()
 
+        existing_folders: dict[str, int] = dict((disk_state or {}).get("existing_folders") or {})
         has_3d_activity = (
             config.show_advanced_tools
             or config.hold_3mf_enabled
             or bool(config.architecture)
+            or ("3D Models" in existing_folders)
+            or ("CAD" in existing_folders)
             or trace.matched_bucket_id == "t-3d"
             or trace.dest_folder.startswith("3D Models")
             or any("3d" in r.destination.lower() or ".3mf" in r.extensions or ".stl" in r.extensions for r in config.rules)
@@ -1132,7 +1298,12 @@ class SpinePanel(QScrollArea):
             is_feeder = bool(norm_focus and norm_focus in targets)
             if is_feeder:
                 type_feed_count += 1
-            dest_display = trace.dest_folder if (is_winner and trace.dest_folder) else bucket.default_folder
+            if is_winner and trace.dest_folder:
+                dest_display = trace.dest_folder
+            else:
+                primary_ext = bucket.extensions[0] if bucket.extensions else ""
+                mapped = str(config.category_map.get(primary_ext, "") or "").replace("/", "\\").strip("\\")
+                dest_display = mapped or bucket.default_folder
             t_row = _TypeRowWidget(
                 bucket,
                 dest_display,
@@ -1140,10 +1311,15 @@ class SpinePanel(QScrollArea):
                 is_focus_feeder=is_feeder,
                 dimmed=bool(norm_focus and not is_feeder),
                 auto_unzip_all=config.auto_unzip_all,
+                folder_choices=folder_choices,
             )
             t_row.hover_entered.connect(lambda bid, dest: self.rule_port_hovered.emit(self._type_ports.get(bid), dest))
             t_row.hover_left.connect(self.port_hover_left.emit)
             t_row.unzip_toggled.connect(self._on_archive_unzip_toggled)
+            t_row.flow_drag_started.connect(self.flow_drag_started.emit)
+            t_row.flow_drag_finished.connect(self.flow_drag_finished.emit)
+            t_row.route_to_folder_requested.connect(self.bucket_routed.emit)
+            t_row.reset_route_requested.connect(self.bucket_reset.emit)
             self._type_ports[bucket.id] = t_row.port_badge
             self.types_layout.addWidget(t_row)
 
@@ -1347,7 +1523,7 @@ class SpinePanel(QScrollArea):
         self._expanded_rule_id = None if self._expanded_rule_id == rule_id else rule_id
         self.action_requested.emit("refresh_flow", "")
 
-    def _on_rule_reordered(self, dragged_id: str, target_id: str) -> None:
+    def _on_rule_reordered(self, dragged_id: str, target_id: str, insert_after: bool = False) -> None:
         if self._config is None:
             return
         cfg = copy.deepcopy(self._config)
@@ -1356,7 +1532,9 @@ class SpinePanel(QScrollArea):
         if src_idx < 0 or dst_idx < 0 or src_idx == dst_idx:
             return
         moved = cfg.rules.pop(src_idx)
-        cfg.rules.insert(dst_idx, moved)
+        new_dst_idx = next((i for i, r in enumerate(cfg.rules) if r.id == target_id), dst_idx)
+        insert_pos = new_dst_idx + (1 if insert_after else 0)
+        cfg.rules.insert(max(0, min(len(cfg.rules), insert_pos)), moved)
         self.config_mutated.emit(cfg)
 
     def _on_rule_deleted(self, rule_id: str) -> None:

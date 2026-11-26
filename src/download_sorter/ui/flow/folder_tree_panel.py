@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QMimeData, QPoint, QPointF, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QDrag, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -18,11 +18,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from download_sorter.architecture import architecture_from_config
+from download_sorter.architecture import FolderArchitecture, architecture_from_config
 from download_sorter.config import Config
 from download_sorter.pipeline import PipelineTrace
+from download_sorter.ui.flow.spine_panel import (
+    MIME_BUCKET_ID,
+    MIME_RULE_ID,
+    make_flow_drag_pixmap,
+)
 from download_sorter.ui.motion import InteractiveRibbonBtn, make_vector_icon
 from download_sorter.ui.text_scale import scaled_px
+
+MIME_FOLDER_PATH = "application/x-ds-folder-path"
 
 
 class _SyncDotWidget(QWidget):
@@ -47,13 +54,18 @@ class _SyncDotWidget(QWidget):
 
 
 class FolderRowWidget(QFrame):
-    """Single clickable, droppable folder row inside the Downloads tree."""
+    """Single clickable, draggable, and droppable folder row inside the Downloads tree."""
 
     clicked = Signal(str)
     hover_entered = Signal(str)
     hover_left = Signal()
     add_subfolder_requested = Signal(str)
     file_dropped = Signal(Path, str)
+    rule_dropped = Signal(str, str)  # (rule_id, folder_path)
+    bucket_dropped = Signal(str, str)  # (bucket_id, folder_path)
+    folder_dropped = Signal(str, str)  # (src_folder_path, target_folder_path)
+    drag_hover_entered = Signal(object, object)  # (FolderRowWidget, global_pos)
+    drag_hover_left = Signal()
     context_action = Signal(str, str)  # (action_name, folder_path)
 
     def __init__(
@@ -76,26 +88,32 @@ class FolderRowWidget(QFrame):
     ) -> None:
         super().__init__(parent)
         self.folder_path = folder_path
+        self.display_name = display_name
+        self._drag_start: QPoint | None = None
+        self._double_clicked = False
         self.setMinimumHeight(scaled_px(50) if (is_hit and land_label) else scaled_px(32))
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         if not exists_on_disk:
-            self.setToolTip("Created automatically when a matching file arrives")
+            self.setToolTip("Created automatically when a matching file arrives · Drag rules, file types, or folders here")
         elif is_custom_disk:
-            self.setToolTip("Your own folder in Downloads — untouched unless targeted by a rule")
+            self.setToolTip("Your own folder in Downloads — drag rules or file types here to route into it")
+        else:
+            self.setToolTip("Click to inspect · Double-click to open · Drag rules, file types, files, or folders here")
 
         if is_hit or is_focused or is_draft_target:
-            self.setStyleSheet(
+            self._base_qss = (
                 "FolderRowWidget { background-color: rgba(10, 132, 255, 0.11); "
                 "border: 1px solid rgba(10, 132, 255, 0.45); border-radius: 10px; }"
             )
         else:
-            self.setStyleSheet(
+            self._base_qss = (
                 "FolderRowWidget { background-color: transparent; border: 1px solid transparent; border-radius: 10px; }"
                 "FolderRowWidget:hover { background-color: #161618; }"
             )
+        self.setStyleSheet(self._base_qss)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8 + depth * scaled_px(16), 6, 8, 6)
@@ -201,13 +219,51 @@ class FolderRowWidget(QFrame):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.folder_path)
+            self._drag_start = event.position().toPoint()
+            self._double_clicked = False
             event.accept()
             return
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if (
+            self._drag_start is not None
+            and (event.buttons() & Qt.MouseButton.LeftButton)
+            and (event.position().toPoint() - self._drag_start).manhattanLength() >= 10
+        ):
+            self._drag_start = None
+            drag = QDrag(self.window() or self)
+            mime = QMimeData()
+            mime.setData(MIME_FOLDER_PATH, self.folder_path.encode("utf-8"))
+            drag.setMimeData(mime)
+            sub_hint = (
+                "Drop on folder to nest · Drop on Downloads header for top-level"
+                if "\\" in self.folder_path
+                else "Drop onto another folder to nest inside it"
+            )
+            ghost = make_flow_drag_pixmap(f"Folder: {self.display_name}", sub_hint, "#0A84FF")
+            drag.setPixmap(ghost)
+            drag.setHotSpot(QPoint(18, ghost.height() // 2))
+            drag.exec(Qt.DropAction.MoveAction)
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
+            dist = (event.position().toPoint() - self._drag_start).manhattanLength()
+            self._drag_start = None
+            if dist < 10 and not self._double_clicked:
+                folder = self.folder_path
+                QTimer.singleShot(0, lambda f=folder: self.clicked.emit(f))
+            event.accept()
+            return
+        self._drag_start = None
+        super().mouseReleaseEvent(event)
+
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
+            self._double_clicked = True
+            self._drag_start = None
             self.context_action.emit("open_explorer", self.folder_path)
             event.accept()
             return
@@ -221,33 +277,80 @@ class FolderRowWidget(QFrame):
         self.hover_left.emit()
         super().leaveEvent(event)
 
+    def _can_accept_mime(self, mime) -> bool:
+        if mime.hasFormat(MIME_RULE_ID) or mime.hasFormat(MIME_BUCKET_ID):
+            return True
+        if mime.hasFormat(MIME_FOLDER_PATH):
+            src = bytes(mime.data(MIME_FOLDER_PATH)).decode("utf-8", "ignore").replace("/", "\\").strip("\\")
+            cur = self.folder_path.replace("/", "\\").strip("\\")
+            if not src or src.lower() == cur.lower() or cur.lower().startswith(src.lower() + "\\"):
+                return False
+            # Already direct parent -> no-op
+            src_parent = src.rsplit("\\", 1)[0] if "\\" in src else ""
+            if src_parent.lower() == cur.lower():
+                return False
+            return True
+        if mime.hasUrls():
+            return any(u.isLocalFile() for u in mime.urls())
+        return False
+
     def dragEnterEvent(self, event) -> None:  # noqa: N802
-        if event.mimeData().hasUrls():
-            urls = [u for u in event.mimeData().urls() if u.isLocalFile()]
-            if urls:
-                event.acceptProposedAction()
-                self.setStyleSheet(
-                    "FolderRowWidget { background-color: rgba(10, 132, 255, 0.14); "
-                    "border: 1px dashed #0A84FF; border-radius: 10px; }"
-                )
-                return
+        mime = event.mimeData()
+        if self._can_accept_mime(mime):
+            event.acceptProposedAction()
+            self.setStyleSheet(
+                "FolderRowWidget { background-color: rgba(10, 132, 255, 0.16); "
+                "border: 1.5px solid #0A84FF; border-radius: 10px; }"
+            )
+            if mime.hasFormat(MIME_RULE_ID) or mime.hasFormat(MIME_BUCKET_ID):
+                self.drag_hover_entered.emit(self, self.mapToGlobal(event.position().toPoint()))
+            return
         super().dragEnterEvent(event)
 
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        mime = event.mimeData()
+        if self._can_accept_mime(mime):
+            event.acceptProposedAction()
+            if mime.hasFormat(MIME_RULE_ID) or mime.hasFormat(MIME_BUCKET_ID):
+                self.drag_hover_entered.emit(self, self.mapToGlobal(event.position().toPoint()))
+            return
+        super().dragMoveEvent(event)
+
     def dragLeaveEvent(self, event) -> None:  # noqa: N802
-        self.setStyleSheet(
-            "FolderRowWidget { background-color: transparent; border: 1px solid transparent; border-radius: 10px; }"
-            "FolderRowWidget:hover { background-color: #161618; }"
-        )
+        self.setStyleSheet(self._base_qss)
+        self.drag_hover_left.emit()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802
-        if event.mimeData().hasUrls():
-            for u in event.mimeData().urls():
+        self.setStyleSheet(self._base_qss)
+        self.drag_hover_left.emit()
+        mime = event.mimeData()
+        dest = self.folder_path
+        if mime.hasFormat(MIME_RULE_ID):
+            rid = bytes(mime.data(MIME_RULE_ID)).decode("utf-8", "ignore").strip()
+            event.acceptProposedAction()
+            if rid:
+                QTimer.singleShot(0, lambda r=rid, d=dest: self.rule_dropped.emit(r, d))
+            return
+        if mime.hasFormat(MIME_BUCKET_ID):
+            bid = bytes(mime.data(MIME_BUCKET_ID)).decode("utf-8", "ignore").strip()
+            event.acceptProposedAction()
+            if bid:
+                QTimer.singleShot(0, lambda b=bid, d=dest: self.bucket_dropped.emit(b, d))
+            return
+        if mime.hasFormat(MIME_FOLDER_PATH) and self._can_accept_mime(mime):
+            src = bytes(mime.data(MIME_FOLDER_PATH)).decode("utf-8", "ignore").strip()
+            event.acceptProposedAction()
+            if src:
+                QTimer.singleShot(0, lambda s=src, d=dest: self.folder_dropped.emit(s, d))
+            return
+        if mime.hasUrls():
+            for u in mime.urls():
                 if u.isLocalFile():
                     p = Path(u.toLocalFile())
                     if p.is_file():
-                        self.file_dropped.emit(p, self.folder_path)
                         event.acceptProposedAction()
+                        QTimer.singleShot(0, lambda fp=p, d=dest: self.file_dropped.emit(fp, d))
                         return
         super().dropEvent(event)
 
@@ -272,6 +375,54 @@ class FolderRowWidget(QFrame):
             self.context_action.emit("delete", self.folder_path)
 
 
+class _RootDropHeader(QFrame):
+    """Downloads header strip that accepts nested folder drops to promote them to top-level."""
+
+    folder_promoted = Signal(str)  # src_folder_path
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self._base_qss = "_RootDropHeader { background: transparent; border: 1px solid transparent; border-radius: 8px; }"
+        self.setStyleSheet(self._base_qss)
+
+    @staticmethod
+    def _promotable_path(mime) -> str:
+        if not mime.hasFormat(MIME_FOLDER_PATH):
+            return ""
+        src = bytes(mime.data(MIME_FOLDER_PATH)).decode("utf-8", "ignore").replace("/", "\\").strip("\\")
+        return src if "\\" in src else ""
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if self._promotable_path(event.mimeData()):
+            event.acceptProposedAction()
+            self.setStyleSheet(
+                "_RootDropHeader { background-color: rgba(10, 132, 255, 0.14); "
+                "border: 1px dashed #0A84FF; border-radius: 8px; }"
+            )
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if self._promotable_path(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self.setStyleSheet(self._base_qss)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        self.setStyleSheet(self._base_qss)
+        src = self._promotable_path(event.mimeData())
+        if src:
+            event.acceptProposedAction()
+            QTimer.singleShot(0, lambda s=src: self.folder_promoted.emit(s))
+            return
+        super().dropEvent(event)
+
+
 class FolderTreePanel(QFrame):
     """Right-hand live folder tree backed by FolderArchitecture & Config."""
 
@@ -280,6 +431,11 @@ class FolderTreePanel(QFrame):
     folder_hover_left = Signal()
     subfolder_created = Signal(str, str)  # (parent_path, new_name)
     file_dropped_on_folder = Signal(Path, str)
+    rule_dropped_on_folder = Signal(str, str)  # (rule_id, folder_path)
+    bucket_dropped_on_folder = Signal(str, str)  # (bucket_id, folder_path)
+    folder_dropped_on_folder = Signal(str, str)  # (src_folder, target_parent_folder; "" = root)
+    drag_hover_folder = Signal(object, object)  # (FolderRowWidget, global_pos)
+    drag_hover_left = Signal()
     context_action = Signal(str, str)  # (action_name, folder_path)
     tool_action = Signal(str)  # scan_folders | sort_lower_tiers | snapshots | open_canvas | defaults | apply_shift | discard_shift
     clear_focus_requested = Signal()
@@ -296,8 +452,11 @@ class FolderTreePanel(QFrame):
         root.setContentsMargins(14, 12, 14, 12)
         root.setSpacing(10)
 
-        # Header
-        hdr = QHBoxLayout()
+        # Header (also accepts subfolder drops to promote to top-level Downloads)
+        self.hdr_drop = _RootDropHeader(self)
+        self.hdr_drop.folder_promoted.connect(lambda src: self.folder_dropped_on_folder.emit(src, ""))
+        hdr = QHBoxLayout(self.hdr_drop)
+        hdr.setContentsMargins(2, 2, 2, 2)
         hdr.setSpacing(6)
         lbl_ic = QLabel()
         lbl_ic.setPixmap(make_vector_icon("folder", "#0A84FF", 15).pixmap(15, 15))
@@ -333,7 +492,7 @@ class FolderTreePanel(QFrame):
         hdr.addStretch(1)
         hdr.addWidget(self.btn_add_sub)
         hdr.addWidget(self.btn_more)
-        root.addLayout(hdr)
+        root.addWidget(self.hdr_drop)
 
         # Live Disk Alignment Bar (shows loose files vs. synced state with 1-click Align Now)
         self.sync_bar = QFrame()
@@ -424,12 +583,12 @@ class FolderTreePanel(QFrame):
     def set_retarget_mode(self, active: bool) -> None:
         self.lbl_retarget_hint.setVisible(active)
 
-    def set_pending_changes(self, count: int) -> None:
+    def set_pending_changes(self, count: int, label: str = "") -> None:
         self._pending_changes = count
         self.apply_bar.setVisible(count > 0)
         self.footer_hint_row.setVisible(count == 0)
         if count > 0:
-            self.lbl_pending.setText(f"{count} folder change{'s' if count != 1 else ''} pending")
+            self.lbl_pending.setText(label or f"{count} folder change{'s' if count != 1 else ''} pending")
 
     def start_inline_subfolder(self, parent_path: str) -> None:
         self._expanded_parents.add(parent_path)
@@ -439,6 +598,19 @@ class FolderTreePanel(QFrame):
     def folder_widget(self, folder_path: str) -> QWidget | None:
         return self._row_widgets.get(folder_path)
 
+    def _wire_row(self, row: FolderRowWidget) -> None:
+        row.clicked.connect(self.folder_clicked.emit)
+        row.hover_entered.connect(self.folder_hovered.emit)
+        row.hover_left.connect(self.folder_hover_left.emit)
+        row.add_subfolder_requested.connect(self.start_inline_subfolder)
+        row.file_dropped.connect(self.file_dropped_on_folder.emit)
+        row.rule_dropped.connect(self.rule_dropped_on_folder.emit)
+        row.bucket_dropped.connect(self.bucket_dropped_on_folder.emit)
+        row.folder_dropped.connect(self.folder_dropped_on_folder.emit)
+        row.drag_hover_entered.connect(self.drag_hover_folder.emit)
+        row.drag_hover_left.connect(self.drag_hover_left.emit)
+        row.context_action.connect(self._on_row_context_action)
+
     def rebuild(
         self,
         config: Config,
@@ -447,6 +619,7 @@ class FolderTreePanel(QFrame):
         focused_folder: str | None = None,
         draft_target: str | None = None,
         disk_state: dict | None = None,
+        override_arch: FolderArchitecture | None = None,
     ) -> None:
         self._row_widgets.clear()
         while self.tree_layout.count() > 1:
@@ -454,7 +627,7 @@ class FolderTreePanel(QFrame):
             if item.widget():
                 item.widget().deleteLater()
 
-        arch = architecture_from_config(config)
+        arch = override_arch.clone() if override_arch is not None else architecture_from_config(config)
         # Build ordered folder tree from architecture + any custom rule/map destinations
         tree: dict[str, list[str]] = {}
         for node in arch.nodes_in_tier(1):
@@ -569,12 +742,7 @@ class FolderTreePanel(QFrame):
                 exists_on_disk=p_exists,
                 disk_file_count=p_count,
             )
-            p_row.clicked.connect(self.folder_clicked.emit)
-            p_row.hover_entered.connect(self.folder_hovered.emit)
-            p_row.hover_left.connect(self.folder_hover_left.emit)
-            p_row.add_subfolder_requested.connect(self.start_inline_subfolder)
-            p_row.file_dropped.connect(self.file_dropped_on_folder.emit)
-            p_row.context_action.connect(self._on_row_context_action)
+            self._wire_row(p_row)
             self._row_widgets[parent_name] = p_row
             self.tree_layout.insertWidget(self.tree_layout.count() - 1, p_row)
 
@@ -598,12 +766,7 @@ class FolderTreePanel(QFrame):
                         exists_on_disk=c_exists,
                         disk_file_count=c_count,
                     )
-                    c_row.clicked.connect(self.folder_clicked.emit)
-                    c_row.hover_entered.connect(self.folder_hovered.emit)
-                    c_row.hover_left.connect(self.folder_hover_left.emit)
-                    c_row.add_subfolder_requested.connect(self.start_inline_subfolder)
-                    c_row.file_dropped.connect(self.file_dropped_on_folder.emit)
-                    c_row.context_action.connect(self._on_row_context_action)
+                    self._wire_row(c_row)
                     self._row_widgets[child_path] = c_row
                     self.tree_layout.insertWidget(self.tree_layout.count() - 1, c_row)
 
@@ -653,12 +816,7 @@ class FolderTreePanel(QFrame):
                     disk_file_count=ccnt,
                     is_custom_disk=True,
                 )
-                u_row.clicked.connect(self.folder_clicked.emit)
-                u_row.hover_entered.connect(self.folder_hovered.emit)
-                u_row.hover_left.connect(self.folder_hover_left.emit)
-                u_row.add_subfolder_requested.connect(self.start_inline_subfolder)
-                u_row.file_dropped.connect(self.file_dropped_on_folder.emit)
-                u_row.context_action.connect(self._on_row_context_action)
+                self._wire_row(u_row)
                 self._row_widgets[cname] = u_row
                 self.tree_layout.insertWidget(self.tree_layout.count() - 1, u_row)
 
@@ -667,7 +825,7 @@ class FolderTreePanel(QFrame):
             leaf_name = focused_folder.split("\\")[-1]
             self.lbl_footer_hint.setText(f"Showing rules & types feeding {leaf_name}")
         else:
-            self.lbl_footer_hint.setText("Click folder to inspect · Drop file to teach")
+            self.lbl_footer_hint.setText("Click to inspect · Drag rules, types, or folders to adjust")
 
     def _on_row_context_action(self, action: str, folder_path: str) -> None:
         if action == "toggle_expand":

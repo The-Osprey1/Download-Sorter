@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import threading
 
-from PySide6.QtCore import QFileSystemWatcher, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QFileSystemWatcher, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
@@ -18,8 +18,34 @@ from download_sorter.router import read_zone_url
 from download_sorter.service import SorterService
 from download_sorter.ui.flow.bridge_overlay import BridgeOverlay, BridgeWire
 from download_sorter.ui.flow.folder_tree_panel import FolderTreePanel
-from download_sorter.ui.flow.spine_panel import SpinePanel
+from download_sorter.ui.flow.spine_panel import MIME_BUCKET_ID, MIME_RULE_ID, SpinePanel
 from download_sorter.ui.flow.tester_bar import TesterBar
+
+
+class _FlowWorkspace(QWidget):
+    """Workspace container that tracks cursor position during drag-and-drop for live Bezier wires."""
+
+    drag_cursor_moved = Signal(QPoint)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        mime = event.mimeData()
+        if mime.hasFormat(MIME_RULE_ID) or mime.hasFormat(MIME_BUCKET_ID):
+            event.acceptProposedAction()
+            self.drag_cursor_moved.emit(self.mapToGlobal(event.position().toPoint()))
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        mime = event.mimeData()
+        if mime.hasFormat(MIME_RULE_ID) or mime.hasFormat(MIME_BUCKET_ID):
+            event.acceptProposedAction()
+            self.drag_cursor_moved.emit(self.mapToGlobal(event.position().toPoint()))
+            return
+        super().dragMoveEvent(event)
 
 
 class SortingFlowTab(QWidget):
@@ -35,11 +61,20 @@ class SortingFlowTab(QWidget):
         self.service = service
         self._focused_folder: str | None = None
         self._peek_wires: list[BridgeWire] = []
+        self._active_drag_source: QWidget | None = None
+        self._active_drag_color: str = "#0A84FF"
         self._last_trace: PipelineTrace | None = None
         self._last_sig: str = ""
         self._pending_arch: FolderArchitecture | None = None
+        self._pending_cfg: Config | None = None
+        self._pending_folder_renames: list[tuple[str, str]] = []
         self._pending_changes = 0
-        self._disk_state: dict = {"scanned": False, "loose_count": 0, "existing_folders": {}, "custom_top_folders": []}
+        self._disk_state: dict = {
+            "scanned": False,
+            "loose_count": 0,
+            "existing_folders": {},
+            "custom_top_folders": [],
+        }
         self._disk_scan_in_flight = False
         self._disk_scan_ready.connect(self._on_disk_scan_ready)
         self._fs_watcher = QFileSystemWatcher(self)
@@ -59,7 +94,8 @@ class SortingFlowTab(QWidget):
         root.addWidget(self.tester_bar)
 
         # Workspace housing left spine, right folder tree, and transparent Bezier overlay
-        self.workspace = QWidget(self)
+        self.workspace = _FlowWorkspace(self)
+        self.workspace.drag_cursor_moved.connect(self._on_workspace_drag_cursor)
         self._ws_layout = QHBoxLayout(self.workspace)
         self._ws_layout.setContentsMargins(0, 0, 0, 0)
         self._ws_layout.setSpacing(40)
@@ -68,6 +104,10 @@ class SortingFlowTab(QWidget):
         self.spine.config_mutated.connect(self._on_config_mutated)
         self.spine.rule_port_hovered.connect(self._on_spine_port_hovered)
         self.spine.port_hover_left.connect(self._on_hover_left)
+        self.spine.flow_drag_started.connect(self._on_flow_drag_started)
+        self.spine.flow_drag_finished.connect(self._on_flow_drag_finished)
+        self.spine.bucket_routed.connect(self.retarget_bucket_to_folder)
+        self.spine.bucket_reset.connect(self.reset_bucket_route)
         self.spine.teach_committed.connect(self._on_teach_committed)
         self.spine.teach_cancelled.connect(self.refresh)
         self.spine.action_requested.connect(self._on_spine_action)
@@ -79,6 +119,11 @@ class SortingFlowTab(QWidget):
         self.tree.folder_hover_left.connect(self._on_hover_left)
         self.tree.subfolder_created.connect(self._on_subfolder_created)
         self.tree.file_dropped_on_folder.connect(self._on_file_dropped_on_folder)
+        self.tree.rule_dropped_on_folder.connect(self.retarget_rule_to_folder)
+        self.tree.bucket_dropped_on_folder.connect(self.retarget_bucket_to_folder)
+        self.tree.folder_dropped_on_folder.connect(self.move_folder_in_tree)
+        self.tree.drag_hover_folder.connect(self._on_drag_hover_folder)
+        self.tree.drag_hover_left.connect(self._on_drag_hover_left)
         self.tree.context_action.connect(self._on_tree_context_action)
         self.tree.tool_action.connect(self._on_tree_tool_action)
         self.tree.clear_focus_requested.connect(self.clear_folder_focus)
@@ -173,7 +218,8 @@ class SortingFlowTab(QWidget):
     def _on_disk_scan_ready(self, state: dict) -> None:
         self._disk_scan_in_flight = False
         self._disk_state = state
-        self.refresh()
+        if self._active_drag_source is None:
+            self.refresh()
 
     def seed_initial_trace(self) -> None:
         """Seed the Tester Bar once with the newest real non-temp file in watch_root, if any."""
@@ -182,7 +228,8 @@ class SortingFlowTab(QWidget):
             if root.is_dir():
                 ignored_exts = {".crdownload", ".part", ".tmp", ".download", ".opdownload"}
                 candidates = [
-                    p for p in root.iterdir()
+                    p
+                    for p in root.iterdir()
                     if p.is_file() and not p.name.startswith(".") and p.suffix.lower() not in ignored_exts
                 ]
                 if candidates:
@@ -237,7 +284,7 @@ class SortingFlowTab(QWidget):
             self.refresh()
 
     def _all_folder_choices(self, config: Config) -> list[str]:
-        arch = architecture_from_config(config)
+        arch = self._pending_arch.clone() if self._pending_arch is not None else architecture_from_config(config)
         out: list[str] = []
         for node in arch.nodes_in_tier(1):
             out.append(node.name)
@@ -253,6 +300,9 @@ class SortingFlowTab(QWidget):
             dest = r.destination.replace("/", "\\").strip("\\")
             if dest and "{" not in dest and dest not in out:
                 out.append(dest)
+        for cname, _cnt in (self._disk_state.get("custom_top_folders") or []):
+            if cname and cname not in out:
+                out.append(cname)
         return out
 
     def _count_feeders(self, folder_path: str, config: Config) -> tuple[int, int]:
@@ -262,7 +312,11 @@ class SortingFlowTab(QWidget):
         return rc, tc
 
     def refresh(self) -> None:
-        cfg = self.service.config
+        # Always drop transient hover wires BEFORE rebuilding widgets via deleteLater()
+        self._peek_wires = []
+        self.overlay.clear_wires()
+
+        cfg = self._pending_cfg if self._pending_cfg is not None else self.service.config
         fname, url, dropped_path = self.tester_bar.current_inputs()
         trace = trace_file(
             fname,
@@ -288,6 +342,7 @@ class SortingFlowTab(QWidget):
             trace,
             focused_folder=self._focused_folder,
             folder_choices=choices,
+            disk_state=self._disk_state,
         )
         draft_target = self.spine._teach_draft["target_folder"] if self.spine._teach_draft else None
         self.tree.rebuild(
@@ -296,6 +351,7 @@ class SortingFlowTab(QWidget):
             focused_folder=self._focused_folder,
             draft_target=draft_target,
             disk_state=self._disk_state,
+            override_arch=self._pending_arch,
         )
 
         sig = f"{self._focused_folder or ''}|{draft_target or ''}|{trace.winning_step}:{trace.matched_rule_id}:{trace.matched_bucket_id}:{trace.dest_folder}"
@@ -309,7 +365,7 @@ class SortingFlowTab(QWidget):
         if not self.isVisible():
             return
 
-        cfg = self.service.config
+        cfg = self._pending_cfg if self._pending_cfg is not None else self.service.config
         wires: list[BridgeWire] = []
         ghost_factor = 0.25 if self._peek_wires else 1.0
 
@@ -341,6 +397,236 @@ class SortingFlowTab(QWidget):
         clip = QRect(0, 0, self.workspace.width(), self.workspace.height())
         self.overlay.set_wires(wires, clip_rect=clip, animate_pulse=animate and not self._peek_wires)
 
+    # ------------------------------------------------------------------
+    # Interactive Drag-and-Drop Flow Adjustments
+    # ------------------------------------------------------------------
+    def _on_flow_drag_started(self, port_widget: object, color: str) -> None:
+        self._peek_wires = []
+        self._active_drag_source = port_widget if isinstance(port_widget, QWidget) else None
+        self._active_drag_color = color
+        self.overlay.set_drag_wire(self._active_drag_source, None, color=color)
+
+    def _on_flow_drag_finished(self) -> None:
+        self._active_drag_source = None
+        self.overlay.clear_drag_wire()
+        QTimer.singleShot(0, lambda: self._redraw_wires(animate=False))
+
+    def _on_workspace_drag_cursor(self, global_pos: QPoint) -> None:
+        if self._active_drag_source is not None:
+            self.overlay.set_drag_wire(
+                self._active_drag_source,
+                global_pos,
+                snap_target=None,
+                color=self._active_drag_color,
+            )
+
+    def _on_drag_hover_folder(self, folder_widget: object, global_pos: object) -> None:
+        if self._active_drag_source is not None and isinstance(folder_widget, QWidget):
+            gp = global_pos if isinstance(global_pos, QPoint) else None
+            self.overlay.set_drag_wire(
+                self._active_drag_source,
+                gp,
+                snap_target=folder_widget,
+                color=self._active_drag_color,
+            )
+
+    def _on_drag_hover_left(self) -> None:
+        if self._active_drag_source is not None:
+            self.overlay.set_drag_wire(
+                self._active_drag_source,
+                self.overlay._drag_cursor_global,
+                snap_target=None,
+                color=self._active_drag_color,
+            )
+
+    def reorder_rule(self, dragged_id: str, target_id: str, *, insert_after: bool = False) -> bool:
+        """Move ``dragged_id`` before or after ``target_id`` in rule priority order."""
+        cfg = copy.deepcopy(self.service.config)
+        src_idx = next((i for i, r in enumerate(cfg.rules) if r.id == dragged_id), -1)
+        dst_idx = next((i for i, r in enumerate(cfg.rules) if r.id == target_id), -1)
+        if src_idx < 0 or dst_idx < 0 or src_idx == dst_idx:
+            return False
+        moved = cfg.rules.pop(src_idx)
+        new_dst_idx = next((i for i, r in enumerate(cfg.rules) if r.id == target_id), dst_idx)
+        pos = max(0, min(len(cfg.rules), new_dst_idx + (1 if insert_after else 0)))
+        cfg.rules.insert(pos, moved)
+        self.config_committed.emit(cfg)
+        self.refresh()
+        return True
+
+    def retarget_rule_to_folder(self, rule_id: str, folder_path: str) -> bool:
+        """Re-route an existing custom rule onto ``folder_path`` via drag-and-drop."""
+        norm = folder_path.replace("/", "\\").strip("\\")
+        if not rule_id or not norm:
+            return False
+        cfg = copy.deepcopy(self.service.config)
+        matched_name = ""
+        for r in cfg.rules:
+            if r.id == rule_id:
+                if r.destination.replace("/", "\\").strip("\\") == norm:
+                    return False
+                r.destination = norm
+                matched_name = r.name
+                break
+        if not matched_name:
+            return False
+        if "\\" in norm:
+            self.tree._expanded_parents.add(norm.split("\\", 1)[0])
+        self._focused_folder = None
+        self.config_committed.emit(cfg)
+        self.refresh()
+        self.action_requested.emit(
+            "flow_notice",
+            f"Routed rule '{matched_name}' → {norm.replace(chr(92), ' › ')}",
+        )
+        return True
+
+    def retarget_bucket_to_folder(self, bucket_id: str, folder_path: str) -> bool:
+        """Re-route a Step 3 file-type bucket onto ``folder_path`` via drag-and-drop."""
+        norm = folder_path.replace("/", "\\").strip("\\")
+        bucket = next((b for b in TYPE_BUCKETS if b.id == bucket_id), None)
+        if bucket is None or not norm:
+            return False
+
+        cfg = copy.deepcopy(self.service.config)
+        for ext in bucket.extensions:
+            cfg.category_map[ext] = norm
+            if "\\" in norm:
+                # Dropping onto a specific subfolder routes directly into that subfolder
+                cfg.type_subfolders.pop(ext, None)
+
+        if cfg.architecture:
+            arch = architecture_from_config(cfg)
+            for node in arch.nodes:
+                node.extensions = [e for e in node.extensions if e not in bucket.extensions]
+            arch.ensure_path_chain(norm, extensions=list(bucket.extensions), is_custom=True)
+            cfg.architecture = arch.to_dict()
+
+        if "\\" in norm:
+            self.tree._expanded_parents.add(norm.split("\\", 1)[0])
+        self._focused_folder = None
+        self.config_committed.emit(cfg)
+        self.refresh()
+        self.action_requested.emit(
+            "flow_notice",
+            f"Routed {bucket.name} → {norm.replace(chr(92), ' › ')}",
+        )
+        return True
+
+    def reset_bucket_route(self, bucket_id: str) -> bool:
+        """Restore default category routing for ``bucket_id``."""
+        bucket = next((b for b in TYPE_BUCKETS if b.id == bucket_id), None)
+        if bucket is None:
+            return False
+        defaults = Config.new_install()
+        cfg = copy.deepcopy(self.service.config)
+        for ext in bucket.extensions:
+            if ext in defaults.category_map:
+                cfg.category_map[ext] = defaults.category_map[ext]
+            if ext in defaults.type_subfolders:
+                cfg.type_subfolders[ext] = defaults.type_subfolders[ext]
+        if cfg.architecture:
+            arch = architecture_from_config(cfg)
+            for node in arch.nodes:
+                node.extensions = [e for e in node.extensions if e not in bucket.extensions]
+            arch.ensure_path_chain(bucket.default_folder, extensions=list(bucket.extensions), is_custom=False)
+            cfg.architecture = arch.to_dict()
+        self.config_committed.emit(cfg)
+        self.refresh()
+        self.action_requested.emit("flow_notice", f"Reset {bucket.name} routing to {bucket.default_folder}")
+        return True
+
+    @staticmethod
+    def _rewrite_prefix(path_val: str, old_prefix: str, new_prefix: str) -> str:
+        norm = path_val.replace("/", "\\").strip("\\")
+        old_low = old_prefix.lower()
+        if norm.lower() == old_low:
+            return new_prefix
+        if norm.lower().startswith(old_low + "\\"):
+            return new_prefix + norm[len(old_prefix) :]
+        return path_val
+
+    def move_folder_in_tree(self, src_folder: str, target_parent_folder: str) -> bool:
+        """Nest or promote a folder in the Downloads tree via drag-and-drop."""
+        src = src_folder.replace("/", "\\").strip("\\")
+        dst_parent = target_parent_folder.replace("/", "\\").strip("\\")
+        if not src:
+            return False
+        if dst_parent and (src.lower() == dst_parent.lower() or dst_parent.lower().startswith(src.lower() + "\\")):
+            return False
+
+        leaf = src.split("\\")[-1]
+        new_rel = f"{dst_parent}\\{leaf}" if dst_parent else leaf
+        if new_rel.lower() == src.lower():
+            return False
+
+        base_cfg = copy.deepcopy(self._pending_cfg if self._pending_cfg is not None else self.service.config)
+        arch = self._pending_arch.clone() if self._pending_arch is not None else architecture_from_config(base_cfg)
+
+        src_node = None
+        dst_node = None
+        for n in arch.nodes:
+            rel = arch.node_relative_path(n.id).replace("/", "\\").strip("\\")
+            if rel.lower() == src.lower():
+                src_node = n
+            if dst_parent and rel.lower() == dst_parent.lower():
+                dst_node = n
+
+        if src_node is None:
+            src_node = arch.ensure_path_chain(src, is_custom=True)
+        if dst_parent and dst_node is None:
+            dst_node = arch.ensure_path_chain(dst_parent, is_custom=True)
+        if src_node is None:
+            return False
+        if not arch.reparent_node(src_node.id, dst_node.id if dst_node is not None else None):
+            return False
+
+        updated_cfg = apply_architecture_to_config(arch, base_cfg)
+        for r in updated_cfg.rules:
+            r.destination = self._rewrite_prefix(r.destination, src, new_rel)
+        for ext, cat in list(updated_cfg.category_map.items()):
+            updated_cfg.category_map[ext] = self._rewrite_prefix(cat, src, new_rel)
+
+        if dst_parent:
+            self.tree._expanded_parents.add(dst_parent.split("\\", 1)[0])
+
+        src_disk = self.service.watch_root / src
+        has_files_on_disk = False
+        try:
+            if src_disk.is_dir():
+                has_files_on_disk = any(True for _ in src_disk.rglob("*") if _.is_file())
+        except OSError:
+            has_files_on_disk = False
+
+        if has_files_on_disk:
+            self._pending_arch = arch
+            self._pending_cfg = updated_cfg
+            self._pending_folder_renames.append((src, new_rel))
+            self._pending_changes += 1
+            dest_label = dst_parent.replace("\\", " › ") if dst_parent else "Downloads (Top-level)"
+            self.tree.set_pending_changes(self._pending_changes, f"Move '{leaf}' → {dest_label}")
+            self.refresh()
+        else:
+            # Pure virtual or empty directory: apply cleanly right away
+            if src_disk.is_dir():
+                try:
+                    src_disk.rmdir()
+                except OSError:
+                    pass
+            self._pending_arch = None
+            self._pending_cfg = None
+            self._pending_folder_renames.clear()
+            self._pending_changes = 0
+            self.tree.set_pending_changes(0)
+            self.config_committed.emit(updated_cfg)
+            self.refresh()
+            dest_label = new_rel.replace("\\", " › ")
+            self.action_requested.emit("flow_notice", f"Moved folder '{leaf}' → {dest_label}")
+        return True
+
+    # ------------------------------------------------------------------
+    # Standard Flow Event Handlers
+    # ------------------------------------------------------------------
     def _on_config_mutated(self, new_cfg: Config) -> None:
         self.config_committed.emit(new_cfg)
         self.refresh()
@@ -378,7 +664,7 @@ class SortingFlowTab(QWidget):
         self.refresh()
 
     def _on_spine_port_hovered(self, port_widget: object, dest_folder: str) -> None:
-        if not isinstance(port_widget, QWidget):
+        if self._active_drag_source is not None or not isinstance(port_widget, QWidget):
             return
         norm = dest_folder.replace("/", "\\").strip("\\")
         tgt = self.tree.folder_widget(norm)
@@ -387,12 +673,13 @@ class SortingFlowTab(QWidget):
             self._redraw_wires(animate=False)
 
     def _on_folder_hovered(self, folder_path: str) -> None:
-        if self._focused_folder is not None:
+        if self._active_drag_source is not None or self._focused_folder is not None:
             return
         tgt = self.tree.folder_widget(folder_path)
         if tgt is None:
             return
-        ports = self.spine.ports_for_folder(folder_path, self.service.config)
+        cfg = self._pending_cfg if self._pending_cfg is not None else self.service.config
+        ports = self.spine.ports_for_folder(folder_path, cfg)
         self._peek_wires = [
             BridgeWire(source=p, target=tgt, color="#0A84FF", dashed=True, opacity=0.58)
             for p in ports
@@ -413,12 +700,15 @@ class SortingFlowTab(QWidget):
                 parent_id = node.id
                 break
         if parent_id is not None:
-            new_node = arch.add_custom_node(name=new_name, tier=min(3, arch.get_node(parent_id).tier + 1), parent_id=parent_id)
+            new_node = arch.add_custom_node(
+                name=new_name,
+                tier=min(3, arch.get_node(parent_id).tier + 1),
+                parent_id=parent_id,
+            )
             cfg = apply_architecture_to_config(arch, cfg)
             self._focused_folder = arch.node_relative_path(new_node.id).replace("/", "\\")
             self.config_committed.emit(cfg)
         else:
-            # Ensure target folder appears in tree via focus
             self._focused_folder = f"{parent_path}\\{new_name}"
         self.refresh()
 
@@ -429,7 +719,15 @@ class SortingFlowTab(QWidget):
         self.spine.start_teach_draft(path, folder_path, url)
         self.refresh()
 
-    def _on_teach_committed(self, rule: Rule, also_move: bool, source_path: object) -> None:
+    def _on_teach_committed(self, rule: Rule, arg2: object, arg3: object = None) -> None:
+        # Support both SpinePanel signal (rule, also_move: bool, source_path: Path)
+        # and direct test invocation (rule, source_path: Path, also_move: bool)
+        if isinstance(arg2, Path):
+            source_path: object = arg2
+            also_move = bool(arg3)
+        else:
+            also_move = bool(arg2)
+            source_path = arg3
         cfg = copy.deepcopy(self.service.config)
         cfg.rules.insert(0, rule)
         self.config_committed.emit(cfg)
@@ -443,11 +741,19 @@ class SortingFlowTab(QWidget):
             return
         self.action_requested.emit(f"tree:{action}", folder_path)
 
+    def discard_pending_folder_shift(self) -> None:
+        self._pending_arch = None
+        self._pending_cfg = None
+        self._pending_folder_renames.clear()
+        self._pending_changes = 0
+        self.tree.set_pending_changes(0)
+        self.refresh()
+
     def _on_tree_tool_action(self, action: str) -> None:
         if action == "discard_shift":
-            self._pending_arch = None
-            self._pending_changes = 0
-            self.tree.set_pending_changes(0)
-            self.refresh()
+            self.discard_pending_folder_shift()
+            return
+        if action == "apply_shift":
+            self.action_requested.emit("tree_tool:apply_shift", "")
             return
         self.action_requested.emit(f"tree_tool:{action}", "")
