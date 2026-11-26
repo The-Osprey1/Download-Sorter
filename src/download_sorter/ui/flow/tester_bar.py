@@ -162,19 +162,23 @@ class TesterBar(QFrame):
         self._last_dropped_path = None
         self.test_changed.emit(self.edit_filename.text().strip(), self.edit_url.text().strip())
 
-    def show_trace(self, trace: PipelineTrace) -> None:
+    def show_trace(self, trace: PipelineTrace, *, total_steps: int = 2) -> None:
         self.btn_back_trace.setVisible(False)
         self.lbl_step_tag.setVisible(trace.winning_step > 0)
         if trace.outcome in ("hold", "ignore"):
             dot_col = "#818CF8"
             bg = "rgba(129, 140, 248, 0.10)"
         else:
-            dot_col = "#0A84FF"
-            bg = "rgba(10, 132, 255, 0.08)"
+            dot_col = "#3B82F6"
+            bg = "rgba(59, 130, 246, 0.10)"
         self.verdict_frame.setStyleSheet(f"#VerdictStrip {{ background-color: {bg}; border-radius: 9px; }}")
         self.lbl_dot.setStyleSheet(f"color: {dot_col}; font-size: 10px;")
         self.lbl_verdict.setText(trace.human_reason)
-        self.lbl_step_tag.setText(f"Step {trace.winning_step} of 3" if trace.winning_step else "")
+        if trace.winning_step:
+            disp_step = trace.winning_step if total_steps == 3 else max(1, trace.winning_step - 1)
+            self.lbl_step_tag.setText(f"Step {disp_step} of {total_steps}")
+        else:
+            self.lbl_step_tag.setText("")
 
     def show_folder_focus(self, folder_path: str, rule_count: int, type_count: int) -> None:
         crumb = folder_path.replace("\\", " › ")

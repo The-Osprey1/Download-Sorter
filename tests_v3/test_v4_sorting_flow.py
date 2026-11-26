@@ -180,15 +180,26 @@ def test_v4_clean_install_minimal_defaults(v3_qapp, app_paths: AppPaths) -> None
         win.show()
         v3_qapp.processEvents()
 
+        # Clean install is a 2-step flow (Holds & Grouping strictly opt-in)
+        assert svc.config.hold_3mf_enabled is False
+        assert svc.config.project_grouping_enabled is False
+        assert win.flow_tab.spine.step1_row.isHidden() is True
+        assert win.flow_tab.spine.badge_2.text() == "1"
+        assert win.flow_tab.spine.badge_3.text() == "2"
+
         # Universal starter tree hides 3D Models & CAD on a clean install
         assert "Documents" in win.flow_tab.tree._row_widgets
         assert "3D Models" not in win.flow_tab.tree._row_widgets
         assert "CAD" not in win.flow_tab.tree._row_widgets
-        assert win.flow_tab.spine.hold_3mf_frame.isHidden() is True
 
-        # Tracing a .3mf file progressively surfaces Step 1 hold controls
-        win.flow_tab.tester_bar.set_test_file("benchy.3mf", "")
+        # Opting into .3mf holds in Preferences promotes Sorting Flow cleanly to 3 steps
+        win.chk_hold_3mf.setChecked(True)
+        win._save_settings_form()
         v3_qapp.processEvents()
-        assert win.flow_tab.spine.hold_3mf_frame.isHidden() is False
+        assert svc.config.hold_3mf_enabled is True
+        assert win.flow_tab.spine.step1_row.isHidden() is False
+        assert win.flow_tab.spine.badge_1.text() == "1"
+        assert win.flow_tab.spine.badge_2.text() == "2"
+        assert win.flow_tab.spine.badge_3.text() == "3"
     finally:
         win.close()

@@ -37,6 +37,45 @@ from download_sorter.ui.settings_widgets import MacToggle
 from download_sorter.ui.text_scale import scaled_px
 
 
+class _GripDotsWidget(QWidget):
+    """Crisp antialiased 2x3 drag-handle dots (replaces raw Unicode glyph)."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(12, 16)
+        self.setToolTip("Drag to reorder rule priority")
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 76))
+        for cx in (3.5, 8.5):
+            for cy in (3.5, 8.0, 12.5):
+                painter.drawEllipse(QPointF(cx, cy), 1.2, 1.2)
+
+
+class _PortDotWidget(QWidget):
+    """Crisp antialiased 6px status/port indicator dot."""
+
+    def __init__(self, color: str = "#636366", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(8, 8)
+
+    def set_color(self, color: str) -> None:
+        if self._color != color:
+            self._color = color
+            self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self._color))
+        painter.drawEllipse(QPointF(4.0, 4.0), 3.0, 3.0)
+
+
 class _RuleRowWidget(QFrame):
     """Collapsible, drag-reorderable Step 2 rule row with flush-right port badge."""
 
@@ -93,9 +132,7 @@ class _RuleRowWidget(QFrame):
         top = QHBoxLayout()
         top.setSpacing(8)
 
-        lbl_grip = QLabel("⋮⋮")
-        lbl_grip.setStyleSheet("color: #636366; font-size: 12px;")
-        lbl_grip.setToolTip("Drag to reorder rule priority")
+        lbl_grip = _GripDotsWidget()
         top.addWidget(lbl_grip)
 
         self.sw_enabled = MacToggle(quiet=True)
@@ -170,9 +207,8 @@ class _RuleRowWidget(QFrame):
         pb.setSpacing(5)
         lbl_dest = QLabel(f"→ {dest_leaf}")
         lbl_dest.setStyleSheet(f"color: {t_col}; font-size: 11.5px; font-weight: 500; border: none;")
-        lbl_dot = QLabel("●")
-        dot_col = "#0A84FF" if (is_winner or is_focus_feeder) else "#636366"
-        lbl_dot.setStyleSheet(f"color: {dot_col}; font-size: 8px; border: none;")
+        dot_col = "#3B82F6" if (is_winner or is_focus_feeder) else "#636366"
+        lbl_dot = _PortDotWidget(dot_col)
         pb.addWidget(lbl_dest)
         pb.addWidget(lbl_dot)
         top.addWidget(self.port_badge)
@@ -474,8 +510,7 @@ class _TypeRowWidget(QFrame):
         pb.setSpacing(5)
         lbl_d = QLabel(f"→ {leaf}")
         lbl_d.setStyleSheet(f"color: {t_col}; font-size: 11.5px; border: none;")
-        lbl_dot = QLabel("●")
-        lbl_dot.setStyleSheet(f"color: {'#0A84FF' if (is_winner or is_focus_feeder) else '#636366'}; font-size: 8px; border: none;")
+        lbl_dot = _PortDotWidget("#3B82F6" if (is_winner or is_focus_feeder) else "#636366")
         pb.addWidget(lbl_d)
         pb.addWidget(lbl_dot)
         row.addWidget(self.port_badge)
@@ -500,23 +535,25 @@ class _SpineBodyWidget(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
-        if len(self.badges) < 3:
+        visible = [b for b in self.badges if b.isVisible()]
+        if len(visible) < 2:
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        for idx in range(2):
-            b1 = self.badges[idx]
-            b2 = self.badges[idx + 1]
+        for idx in range(len(visible) - 1):
+            b1 = visible[idx]
+            b2 = visible[idx + 1]
             c1 = b1.mapTo(self, b1.rect().center())
             c2 = b2.mapTo(self, b2.rect().center())
             y1 = float(c1.y() + b1.height() / 2 + 4)
             y2 = float(c2.y() - b2.height() / 2 - 4)
             if y2 <= y1:
                 continue
-            dashed = (not self.focused) and self.active_step > 0 and (idx + 1) >= self.active_step
+            step_num = int(b1.text()) if b1.text().isdigit() else (idx + 1)
+            dashed = (not self.focused) and self.active_step > 0 and step_num >= self.active_step
             pen = QPen(
-                QColor("#3A3A3E" if not dashed else "#2C2C2E"),
-                1.4,
+                QColor(255, 255, 255, 36 if not dashed else 22),
+                1.5,
                 Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine,
                 Qt.PenCapStyle.RoundCap,
             )
@@ -564,27 +601,44 @@ class SpinePanel(QScrollArea):
         self.body_layout.setContentsMargins(0, 0, 8, 8)
         self.body_layout.setSpacing(14)
 
-        # Build the 3 step containers
-        self.badge_1, self.lbl_state_1, self.card_1 = self._make_step_shell(
+        # Build the 3 step containers (Step 1 is strictly opt-in and hidden by default)
+        self.step1_row, self.badge_1, self.lbl_state_1, self.card_1 = self._make_step_shell(
             "1",
             "Hold & group first",
-            "Keep active files in root or bundle multi-file project bursts",
+            "Optional: hold specific formats or bundle multi-file downloads",
         )
-        self.badge_2, self.lbl_state_2, self.card_2 = self._make_step_shell(
-            "2",
+        self.step2_row, self.badge_2, self.lbl_state_2, self.card_2 = self._make_step_shell(
+            "1",
             "Your rules",
-            "Drag ⋮⋮ to reorder · Click any rule to edit",
+            "Matched first, top to bottom · Click any rule to edit",
         )
-        self.badge_3, self.lbl_state_3, self.card_3 = self._make_step_shell(
-            "3",
+        self.step3_row, self.badge_3, self.lbl_state_3, self.card_3 = self._make_step_shell(
+            "2",
             "Sort the rest by file type",
-            "Standard extension folders, plus optional offline AI fallback for unknown files",
+            "Everything else sorts automatically by format",
         )
         self.body.badges = [self.badge_1, self.badge_2, self.badge_3]
 
         self._populate_step1_static()
         self._populate_step2_static()
         self._populate_step3_static()
+
+        # Quiet opt-in discovery link (only shown when Holds & Grouping are off)
+        self.optin_row = QWidget()
+        or_l = QHBoxLayout(self.optin_row)
+        or_l.setContentsMargins(scaled_px(38), 0, 0, 0)
+        or_l.setSpacing(4)
+        self.btn_optin_holds = QPushButton("Need to hold .3mf files or group project downloads? Enable in Preferences →")
+        self.btn_optin_holds.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_optin_holds.setStyleSheet(
+            "QPushButton { border: none; background: transparent; color: #8E8E93; "
+            "font-size: 11.5px; text-align: left; padding: 2px 0; min-width: 0px; }"
+            "QPushButton:hover { color: #60A5FA; }"
+        )
+        self.btn_optin_holds.clicked.connect(lambda: self.action_requested.emit("open_prefs_section", "sorting"))
+        or_l.addWidget(self.btn_optin_holds)
+        or_l.addStretch(1)
+        self.body_layout.addWidget(self.optin_row)
 
         # Quiet safety reassurance footer
         safety_row = QHBoxLayout()
@@ -600,16 +654,18 @@ class SpinePanel(QScrollArea):
 
         self.setWidget(self.body)
 
-    def _make_step_shell(self, num: str, title: str, subtitle: str) -> tuple[QLabel, QLabel, QFrame]:
-        row = QHBoxLayout()
+    def _make_step_shell(self, num: str, title: str, subtitle: str) -> tuple[QWidget, QLabel, QLabel, QFrame]:
+        shell = QWidget()
+        row = QHBoxLayout(shell)
+        row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
         row.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         badge = QLabel(num)
-        badge.setFixedSize(scaled_px(28), scaled_px(28))
+        badge.setFixedSize(scaled_px(26), scaled_px(26))
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(
-            "background-color: #1C1C1E; border: 1px solid #2C2C2E; border-radius: 14px; "
+            "background-color: #24272E; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 13px; "
             "color: #F5F5F7; font-size: 12px; font-weight: 700;"
         )
         row.addWidget(badge)
@@ -644,8 +700,8 @@ class SpinePanel(QScrollArea):
         cl.addLayout(hdr)
 
         row.addWidget(card, 1)
-        self.body_layout.addLayout(row)
-        return badge, lbl_state, card
+        self.body_layout.addWidget(shell)
+        return shell, badge, lbl_state, card
 
     def _populate_step1_static(self) -> None:
         cl: QVBoxLayout = self.card_1.layout()  # type: ignore[assignment]
@@ -689,18 +745,17 @@ class SpinePanel(QScrollArea):
         hp.setSpacing(5)
         lbl_hp = QLabel("Hold")
         lbl_hp.setStyleSheet("color: #98989D; font-size: 11.5px; border: none;")
-        self.lbl_hold_dot = QLabel("●")
-        self.lbl_hold_dot.setStyleSheet("color: #636366; font-size: 8px; border: none;")
+        self.lbl_hold_dot = _PortDotWidget("#636366")
         hp.addWidget(lbl_hp)
         hp.addWidget(self.lbl_hold_dot)
         hrow.addWidget(self.hold_port_badge)
         self._hold_port = self.hold_port_badge
         cl.addWidget(self.hold_3mf_frame)
 
-        # Detect Projects row
-        proj_row = QFrame()
-        proj_row.setStyleSheet("QFrame { border-top: 1px solid #262629; }")
-        pl = QHBoxLayout(proj_row)
+        # Detect Projects row (opt-in)
+        self.proj_row_frame = QFrame()
+        self.proj_row_frame.setStyleSheet("QFrame { border-top: 1px solid #262629; }")
+        pl = QHBoxLayout(self.proj_row_frame)
         pl.setContentsMargins(4, 8, 4, 2)
         pl.setSpacing(10)
         pinfo = QVBoxLayout()
@@ -718,7 +773,7 @@ class SpinePanel(QScrollArea):
         btn_detect.setObjectName("GhostButton")
         btn_detect.clicked.connect(lambda: self.action_requested.emit("detect_projects", ""))
         pl.addWidget(btn_detect)
-        cl.addWidget(proj_row)
+        cl.addWidget(self.proj_row_frame)
 
     def _populate_step2_static(self) -> None:
         hdr: QHBoxLayout = self.card_2.property("_hdr_layout")
@@ -965,27 +1020,36 @@ class SpinePanel(QScrollArea):
         for w in (self.sw_hold_3mf, self.spin_hold_days, self.sw_subfolders, self.sw_ai_fallback, self.cmb_fallback):
             w.blockSignals(False)
 
+        # Opt-in Hold & Group step visibility + dynamic 2-step vs 3-step numbering
+        show_3mf = bool(config.hold_3mf_enabled or trace.outcome == "hold")
+        show_group = bool(config.project_grouping_enabled)
+        show_step1 = show_3mf or show_group
+        self.step1_row.setVisible(show_step1)
+        self.hold_3mf_frame.setVisible(show_3mf)
+        self.proj_row_frame.setVisible(show_group)
+        self.optin_row.setVisible(not show_step1)
+        if show_step1:
+            self.badge_1.setText("1")
+            self.badge_2.setText("2")
+            self.badge_3.setText("3")
+            disp_active = 2 if self._teach_draft is not None else trace.winning_step
+        else:
+            self.badge_2.setText("1")
+            self.badge_3.setText("2")
+            raw_step = 2 if self._teach_draft is not None else trace.winning_step
+            disp_active = max(1, raw_step - 1) if raw_step > 0 else 0
+
         # 3-State Spine Grammar
         active_step = 2 if self._teach_draft is not None else trace.winning_step
-        self.body.active_step = active_step
+        self.body.active_step = disp_active
         self.body.focused = bool(focused_folder)
         self._apply_step_styles(active_step, trace.outcome, focused=bool(focused_folder))
-
-        show_3mf = (
-            config.show_advanced_tools
-            or trace.outcome == "hold"
-            or trace.filename.lower().endswith(".3mf")
-            or any("3d" in r.destination.lower() or ".3mf" in r.extensions for r in config.rules)
-        )
-        self.hold_3mf_frame.setVisible(show_3mf)
 
         is_hold_hit = (not focused_folder and self._teach_draft is None and trace.outcome == "hold")
         self.hold_port_badge.setStyleSheet(
             f"QFrame {{ background-color: #161618; border: 1px solid {'#818CF8' if is_hold_hit else '#2C2C2E'}; border-radius: 7px; }}"
         )
-        self.lbl_hold_dot.setStyleSheet(
-            f"color: {'#818CF8' if is_hold_hit else '#636366'}; font-size: 8px; border: none;"
-        )
+        self.lbl_hold_dot.set_color("#818CF8" if is_hold_hit else "#636366")
 
         # Teach-by-Example Draft Card
         self._rebuild_teach_card()
@@ -1028,22 +1092,20 @@ class SpinePanel(QScrollArea):
         if not config.rules and self._teach_draft is None:
             empty_card = QFrame()
             empty_card.setStyleSheet(
-                "QFrame { background-color: #161618; border: 1px dashed #2C2C2E; border-radius: 10px; }"
+                "QFrame { background-color: rgba(255, 255, 255, 0.03); "
+                "border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 9px; }"
             )
-            el = QVBoxLayout(empty_card)
-            el.setContentsMargins(12, 10, 12, 10)
-            el.setSpacing(4)
-            lbl_et = QLabel("No custom rules yet — sorting cleanly by file type")
-            lbl_et.setStyleSheet("color: #F5F5F7; font-size: 12.5px; font-weight: 600; border: none; background: transparent;")
+            el = QHBoxLayout(empty_card)
+            el.setContentsMargins(12, 9, 12, 9)
+            el.setSpacing(8)
             lbl_es = QLabel(
-                "Downloads sort automatically into Documents, Images, Videos, Archives, and Installers below. "
-                "Add custom rules anytime, pick a Starter Pack, or drop a file onto any folder →"
+                "No custom rules yet — files skip straight to automatic file-type sorting below. "
+                "Drop any file onto a folder on the right to teach a rule."
             )
             lbl_es.setWordWrap(True)
             lbl_es.setMinimumWidth(0)
-            lbl_es.setStyleSheet("color: #8E8E93; font-size: 11.5px; border: none; background: transparent;")
-            el.addWidget(lbl_et)
-            el.addWidget(lbl_es)
+            lbl_es.setStyleSheet("color: #98989D; font-size: 12px; border: none; background: transparent;")
+            el.addWidget(lbl_es, 1)
             self.rules_layout.addWidget(empty_card)
 
         # Step 3 File Types
@@ -1119,8 +1181,7 @@ class SpinePanel(QScrollArea):
         pl.setSpacing(5)
         lbl_p = QLabel(f"→ {leaf}")
         lbl_p.setStyleSheet("color: #F5F5F7; font-size: 11.5px; border: none;")
-        lbl_d = QLabel("●")
-        lbl_d.setStyleSheet("color: #0A84FF; font-size: 8px; border: none;")
+        lbl_d = _PortDotWidget("#3B82F6")
         pl.addWidget(lbl_p)
         pl.addWidget(lbl_d)
         self._teach_port = port
@@ -1196,7 +1257,7 @@ class SpinePanel(QScrollArea):
         for idx, (badge, lbl_s, card) in enumerate(zip(badges, states, cards), start=1):
             if focused or active_step == 0:
                 badge.setStyleSheet(
-                    "background-color: #1C1C1E; border: 1px solid #2C2C2E; border-radius: 14px; "
+                    "background-color: #24272E; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 13px; "
                     "color: #F5F5F7; font-size: 12px; font-weight: 700;"
                 )
                 lbl_s.setText("")
@@ -1204,23 +1265,23 @@ class SpinePanel(QScrollArea):
                 continue
 
             if idx == active_step:
-                col = "#818CF8" if outcome in ("hold", "ignore") else "#0A84FF"
+                col = "#818CF8" if outcome in ("hold", "ignore") else "#3B82F6"
                 badge.setStyleSheet(
-                    f"background-color: {col}; border: 1px solid {col}; border-radius: 14px; "
+                    f"background-color: {col}; border: 1px solid {col}; border-radius: 13px; "
                     "color: #FFFFFF; font-size: 12px; font-weight: 700;"
                 )
                 lbl_s.setText("· Drafting rule" if self._teach_draft else ("· Held" if outcome == "hold" else "· Matched"))
                 lbl_s.setStyleSheet(f"color: {col}; font-size: 11.5px; font-weight: 600;")
             elif idx < active_step:
                 badge.setStyleSheet(
-                    "background-color: #1C1C1E; border: 1px solid #3A3A3E; border-radius: 14px; "
+                    "background-color: #24272E; border: 1px solid #3A3A3E; border-radius: 13px; "
                     "color: #AEAEB2; font-size: 12px; font-weight: 600;"
                 )
                 lbl_s.setText("· ✓ Checked")
                 lbl_s.setStyleSheet("color: #8E8E93; font-size: 11.5px;")
             else:
                 badge.setStyleSheet(
-                    "background-color: #161618; border: 1px solid #262629; border-radius: 14px; "
+                    "background-color: #161618; border: 1px solid #262629; border-radius: 13px; "
                     "color: #636366; font-size: 12px; font-weight: 600;"
                 )
                 lbl_s.setText("· Skipped")

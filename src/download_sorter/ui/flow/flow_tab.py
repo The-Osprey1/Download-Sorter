@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
+import threading
 
-from PySide6.QtCore import QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QFileSystemWatcher, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
@@ -26,6 +28,7 @@ class SortingFlowTab(QWidget):
     config_committed = Signal(object)  # Config
     action_requested = Signal(str, str)  # delegated to MainWindow (dialogs, packs, detox, etc.)
     teach_move_requested = Signal(Path, str)  # (src_path, dest_relpath)
+    _disk_scan_ready = Signal(dict)
 
     def __init__(self, service: SorterService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -36,6 +39,15 @@ class SortingFlowTab(QWidget):
         self._last_sig: str = ""
         self._pending_arch: FolderArchitecture | None = None
         self._pending_changes = 0
+        self._disk_state: dict = {"scanned": False, "loose_count": 0, "existing_folders": {}, "custom_top_folders": []}
+        self._disk_scan_in_flight = False
+        self._disk_scan_ready.connect(self._on_disk_scan_ready)
+        self._fs_watcher = QFileSystemWatcher(self)
+        self._fs_watcher.directoryChanged.connect(lambda _p: self._fs_debounce.start())
+        self._fs_debounce = QTimer(self)
+        self._fs_debounce.setSingleShot(True)
+        self._fs_debounce.setInterval(350)
+        self._fs_debounce.timeout.connect(self._trigger_disk_scan)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
@@ -85,6 +97,83 @@ class SortingFlowTab(QWidget):
 
         root.addWidget(self.workspace, 1)
         QTimer.singleShot(0, self.seed_initial_trace)
+        QTimer.singleShot(30, self._trigger_disk_scan)
+
+    def _sync_fs_watcher(self) -> None:
+        try:
+            watch_str = str(self.service.watch_root)
+            if self.service.watch_root.is_dir() and watch_str not in self._fs_watcher.directories():
+                if self._fs_watcher.directories():
+                    self._fs_watcher.removePaths(self._fs_watcher.directories())
+                self._fs_watcher.addPath(watch_str)
+        except OSError:
+            pass
+
+    def _trigger_disk_scan(self) -> None:
+        if self._disk_scan_in_flight:
+            return
+        self._sync_fs_watcher()
+        root = self.service.watch_root
+        self._disk_scan_in_flight = True
+
+        def _worker() -> None:
+            ignored_exts = {".crdownload", ".part", ".tmp", ".download", ".opdownload", ".filepart", ".!qb"}
+            loose_count = 0
+            existing: dict[str, int] = {}
+            custom_tops: list[tuple[str, int]] = []
+            try:
+                if root.is_dir():
+                    with os.scandir(root) as it:
+                        for entry in it:
+                            name = entry.name
+                            if name.startswith(".") or name.startswith("~$"):
+                                continue
+                            if entry.is_file(follow_symlinks=False):
+                                ext = Path(name).suffix.lower()
+                                if ext not in ignored_exts:
+                                    loose_count += 1
+                            elif entry.is_dir(follow_symlinks=False) and not name.startswith("_"):
+                                top_count = 0
+                                try:
+                                    with os.scandir(entry.path) as sub_it:
+                                        for sub in sub_it:
+                                            if sub.name.startswith("."):
+                                                continue
+                                            if sub.is_file(follow_symlinks=False):
+                                                top_count += 1
+                                            elif sub.is_dir(follow_symlinks=False):
+                                                sub_count = 0
+                                                try:
+                                                    with os.scandir(sub.path) as leaf_it:
+                                                        for lf in leaf_it:
+                                                            if lf.is_file(follow_symlinks=False):
+                                                                sub_count += 1
+                                                except OSError:
+                                                    pass
+                                                existing[f"{name}\\{sub.name}"] = sub_count
+                                                top_count += sub_count
+                                except OSError:
+                                    pass
+                                existing[name] = top_count
+                                custom_tops.append((name, top_count))
+            except OSError:
+                pass
+            custom_tops.sort(key=lambda item: item[0].lower())
+            self._disk_scan_ready.emit(
+                {
+                    "scanned": True,
+                    "loose_count": loose_count,
+                    "existing_folders": existing,
+                    "custom_top_folders": custom_tops,
+                }
+            )
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_disk_scan_ready(self, state: dict) -> None:
+        self._disk_scan_in_flight = False
+        self._disk_state = state
+        self.refresh()
 
     def seed_initial_trace(self) -> None:
         """Seed the Tester Bar once with the newest real non-temp file in watch_root, if any."""
@@ -187,11 +276,12 @@ class SortingFlowTab(QWidget):
         choices = self._all_folder_choices(cfg)
         self.tree.set_retarget_mode(self.spine.expanded_rule_id() is not None)
 
+        show_step1 = bool(cfg.hold_3mf_enabled or cfg.project_grouping_enabled or trace.outcome == "hold")
         if self._focused_folder is not None:
             rc, tc = self._count_feeders(self._focused_folder, cfg)
             self.tester_bar.show_folder_focus(self._focused_folder, rc, tc)
         else:
-            self.tester_bar.show_trace(trace)
+            self.tester_bar.show_trace(trace, total_steps=3 if show_step1 else 2)
 
         self.spine.rebuild(
             cfg,
@@ -205,6 +295,7 @@ class SortingFlowTab(QWidget):
             trace,
             focused_folder=self._focused_folder,
             draft_target=draft_target,
+            disk_state=self._disk_state,
         )
 
         sig = f"{self._focused_folder or ''}|{draft_target or ''}|{trace.winning_step}:{trace.matched_rule_id}:{trace.matched_bucket_id}:{trace.dest_folder}"

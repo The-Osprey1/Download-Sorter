@@ -87,6 +87,7 @@ def _legacy_new_install_packs(request: pytest.FixtureRequest, monkeypatch: pytes
 
     monkeypatch.setattr(config_module, "NEW_INSTALL_TEMPLATES", ("school", "career", "3d_printing"))
     monkeypatch.setattr(config_module, "NEW_INSTALL_SHOW_ADVANCED", True)
+    monkeypatch.setattr(config_module, "NEW_INSTALL_HOLD_3MF", True)
 
 
 @pytest.fixture

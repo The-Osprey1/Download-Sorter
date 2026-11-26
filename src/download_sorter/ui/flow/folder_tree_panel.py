@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -22,6 +23,27 @@ from download_sorter.config import Config
 from download_sorter.pipeline import PipelineTrace
 from download_sorter.ui.motion import InteractiveRibbonBtn, make_vector_icon
 from download_sorter.ui.text_scale import scaled_px
+
+
+class _SyncDotWidget(QWidget):
+    """Crisp antialiased 7px status dot for the Downloads live-sync pill."""
+
+    def __init__(self, color: str = "#30D158", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._color = color
+        self.setFixedSize(9, 9)
+
+    def set_color(self, color: str) -> None:
+        if self._color != color:
+            self._color = color
+            self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self._color))
+        painter.drawEllipse(QPointF(4.5, 4.5), 3.3, 3.3)
 
 
 class FolderRowWidget(QFrame):
@@ -47,14 +69,22 @@ class FolderRowWidget(QFrame):
         is_focused: bool = False,
         is_draft_target: bool = False,
         land_label: str = "",
+        exists_on_disk: bool = True,
+        disk_file_count: int = 0,
+        is_custom_disk: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.folder_path = folder_path
+        self.setMinimumHeight(scaled_px(50) if (is_hit and land_label) else scaled_px(32))
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+        if not exists_on_disk:
+            self.setToolTip("Created automatically when a matching file arrives")
+        elif is_custom_disk:
+            self.setToolTip("Your own folder in Downloads — untouched unless targeted by a rule")
 
         if is_hit or is_focused or is_draft_target:
             self.setStyleSheet(
@@ -68,8 +98,8 @@ class FolderRowWidget(QFrame):
             )
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8 + depth * scaled_px(16), 5, 8, 5)
-        outer.setSpacing(2)
+        outer.setContentsMargins(8 + depth * scaled_px(16), 6, 8, 6)
+        outer.setSpacing(4)
 
         row = QHBoxLayout()
         row.setSpacing(6)
@@ -90,32 +120,57 @@ class FolderRowWidget(QFrame):
             spacer.setFixedWidth(scaled_px(12))
             row.addWidget(spacer)
 
-        icon_col = "#0A84FF" if (is_hit or is_focused or is_draft_target) else "#8E8E93"
+        if is_hit or is_focused or is_draft_target:
+            icon_col = "#3B82F6"
+        elif not exists_on_disk:
+            icon_col = "#52525A"
+        elif is_custom_disk:
+            icon_col = "#8E8E93"
+        else:
+            icon_col = "#9CA3AF"
         lbl_icon = QLabel()
         lbl_icon.setPixmap(make_vector_icon("folder", icon_col, 14).pixmap(14, 14))
         row.addWidget(lbl_icon)
 
         lbl_name = QLabel(display_name)
-        weight = "600" if (is_hit or is_focused or is_draft_target or depth == 0) else "400"
-        col = "#F5F5F7" if (is_hit or is_focused or is_draft_target or depth == 0) else "#AEAEB2"
+        weight = "600" if (is_hit or is_focused or is_draft_target or (depth == 0 and exists_on_disk)) else "400"
+        if is_hit or is_focused or is_draft_target:
+            col = "#F5F5F7"
+        elif not exists_on_disk:
+            col = "#71717A"
+        elif depth == 0:
+            col = "#EAEAEF"
+        else:
+            col = "#B4B4BC"
         lbl_name.setStyleSheet(f"color: {col}; font-weight: {weight}; font-size: 12.5px;")
         row.addWidget(lbl_name, 1)
 
         if is_hit:
-            tag = QLabel("Lands here")
-            tag.setStyleSheet("color: #0A84FF; font-size: 11px; font-weight: 600;")
+            tag = QLabel("Will create" if not exists_on_disk else "Lands here")
+            tag.setStyleSheet("color: #3B82F6; font-size: 11px; font-weight: 600;")
             row.addWidget(tag)
         elif is_draft_target:
             tag = QLabel("Draft target")
-            tag.setStyleSheet("color: #0A84FF; font-size: 11px; font-weight: 600;")
+            tag.setStyleSheet("color: #3B82F6; font-size: 11px; font-weight: 600;")
             row.addWidget(tag)
         elif is_focused:
             tag = QLabel("Inspecting")
-            tag.setStyleSheet("color: #0A84FF; font-size: 11px; font-weight: 600;")
+            tag.setStyleSheet("color: #3B82F6; font-size: 11px; font-weight: 600;")
             row.addWidget(tag)
         elif rule_count > 0:
             tag = QLabel(f"{rule_count} rule{'s' if rule_count != 1 else ''}")
-            tag.setStyleSheet("color: #636366; font-size: 11px;")
+            tag.setStyleSheet("color: #71717A; font-size: 11px;")
+            row.addWidget(tag)
+        elif not exists_on_disk:
+            tag = QLabel("Auto")
+            tag.setStyleSheet("color: #52525A; font-size: 10.5px; font-style: italic;")
+            row.addWidget(tag)
+        elif disk_file_count > 0:
+            tag = QLabel(str(disk_file_count))
+            tag.setStyleSheet(
+                "color: #8E8E93; background-color: rgba(255, 255, 255, 0.05); "
+                "border-radius: 5px; padding: 1px 5px; font-size: 10.5px;"
+            )
             row.addWidget(tag)
 
         self.btn_add = QPushButton("+")
@@ -273,6 +328,31 @@ class FolderTreePanel(QFrame):
         hdr.addWidget(self.btn_more)
         root.addLayout(hdr)
 
+        # Live Disk Alignment Bar (shows loose files vs. synced state with 1-click Align Now)
+        self.sync_bar = QFrame()
+        self.sync_bar.setStyleSheet(
+            "QFrame { background-color: rgba(255, 255, 255, 0.03); "
+            "border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 8px; }"
+        )
+        sb_l = QHBoxLayout(self.sync_bar)
+        sb_l.setContentsMargins(9, 5, 6, 5)
+        sb_l.setSpacing(7)
+        self.sync_dot = _SyncDotWidget("#30D158")
+        self.lbl_sync_status = QLabel("Checking Downloads...")
+        self.lbl_sync_status.setStyleSheet("color: #AEAEB2; font-size: 11.5px; border: none; background: transparent;")
+        self.btn_align_now = QPushButton("Align Now")
+        self.btn_align_now.setObjectName("PrimaryButton")
+        self.btn_align_now.setVisible(False)
+        self.btn_align_now.setToolTip("Organize existing loose files in Downloads so the folder matches Sorting Flow (with Undo)")
+        self.btn_align_now.setStyleSheet(
+            "QPushButton { padding: 3px 9px; font-size: 11.5px; border-radius: 6px; min-width: 0px; }"
+        )
+        self.btn_align_now.clicked.connect(lambda: self.tool_action.emit("align_downloads"))
+        sb_l.addWidget(self.sync_dot)
+        sb_l.addWidget(self.lbl_sync_status, 1)
+        sb_l.addWidget(self.btn_align_now)
+        root.addWidget(self.sync_bar)
+
         # Scrollable Tree
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -287,7 +367,7 @@ class FolderTreePanel(QFrame):
         )
         self.tree_host = QWidget()
         self.tree_layout = QVBoxLayout(self.tree_host)
-        self.tree_layout.setContentsMargins(0, 2, 2, 14)
+        self.tree_layout.setContentsMargins(0, 2, 2, 18)
         self.tree_layout.setSpacing(3)
         self.tree_layout.addStretch(1)
         self.scroll.setWidget(self.tree_host)
@@ -359,6 +439,7 @@ class FolderTreePanel(QFrame):
         *,
         focused_folder: str | None = None,
         draft_target: str | None = None,
+        disk_state: dict | None = None,
     ) -> None:
         self._row_widgets.clear()
         while self.tree_layout.count() > 1:
@@ -432,14 +513,32 @@ class FolderTreePanel(QFrame):
             else:
                 land_label = trace.filename
 
+        existing_folders: dict[str, int] = dict((disk_state or {}).get("existing_folders") or {})
+        has_disk_scan = bool(disk_state and disk_state.get("scanned"))
+        loose_count = int((disk_state or {}).get("loose_count", 0))
+        if has_disk_scan:
+            if loose_count == 0:
+                self.sync_dot.set_color("#30D158")
+                self.lbl_sync_status.setText("In sync with Downloads")
+                self.btn_align_now.setVisible(False)
+            else:
+                self.sync_dot.set_color("#3B82F6")
+                noun = "file" if loose_count == 1 else "files"
+                self.lbl_sync_status.setText(f"{loose_count} loose {noun} in Downloads")
+                self.btn_align_now.setVisible(True)
+
         has_3d_activity = (
             config.show_advanced_tools
             or bool(config.architecture)
             or active_target.startswith("3D Models")
+            or ("3D Models" in existing_folders)
+            or ("CAD" in existing_folders)
             or any("3d" in r.destination.lower() or ".3mf" in r.extensions or ".stl" in r.extensions for r in config.rules)
         )
 
+        managed_tops_lower: set[str] = set()
         for parent_name, children in tree.items():
+            managed_tops_lower.add(parent_name.lower())
             if parent_name in ("3D Models", "CAD") and not has_3d_activity:
                 continue
             if active_target == parent_name or active_target.startswith(parent_name + "\\"):
@@ -447,6 +546,8 @@ class FolderTreePanel(QFrame):
 
             expanded = parent_name in self._expanded_parents
             is_parent_hit = (not focused_folder and not draft_target and active_target == parent_name)
+            p_exists = (parent_name in existing_folders) if has_disk_scan else True
+            p_count = existing_folders.get(parent_name, 0)
             p_row = FolderRowWidget(
                 parent_name,
                 parent_name,
@@ -458,6 +559,8 @@ class FolderTreePanel(QFrame):
                 is_focused=(focused_folder == parent_name),
                 is_draft_target=(draft_target == parent_name),
                 land_label=land_label if is_parent_hit else "",
+                exists_on_disk=p_exists,
+                disk_file_count=p_count,
             )
             p_row.clicked.connect(self.folder_clicked.emit)
             p_row.hover_entered.connect(self.folder_hovered.emit)
@@ -473,6 +576,8 @@ class FolderTreePanel(QFrame):
                     depth = child_path.count("\\")
                     leaf = child_path.split("\\")[-1]
                     is_child_hit = (not focused_folder and not draft_target and active_target == child_path)
+                    c_exists = (child_path in existing_folders) if has_disk_scan else True
+                    c_count = existing_folders.get(child_path, 0)
                     c_row = FolderRowWidget(
                         child_path,
                         leaf,
@@ -483,6 +588,8 @@ class FolderTreePanel(QFrame):
                         is_focused=(focused_folder == child_path),
                         is_draft_target=(draft_target == child_path),
                         land_label=land_label if is_child_hit else "",
+                        exists_on_disk=c_exists,
+                        disk_file_count=c_count,
                     )
                     c_row.clicked.connect(self.folder_clicked.emit)
                     c_row.hover_entered.connect(self.folder_hovered.emit)
@@ -515,6 +622,38 @@ class FolderTreePanel(QFrame):
                     il.addWidget(edit)
                     self.tree_layout.insertWidget(self.tree_layout.count() - 1, inp_frame)
                     edit.setFocus()
+
+        # Calmly list user-created folders currently on disk that aren't managed by Sorting Flow
+        custom_disk_folders = [
+            (name, cnt)
+            for name, cnt in ((disk_state or {}).get("custom_top_folders") or [])
+            if name.lower() not in managed_tops_lower
+        ]
+        if custom_disk_folders:
+            div_lbl = QLabel("Other folders in Downloads")
+            div_lbl.setStyleSheet(
+                "color: #636366; font-size: 10.5px; font-weight: 600; "
+                "padding: 10px 8px 2px 8px; border-top: 1px solid rgba(255, 255, 255, 0.06);"
+            )
+            self.tree_layout.insertWidget(self.tree_layout.count() - 1, div_lbl)
+            for cname, ccnt in custom_disk_folders[:12]:
+                u_row = FolderRowWidget(
+                    cname,
+                    cname,
+                    depth=0,
+                    has_children=False,
+                    exists_on_disk=True,
+                    disk_file_count=ccnt,
+                    is_custom_disk=True,
+                )
+                u_row.clicked.connect(self.folder_clicked.emit)
+                u_row.hover_entered.connect(self.folder_hovered.emit)
+                u_row.hover_left.connect(self.folder_hover_left.emit)
+                u_row.add_subfolder_requested.connect(self.start_inline_subfolder)
+                u_row.file_dropped.connect(self.file_dropped_on_folder.emit)
+                u_row.context_action.connect(self._on_row_context_action)
+                self._row_widgets[cname] = u_row
+                self.tree_layout.insertWidget(self.tree_layout.count() - 1, u_row)
 
         self.btn_reset_focus.setVisible(bool(focused_folder))
         if focused_folder:
