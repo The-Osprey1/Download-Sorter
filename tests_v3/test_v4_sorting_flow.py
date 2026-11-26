@@ -203,3 +203,81 @@ def test_v4_clean_install_minimal_defaults(v3_qapp, app_paths: AppPaths) -> None
         assert win.flow_tab.spine.badge_3.text() == "3"
     finally:
         win.close()
+
+
+def test_v4_preferences_sidebar_disk_sync_and_align_dialog(v3_qapp, app_paths: AppPaths) -> None:
+    from download_sorter.ui.flow.align_dialog import AlignPreviewDialog
+    from download_sorter.ui.main_window import MainWindow
+
+    dl = app_paths.downloads_dir
+    assert dl is not None
+    f_pdf = dl / "Statement_2026.pdf"
+    f_png = dl / "Screenshot_1.png"
+    f_pdf.write_bytes(b"%PDF-1.4")
+    f_png.write_bytes(b"PNG")
+    custom_dir = dl / "MyCustomFolder"
+    custom_dir.mkdir()
+    (custom_dir / "keep.txt").write_text("hi", encoding="utf-8")
+
+    save_config(Config.new_install(), app_paths)
+    svc = SorterService(app_paths)
+    win = MainWindow(svc)
+    try:
+        win.show()
+        v3_qapp.processEvents()
+
+        # 2-pane Preferences sidebar navigation and auto_align_existing persistence
+        win.tabs.setCurrentWidget(win._settings_tab)
+        for idx, key in enumerate(("general", "sorting", "notifications", "advanced")):
+            win.select_preferences_section(key)
+            assert win._prefs_stack.currentIndex() == idx
+            assert win._prefs_nav_buttons[key].isChecked() is True
+
+        win.chk_auto_align_existing.setChecked(True)
+        win._save_settings_form()
+        assert svc.config.auto_align_existing is True
+
+        # FolderTreePanel live disk alignment bar + custom folder listing
+        win.flow_tab._on_disk_scan_ready(
+            {
+                "scanned": True,
+                "loose_count": 2,
+                "existing_folders": {"MyCustomFolder": 1},
+                "custom_top_folders": [("MyCustomFolder", 1)],
+            }
+        )
+        v3_qapp.processEvents()
+        assert "2 loose files" in win.flow_tab.tree.lbl_sync_status.text()
+        assert win.flow_tab.tree.btn_align_now.isHidden() is False
+        assert "MyCustomFolder" in win.flow_tab.tree._row_widgets
+
+        win.flow_tab._on_disk_scan_ready(
+            {
+                "scanned": True,
+                "loose_count": 0,
+                "existing_folders": {"Documents": 1, "Documents\\PDF": 1},
+                "custom_top_folders": [],
+            }
+        )
+        v3_qapp.processEvents()
+        assert "In sync" in win.flow_tab.tree.lbl_sync_status.text()
+        assert win.flow_tab.tree.btn_align_now.isHidden() is True
+
+        # AlignPreviewDialog selective filtering
+        sim = svc.simulate_top_level()
+        dlg = AlignPreviewDialog(dl, sim, parent=win)
+        assert len(dlg.selected_items()) == 2
+        dlg._checks[0][0].setChecked(False)
+        assert len(dlg.selected_items()) == 1
+        assert "Move 1 File" in dlg.btn_confirm.text()
+        dlg.close()
+
+        # Double-clicking tbl_sim traces the file in Sorting Flow
+        win.tabs.setCurrentWidget(win._home_tab)
+        win._run_simulation(sim)
+        v3_qapp.processEvents()
+        win._on_sim_trace_row(win.tbl_sim.model().index(0, 0))
+        v3_qapp.processEvents()
+        assert win.tabs.currentWidget() is win.flow_tab
+    finally:
+        win.close()

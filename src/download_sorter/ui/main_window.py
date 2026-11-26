@@ -1999,6 +1999,7 @@ class MainWindow(QMainWindow):
         self.tbl_sim.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tbl_sim.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tbl_sim.customContextMenuRequested.connect(self._show_sim_context_menu)
+        self.tbl_sim.doubleClicked.connect(self._on_sim_trace_row)
         self.tbl_sim.selectionModel().selectionChanged.connect(self._on_sim_selection_changed)
         self._sim_delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self.tbl_sim)
         self._sim_delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -3167,8 +3168,8 @@ class MainWindow(QMainWindow):
                 pass
             self.tbl_activity.setItem(r_idx, 0, QTableWidgetItem(ts))
             self.tbl_activity.setItem(r_idx, 1, QTableWidgetItem(str(rec["filename"])))
-            self.tbl_activity.setItem(r_idx, 2, QTableWidgetItem(dest_rel))
-            self.tbl_activity.setItem(r_idx, 3, QTableWidgetItem(str(rec["reason"])))
+            self.tbl_activity.setItem(r_idx, 2, QTableWidgetItem(dest_rel.replace("\\", " › ")))
+            self.tbl_activity.setItem(r_idx, 3, QTableWidgetItem(str(rec["reason"]).replace("\\", " › ")))
 
             btn = QPushButton("Undo")
             btn.setToolTip("Restore this file back to Downloads")
@@ -3559,14 +3560,15 @@ class MainWindow(QMainWindow):
             self.lbl_footer.setText(msg)
         else:
             held_n = res.get("held", 0)
+            hold_part = f"{held_n} .3MF held, " if held_n else ""
             self.progress_hud.finish(
                 "Downloads looks clean",
-                detail=f"0 moved ({held_n} .3MF held, {res['left']} left)",
+                detail=f"0 moved ({hold_part}{res['left']} left)",
                 kind="success",
             )
             self.banner.show_message("Downloads looks clean — nothing needed moving right now.", kind="info")
             self.lbl_footer.setText(
-                f"Everything looks clean: 0 moved ({held_n} .3MF held for 3D printing, {res['left']} left in Downloads)."
+                f"Everything looks clean: 0 moved ({hold_part}{res['left']} left in Downloads)."
             )
 
     def _on_sort_tiers_now(self) -> None:
@@ -3976,7 +3978,7 @@ class MainWindow(QMainWindow):
         cfg.ai_smart_scan_keywords = self.chk_ai_scan_keywords.isChecked()
         self._commit_config(cfg)
         if cfg.auto_align_existing and not cfg.paused and not os.environ.get("PYTEST_CURRENT_TEST"):
-            QTimer.singleShot(150, self.on_clean_now)
+            QTimer.singleShot(150, self._on_sort_now)
 
         warnings: list[str] = []
         want_startup = self.chk_startup.isChecked()
@@ -4314,10 +4316,27 @@ class MainWindow(QMainWindow):
             self.flow_tab.trace_from_activity(str(rec["filename"]), str(rec.get("source_url") or ""))
             self.tabs.setCurrentWidget(self.flow_tab)
 
+    def _on_sim_trace_row(self, index) -> None:  # noqa: ANN001
+        row = index.row()
+        item = self.tbl_sim.item(row, 0)
+        if item is None:
+            return
+        raw_path = item.data(Qt.ItemDataRole.UserRole)
+        if raw_path:
+            p = Path(str(raw_path))
+            if p.is_file():
+                from download_sorter.router import read_zone_url
+
+                self.flow_tab.tester_bar.set_test_file(p.name, read_zone_url(p), path=p)
+                self.tabs.setCurrentWidget(self.flow_tab)
+                return
+        self.flow_tab.trace_from_activity(item.text(), "")
+        self.tabs.setCurrentWidget(self.flow_tab)
+
     def _on_flow_config_committed(self, cfg: Config) -> None:
         self._commit_config(cfg)
         if cfg.auto_align_existing and not cfg.paused and not os.environ.get("PYTEST_CURRENT_TEST"):
-            QTimer.singleShot(150, self.on_clean_now)
+            QTimer.singleShot(150, self._on_sort_now)
 
     def _on_flow_teach_move(self, src_path: Path, dest_relpath: str) -> None:
         if not src_path.is_file():
@@ -4367,7 +4386,7 @@ class MainWindow(QMainWindow):
                         self._commit_config(cfg)
                     break
         elif action == "tree_tool:align_downloads":
-            self.on_clean_now()
+            self._open_align_preview_dialog()
         elif action == "open_prefs_section":
             self.tabs.setCurrentWidget(self._settings_tab)
             if hasattr(self, "select_preferences_section"):
@@ -4388,6 +4407,69 @@ class MainWindow(QMainWindow):
                 os.startfile(str(target))
         elif action in ("tree:rename", "tree:merge", "tree:delete") and arg:
             self._open_legacy_arch_dialog(action, folder_path=arg)
+
+    def _open_align_preview_dialog(self) -> None:
+        """Simulate loose root files off the UI thread, show AlignPreviewDialog, and move checked items."""
+        from download_sorter.fs_ops import move_file_safely
+        from download_sorter.ui.flow.align_dialog import AlignPreviewDialog
+        import uuid
+
+        watch_root = self.service.watch_root
+
+        def _on_sim_ready(plan: list[tuple[Path, Any]]) -> None:
+            movable = [(p, d) for p, d in plan if getattr(d, "action", "") == "move" and d.relative_dest is not None]
+            if not movable:
+                self.banner.show_message("Downloads is already aligned with Sorting Flow.", kind="info")
+                self.flow_tab._trigger_disk_scan()
+                return
+            dlg = AlignPreviewDialog(watch_root, movable, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            chosen = dlg.selected_items()
+            if not chosen:
+                return
+
+            batch_id = f"align-{uuid.uuid4().hex[:10]}"
+
+            def _do_align(report) -> dict[str, Any]:
+                moved: list[dict[str, Any]] = []
+                total = len(chosen)
+                for idx, (src_path, dec) in enumerate(chosen, start=1):
+                    report(idx, total, src_path.name)
+                    if not src_path.is_file():
+                        continue
+                    dest = watch_root / dec.relative_dest
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        res = move_file_safely(
+                            src_path,
+                            dest,
+                            db=self.service.db,
+                            reason=dec.reason,
+                            matched_rule=dec.matched_rule,
+                            match_type=dec.match_type,
+                            batch_id=batch_id,
+                        )
+                        if res is not None:
+                            moved.append({"src": str(src_path), "dest": str(res)})
+                    except OSError:
+                        continue
+                return {"moved": moved, "held": 0, "left": max(0, total - len(moved))}
+
+            self._run_service_action(
+                _do_align,
+                lambda res: self.refresh_all(then=lambda: self._after_sort_now(res)),
+                busy_text="Aligning Downloads...",
+                pass_progress=True,
+                finish_text="Downloads Aligned",
+            )
+
+        run_async(
+            self.service.simulate_top_level,
+            _on_sim_ready,
+            lambda err: self.banner.show_message(f"Could not preview Downloads: {err}", kind="warning"),
+            parent=self,
+        )
 
     def _open_legacy_arch_dialog(self, trigger: str = "", *, folder_path: str = "") -> None:
         dlg = QDialog(self)
