@@ -2190,6 +2190,7 @@ def scan_folder_architecture(
 
     dir_records: list[dict[str, Any]] = []
     global_token_counts: Counter[str] = Counter()
+    global_domain_counts: Counter[str] = Counter()
     doc_freq: Counter[str] = Counter()
     total_files = 0
     max_tier_seen = 1
@@ -2231,6 +2232,7 @@ def scan_folder_architecture(
                 host = extract_host(read_zone_url(fp))
                 if host:
                     domain_counts[host] += 1
+                    global_domain_counts[host] += 1
 
         for tok in token_counts:
             doc_freq[tok] += 1
@@ -2253,6 +2255,23 @@ def scan_folder_architecture(
     # Sort by tier so parents are always created before children
     dir_records.sort(key=lambda r: (r["tier"], tuple(p.lower() for p in r["rel_parts"])))
     total_dirs = len(dir_records)
+
+    # Determine the dominant folder owner for each extension so small topic/project
+    # folders (e.g. "CAD\\Cast in Steel" containing 2 .3mf files) never hijack an
+    # extension owned by a dedicated type folder (e.g. "3D Models\\3MF" with 400 .3mf files).
+    dominant_ext_owner: dict[str, tuple[tuple[str, ...], tuple[int, int, int]]] = {}
+    for rec in dir_records:
+        parts_r: tuple[str, ...] = rec["rel_parts"]
+        name_norm = "".join(ch for ch in rec["name"].lower() if ch.isalnum())
+        for ext, cnt in rec["ext_counts"].items():
+            ext_norm = ext.lstrip(".").lower()
+            name_matches_ext = 1 if (ext_norm and (name_norm == ext_norm or ext_norm in name_norm)) else 0
+            # Prefer deeper dedicated type subfolders matching the extension, then highest file count
+            score = (cnt, name_matches_ext, int(rec["tier"]))
+            prev = dominant_ext_owner.get(ext)
+            if prev is None or score > prev[1]:
+                dominant_ext_owner[ext] = (parts_r, score)
+
     for idx, rec in enumerate(dir_records, start=1):
         if on_progress is not None:
             on_progress(idx, max(1, total_dirs), f"Analyzing {rec['name']} ({idx}/{total_dirs})...")
@@ -2260,7 +2279,7 @@ def scan_folder_architecture(
         parent_id = path_to_id.get(parts[:-1]) if len(parts) > 1 else None
         fc = max(1, int(rec["file_count"]))
 
-        inferred_exts = [
+        raw_exts = [
             ext
             for ext, cnt in rec["ext_counts"].most_common(8)
             if cnt >= 2 or (cnt / fc) >= 0.25 or len(rec["ext_counts"]) == 1
@@ -2281,7 +2300,42 @@ def scan_folder_architecture(
                 scored_kws.append((score, cnt, tok))
         scored_kws.sort(key=lambda item: (-item[0], -item[1], item[2]))
         inferred_kws = [tok for _score, _cnt, tok in scored_kws[:5]]
-        inferred_domains = [host for host, _cnt in rec["domain_counts"].most_common(3)]
+        # Only infer a source domain when it is genuinely distinctive to this folder (>=65% purity)
+        inferred_domains = [
+            host
+            for host, cnt in rec["domain_counts"].most_common(3)
+            if cnt >= 2 and (cnt / max(1, global_domain_counts[host])) >= 0.65
+        ]
+
+        # Dedicated format subfolders (e.g. "PDF", "3MF", "STL", "ZIP", "Word", "Spreadsheets")
+        # should act as clean file-type buckets rather than restricting on incidental filename words.
+        from download_sorter.config import DEFAULT_TYPE_SUBFOLDERS
+
+        known_type_sub_names = {
+            "".join(ch for ch in sub.lower() if ch.isalnum())
+            for sub in DEFAULT_TYPE_SUBFOLDERS.values()
+        }
+        rec_name_norm = "".join(ch for ch in rec["name"].lower() if ch.isalnum())
+        is_format_bucket = (
+            rec["tier"] >= 2
+            and bool(raw_exts)
+            and (
+                rec_name_norm in known_type_sub_names
+                or any(rec_name_norm == e.lstrip(".").lower() for e in raw_exts)
+            )
+        )
+        if is_format_bucket:
+            inferred_kws = []
+            inferred_domains = []
+
+        # Only let a keyword-less / domain-less folder claim extensions it actually owns
+        if not inferred_kws and not inferred_domains:
+            inferred_exts = [
+                ext for ext in raw_exts
+                if dominant_ext_owner.get(ext, (parts, (0, 0, 0)))[0] == parts
+            ]
+        else:
+            inferred_exts = raw_exts
 
         node_id = uuid.uuid4().hex[:8]
         path_to_id[parts] = node_id

@@ -279,5 +279,48 @@ def test_v4_preferences_sidebar_disk_sync_and_align_dialog(v3_qapp, app_paths: A
         win._on_sim_trace_row(win.tbl_sim.model().index(0, 0))
         v3_qapp.processEvents()
         assert win.tabs.currentWidget() is win.flow_tab
+
+        # Every Sorting Flow -> MainWindow / ArchitectureTab action target exists and is callable
+        for attr in (
+            "open_ai_insights_dialog",
+            "_on_sort_tiers_now",
+            "_on_sort_now",
+            "_open_align_preview_dialog",
+            "open_carry_over_dialog",
+        ):
+            assert callable(getattr(win, attr))
+        for attr in (
+            "sync_from_service",
+            "_on_scan_folders",
+            "_on_detect_projects_for_selected",
+            "_open_snapshots_dialog",
+            "_on_merge_selected_clicked",
+            "_delete_node_by_id",
+            "_edit_node_by_id",
+            "_on_return_to_defaults",
+        ):
+            assert callable(getattr(win.arch_tab, attr))
     finally:
         win.close()
+
+
+def test_scan_folder_architecture_prevents_small_folder_extension_hijack(tmp_path: Path) -> None:
+    from download_sorter.architecture import apply_architecture_to_config, scan_folder_architecture
+    from download_sorter.router import FileCandidate, evaluate
+
+    # Dominant type folder has 10 .3mf files; small project folder has 2 .3mf files with no shared keywords
+    m3d = tmp_path / "3D Models" / "3MF"
+    m3d.mkdir(parents=True)
+    for i in range(10):
+        (m3d / f"model_{i}.3mf").write_bytes(b"3mf")
+    proj = tmp_path / "CAD" / "Cast in Steel"
+    proj.mkdir(parents=True)
+    (proj / "alpha.3mf").write_bytes(b"3mf")
+    (proj / "beta.3mf").write_bytes(b"3mf")
+
+    scanned = scan_folder_architecture(tmp_path)["architecture"]
+    cfg = apply_architecture_to_config(scanned, Config.new_install())
+
+    dec = evaluate(FileCandidate("random_plate.3mf"), cfg)
+    assert dec.relative_dest is not None
+    assert str(dec.relative_dest.parent).replace("/", "\\") == "3D Models\\3MF"

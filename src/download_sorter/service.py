@@ -815,24 +815,28 @@ class SorterService:
                 continue
             seen_paths.add(key_path)
 
-            cand = candidate_from_path(fpath, lazy_zone=True)
-            dec = evaluate(cand, target_config, include_trace=False)
-            if dec.action != "move" or dec.relative_dest is None:
-                continue
-            if is_top_level and self._is_3mf_held(fpath, target_config):
-                continue
+            try:
+                cand = candidate_from_path(fpath, lazy_zone=True)
+                dec = evaluate(cand, target_config, include_trace=False)
+                if dec.action != "move" or dec.relative_dest is None:
+                    continue
+                if is_top_level and self._is_3mf_held(fpath, target_config):
+                    continue
 
-            dest_candidate = watch_dir / dec.relative_dest
-            if os.path.normcase(str(dest_candidate)) == key_path:
-                continue
+                dest_candidate = watch_dir / dec.relative_dest
+                if os.path.normcase(str(dest_candidate)) == key_path:
+                    continue
 
-            resolved = fpath.resolve()
-            dest_full = dest_candidate.resolve()
-            if dest_full == resolved:
-                continue
+                resolved = fpath.resolve()
+                dest_full = dest_candidate.resolve()
+                if dest_full == resolved:
+                    continue
 
-            src_rel = str(resolved.relative_to(watch_dir))
-            dest_rel = str(dec.relative_dest)
+                src_rel = str(resolved.relative_to(watch_dir))
+                dest_rel = str(dec.relative_dest)
+            except (OSError, ValueError) as exc:
+                logging.warning("Architecture preview skipped %s: %s", fpath, exc)
+                continue
             rel_parent = str(dec.relative_dest.parent)
             if rel_parent and rel_parent != "." and rel_parent not in folders_needed:
                 folders_needed.append(rel_parent)
@@ -923,11 +927,11 @@ class SorterService:
                 for sub_root in list(watch_dir.iterdir()):
                     if not sub_root.is_dir() or sub_root.name.lower() not in managed_before:
                         continue
-                    for dirpath in sorted(
-                        [p for p in sub_root.rglob("*") if p.is_dir()] + [sub_root],
-                        key=lambda p: len(p.parts),
-                        reverse=True,
-                    ):
+                    try:
+                        subdirs = [p for p in sub_root.rglob("*") if p.is_dir()] + [sub_root]
+                    except OSError:
+                        continue
+                    for dirpath in sorted(subdirs, key=lambda p: len(p.parts), reverse=True):
                         try:
                             if not any(dirpath.iterdir()):
                                 dirpath.rmdir()

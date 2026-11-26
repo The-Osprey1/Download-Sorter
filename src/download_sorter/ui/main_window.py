@@ -4373,7 +4373,7 @@ class MainWindow(QMainWindow):
         elif action == "dismiss_suggestion":
             self._dismiss_rule_suggestion()
         elif action == "ai_insights":
-            self._open_ai_insights()
+            self.open_ai_insights_dialog()
         elif action == "detect_projects":
             self._open_legacy_arch_dialog("detect_projects")
         elif action == "open_full_rule_editor" and arg:
@@ -4394,13 +4394,14 @@ class MainWindow(QMainWindow):
         elif action == "tree_tool:scan_folders":
             self._open_legacy_arch_dialog("scan_folders")
         elif action == "tree_tool:sort_lower_tiers":
-            self._on_sort_lower_tiers()
+            self._on_sort_tiers_now()
         elif action == "tree_tool:snapshots":
             self._open_legacy_arch_dialog("snapshots")
         elif action == "tree_tool:open_canvas":
             self._open_legacy_arch_dialog("")
         elif action == "tree_tool:defaults":
-            self.arch_tab._on_reset_defaults()
+            self.arch_tab.sync_from_service(force=True)
+            self.arch_tab._on_return_to_defaults()
         elif action == "tree:open_explorer" and arg:
             target = self.service.watch_root / arg.replace("/", "\\").strip("\\")
             if target.exists() and sys.platform == "win32" and hasattr(os, "startfile"):
@@ -4472,6 +4473,7 @@ class MainWindow(QMainWindow):
         )
 
     def _open_legacy_arch_dialog(self, trigger: str = "", *, folder_path: str = "") -> None:
+        self.arch_tab.sync_from_service(force=True)
         dlg = QDialog(self)
         dlg.setWindowTitle("Folder Architecture Canvas")
         dlg.resize(1120, 740)
@@ -4480,21 +4482,26 @@ class MainWindow(QMainWindow):
         dl.setContentsMargins(12, 12, 12, 12)
         dl.addWidget(self.arch_tab, 1)
         self.arch_tab.setVisible(True)
+        matched_node_id = ""
         if folder_path:
+            norm_fp = folder_path.replace("/", "\\").strip("\\").lower()
             for node in self.arch_tab._arch.nodes:
-                if self.arch_tab._arch.node_relative_path(node.id).replace("/", "\\") == folder_path.replace("/", "\\"):
+                if self.arch_tab._arch.node_relative_path(node.id).replace("/", "\\").strip("\\").lower() == norm_fp:
+                    matched_node_id = node.id
                     self.arch_tab.canvas.select_node(node.id)
                     break
         if trigger == "detect_projects":
-            QTimer.singleShot(60, self.arch_tab._on_detect_projects)
+            QTimer.singleShot(60, self.arch_tab._on_detect_projects_for_selected)
         elif trigger == "scan_folders":
             QTimer.singleShot(60, self.arch_tab._on_scan_folders)
         elif trigger == "snapshots":
-            QTimer.singleShot(60, self.arch_tab._on_snapshots)
+            QTimer.singleShot(60, self.arch_tab._open_snapshots_dialog)
         elif trigger == "tree:merge":
-            QTimer.singleShot(60, self.arch_tab._on_merge_selected)
-        elif trigger == "tree:delete":
-            QTimer.singleShot(60, self.arch_tab._on_delete_selected)
+            QTimer.singleShot(60, self.arch_tab._on_merge_selected_clicked)
+        elif trigger == "tree:delete" and matched_node_id:
+            QTimer.singleShot(60, lambda nid=matched_node_id: self.arch_tab._delete_node_by_id(nid, confirm=True))
+        elif trigger == "tree:rename" and matched_node_id:
+            QTimer.singleShot(60, lambda nid=matched_node_id: self.arch_tab._edit_node_by_id(nid))
         dlg.exec()
         self.arch_tab.setParent(self)
         self.arch_tab.setVisible(False)
