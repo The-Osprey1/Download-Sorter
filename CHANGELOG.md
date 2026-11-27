@@ -39,7 +39,7 @@ A simpler, single-screen way to design your folders, built from feedback that 4.
 ### Changed
 - **Tabs are now Folders, Activity and Settings.** The Sorting Flow view is no longer a tab; its dialogs remain reachable from the Folders screen menus. "Trace" from Activity fills the Folders tester.
 - **First run opens Folder Setup (`ui/main_window.py`).** New installs go straight into the interactive 3-step Folder Setup Studio instead of the v3 slideshow. Closing it still counts as seen, so automatic sorting is not held back, and the **Guide** button still opens the tour.
-- **Taller folder dialogs on roomy screens (`ui/flow/folder_builder.py`, `ui/flow/setup_studio.py`).** New Folder opens at 840px and Folder Setup at 880px when the screen has room, so the website chip row in step 2 no longer needs a scroll. Smaller screens are capped to the usable height.
+- **Taller folder dialogs on roomy screens (`ui/flow/folder_builder.py`, `ui/flow/setup_studio.py`).** New Folder opens at 860px and Folder Setup at 880px when the screen has room, so the website chip row in step 2 no longer needs a scroll. Smaller screens are capped to the usable height.
 
 ### Fixed
 - Notification bars with a button (such as Undo) no longer log a style sheet error.

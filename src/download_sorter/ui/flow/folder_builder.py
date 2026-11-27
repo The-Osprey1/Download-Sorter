@@ -966,7 +966,7 @@ class GuidedFolderDialog(QDialog):
         self.setAcceptDrops(True)
         self.setWindowTitle("Edit Folder & Rules" if node is not None else "New Custom Folder")
         self.setMinimumSize(680, 520)
-        fit_dialog_to_screen(self, 940, 840, 720)
+        fit_dialog_to_screen(self, 940, 860, 720)
         self.setStyleSheet(STYLESHEET + "\n" + _DIALOG_EXTRA_QSS)
 
         self._type_pill_btns: dict[str, QPushButton] = {}

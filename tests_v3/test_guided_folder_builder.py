@@ -729,11 +729,11 @@ def test_dialogs_open_taller_when_the_screen_has_room(v3_qapp, monkeypatch) -> N
         dlg.setMinimumSize(680, 520)
         # 125% scaled 1440p (about 2048x1104 usable): room for every chip row
         monkeypatch.setattr(dlg, "screen", lambda: _FakeScreen(2048, 1104))
-        fb_mod.fit_dialog_to_screen(dlg, 940, 840, 720)
-        assert (dlg.width(), dlg.height()) == (940, 840)
+        fb_mod.fit_dialog_to_screen(dlg, 940, 860, 720)
+        assert (dlg.width(), dlg.height()) == (940, 860)
         # Small laptop: never taller than the usable screen
         monkeypatch.setattr(dlg, "screen", lambda: _FakeScreen(1280, 680))
-        fb_mod.fit_dialog_to_screen(dlg, 940, 840, 720)
+        fb_mod.fit_dialog_to_screen(dlg, 940, 860, 720)
         assert dlg.height() == 680 - 64
         assert dlg.width() == 940
     finally:
@@ -742,7 +742,7 @@ def test_dialogs_open_taller_when_the_screen_has_room(v3_qapp, monkeypatch) -> N
     # At the taller default the New Folder dialog shows all of step 2 without scrolling
     dlg2 = GuidedFolderDialog(FolderArchitecture.from_preset("standard"))
     try:
-        dlg2.resize(940, 840)
+        dlg2.resize(940, 860)
         dlg2.show()
         v3_qapp.processEvents()
         assert dlg2.scroll.viewport().height() >= dlg2.scroll.widget().sizeHint().height()
