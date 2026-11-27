@@ -56,6 +56,7 @@ from download_sorter.router import (
 from download_sorter.service import SorterService
 from download_sorter.ui.accessibility import name_controls_for_screen_readers
 from download_sorter.ui.emblems import FolderScanRadarWidget
+from download_sorter.ui.flow.folder_builder import fit_dialog_to_screen
 from download_sorter.ui.motion import InteractiveRibbonBtn, make_vector_icon, refresh_style
 from download_sorter.ui.theme import STYLESHEET
 
@@ -905,7 +906,7 @@ class FolderSetupStudioDialog(QDialog):
         self.setObjectName("FolderSetupStudio")
         self.setWindowTitle("Folder Setup Studio — Set Up Downloads Folders")
         self.setMinimumSize(860, 540)
-        self.resize(980, 660)
+        fit_dialog_to_screen(self, 980, 880, 660)
         self.setStyleSheet(STYLESHEET + "\n" + _STUDIO_QSS)
 
         self._scan_info = _scan_watch_root_safely(self.service.watch_root)

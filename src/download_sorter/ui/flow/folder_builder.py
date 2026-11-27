@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -319,6 +320,25 @@ _COMMON_DOMAINS_FALLBACK: tuple[str, ...] = (
     "printables.com",
     "github.com",
 )
+
+
+def fit_dialog_to_screen(dialog: QWidget, width: int, preferred_height: int, base_height: int) -> None:
+    """Open at ``preferred_height`` when the screen has room for it, else at ``base_height``.
+
+    The taller size lets every chip row show without scrolling on 1080p-class screens,
+    while smaller screens keep the old default. Never exceeds the available screen area.
+    """
+    height = base_height
+    width_out = width
+    screen = dialog.screen() or QGuiApplication.primaryScreen()
+    if screen is not None:
+        avail = screen.availableGeometry()
+        room = avail.height() - 64  # title bar and taskbar margin
+        if room > 0:
+            height = min(preferred_height, room)
+        if avail.width() > 32:
+            width_out = min(width, avail.width() - 32)
+    dialog.resize(width_out, max(height, dialog.minimumHeight()))
 
 
 def _esc_amp(text: str) -> str:
@@ -946,7 +966,7 @@ class GuidedFolderDialog(QDialog):
         self.setAcceptDrops(True)
         self.setWindowTitle("Edit Folder & Rules" if node is not None else "New Custom Folder")
         self.setMinimumSize(680, 520)
-        self.resize(940, 720)
+        fit_dialog_to_screen(self, 940, 840, 720)
         self.setStyleSheet(STYLESHEET + "\n" + _DIALOG_EXTRA_QSS)
 
         self._type_pill_btns: dict[str, QPushButton] = {}
