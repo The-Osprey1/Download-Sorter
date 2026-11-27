@@ -31,12 +31,14 @@ from download_sorter.config import (
 from download_sorter.db import StateDB
 from download_sorter.dest import is_under_watch_root, to_relative_dest
 from download_sorter.fs_ops import (
+    DUPLICATES_DIR,
     ProgressCallback,
     cleanup_orphaned_staging,
     delete_files_safely,
     execute_move,
     extract_zip_safely,
     is_slicer_running,
+    migrate_duplicates_folder,
     prune_empty_folders,
     resolve_duplicate_delete_new_locate_old,
     resolve_duplicate_keep_both,
@@ -463,7 +465,7 @@ class SorterService:
     # Native Duplicate & Watch-Folder Deletion Helpers
     # ------------------------------------------------------------------
     def list_duplicate_files(self, root: Path | None = None) -> list[dict[str, Any]]:
-        """Return quarantined duplicate files inside ``watch_root / '_Duplicates'``."""
+        """Return quarantined duplicate files inside ``watch_root / 'Duplicates'``."""
         watch_dir = (root or self.watch_root).resolve()
         return scan_duplicate_files(watch_dir, db=self.db)
 
@@ -581,9 +583,9 @@ class SorterService:
         use_recycle_bin: bool = True,
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
-        """Safely remove selected duplicate files confined strictly inside ``_Duplicates``."""
+        """Safely remove selected duplicate files confined strictly inside ``Duplicates``."""
         watch_dir = self.watch_root.resolve()
-        dup_root = watch_dir / "_Duplicates"
+        dup_root = watch_dir / DUPLICATES_DIR
         res = delete_files_safely(
             paths,
             watch_root=watch_dir,
@@ -594,7 +596,7 @@ class SorterService:
         if res["deleted"]:
             self.db.mark_orphaned_by_dest(res["deleted"])
             self.db.checkpoint()
-            # Clean up any empty monthly subfolders inside _Duplicates
+            # Clean up any empty monthly subfolders inside Duplicates
             if dup_root.is_dir():
                 for subdir in sorted(
                     [p for p in dup_root.rglob("*") if p.is_dir()],
@@ -706,7 +708,7 @@ class SorterService:
 
         def _add_path(raw: str) -> None:
             norm = str(raw or "").replace("/", "\\").strip("\\ ").lower()
-            if not norm or norm == "_duplicates":
+            if not norm or norm in ("duplicates", "_duplicates"):
                 return
             parts = [p.strip() for p in norm.split("\\") if p.strip()]
             for i in range(1, len(parts) + 1):
@@ -746,6 +748,7 @@ class SorterService:
 
         rels.discard("")
         rels.discard("_duplicates")
+        rels.discard("duplicates")
         return rels
 
     @staticmethod
@@ -772,6 +775,7 @@ class SorterService:
                             roots.add(nm)
         roots.discard("")
         roots.discard("_duplicates")
+        roots.discard("duplicates")
         return roots
 
     def preview_architecture_shift(
@@ -966,7 +970,7 @@ class SorterService:
             if on_progress is not None and total > 0:
                 on_progress(total, total, "Complete")
 
-            # Remove now-empty old managed directories cleanly (never touch _Duplicates or unmanaged dirs)
+            # Remove now-empty old managed directories cleanly (never touch Duplicates or unmanaged dirs)
             if watch_dir.is_dir():
                 for sub_root in list(watch_dir.iterdir()):
                     if not sub_root.is_dir() or sub_root.name.lower() not in managed_before:
@@ -1293,6 +1297,7 @@ class SorterService:
                 cleanup_orphaned_staging(root)
             except Exception:
                 logging.exception("Could not clean up orphaned staging directories in %s", root)
+            migrate_duplicates_folder(root, self.db)
         try:
             self.db.prune_missing_hashes()
         except Exception:

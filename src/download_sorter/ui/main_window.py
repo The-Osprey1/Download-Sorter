@@ -1306,7 +1306,7 @@ def _dup_group_key(item: dict[str, Any]) -> tuple[int, str]:
 
 
 class DuplicateManagerDialog(QDialog):
-    """Native Apple Sequoia dialog to inspect and safely delete files quarantined in ``_Duplicates``."""
+    """Native Apple Sequoia dialog to inspect and safely delete files quarantined in ``Duplicates``."""
 
     duplicates_changed = Signal()
 
@@ -1333,7 +1333,7 @@ class DuplicateManagerDialog(QDialog):
         self.lbl_title = QLabel("Duplicate Files")
         self.lbl_title.setObjectName("CardTitle")
         dup_sub_text = (
-            "Duplicate or browser-numbered downloads isolated inside _Duplicates\\. "
+            "Duplicate or browser-numbered downloads isolated inside Duplicates\\. "
             "Your sorted originals stay untouched until you choose Replace Old, Delete & Locate Old, or Keep Both."
         )
         lbl_sub = QLabel(dup_sub_text, self)
@@ -1392,7 +1392,7 @@ class DuplicateManagerDialog(QDialog):
         self.tbl_dups.customContextMenuRequested.connect(self._show_context_menu)
         root.addWidget(self.tbl_dups, 1)
 
-        self.lbl_empty = QLabel("No quarantined duplicates right now — your _Duplicates folder is clean!")
+        self.lbl_empty = QLabel("No quarantined duplicates right now — your Duplicates folder is clean!")
         self.lbl_empty.setObjectName("MutedText")
         self.lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.lbl_empty)
@@ -1432,11 +1432,11 @@ class DuplicateManagerDialog(QDialog):
         footer = QHBoxLayout()
         footer.setSpacing(10)
         self.btn_open_dups = InteractiveRibbonBtn(
-            "Open _Duplicates Folder",
+            "Open Duplicates Folder",
             make_vector_icon("folder", "#F5F5F7", 14),
         )
         self.btn_open_dups.setObjectName("GhostButton")
-        self.btn_open_dups.setToolTip("Open the _Duplicates quarantine folder in File Explorer")
+        self.btn_open_dups.setToolTip("Open the Duplicates quarantine folder in File Explorer")
         self.btn_open_dups.clicked.connect(self._open_duplicates_folder)
         footer.addWidget(self.btn_open_dups)
         footer.addStretch(1)
@@ -1717,7 +1717,7 @@ class DuplicateManagerDialog(QDialog):
         return {"kept": kept, "final_paths": final_paths, "errors": errors}
 
     def _open_duplicates_folder(self) -> None:
-        dup_dir = self.service.watch_root / "_Duplicates"
+        dup_dir = self.service.watch_root / "Duplicates"
         target = dup_dir if dup_dir.exists() else self.service.watch_root
         if sys.platform == "win32" and hasattr(os, "startfile") and target.exists():
             os.startfile(str(target))
@@ -2335,7 +2335,7 @@ class MainWindow(QMainWindow):
             "Duplicates",
             make_vector_icon("duplicates", "#FF9F0A", 14),
         )
-        self.btn_duplicates.setToolTip("Inspect and delete quarantined duplicate files inside _Duplicates/")
+        self.btn_duplicates.setToolTip("Inspect and delete quarantined duplicate files inside Duplicates/")
         self.btn_duplicates.clicked.connect(self._open_duplicates_dialog)
 
         self.btn_refresh_preview = InteractiveRibbonBtn(
@@ -3327,9 +3327,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "btn_duplicates"):
             self.btn_duplicates.setText(f"Duplicates ({dup_count})" if dup_count else "Duplicates")
             self.btn_duplicates.setToolTip(
-                f"{dup_count} quarantined duplicate(s) ({_format_bytes(dup_bytes)} reclaimable) in _Duplicates/"
+                f"{dup_count} quarantined duplicate(s) ({_format_bytes(dup_bytes)} reclaimable) in Duplicates/"
                 if dup_count
-                else "No duplicate files quarantined in _Duplicates/"
+                else "No duplicate files quarantined in Duplicates/"
             )
             self.btn_duplicates.setStyleSheet(
                 "background-color: rgba(255, 159, 10, 0.14); border: 1px solid rgba(255, 159, 10, 0.45); "

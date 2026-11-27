@@ -57,7 +57,7 @@ def test_renamed_duplicate_quarantined_via_state_db_hash_index(
     assert rec1 is not None and not rec1["is_duplicate"]
     assert Path(rec1["dest_path"]).is_file()
 
-    # Renamed duplicate arrives later -> quarantined to _Duplicates/<YYYY-MM>
+    # Renamed duplicate arrives later -> quarantined to Duplicates/<YYYY-MM>
     second = create_test_file("totally_renamed_copy.stl", payload)
     dec2 = RouteDecision(
         action="move",
@@ -70,7 +70,7 @@ def test_renamed_duplicate_quarantined_via_state_db_hash_index(
         second, dec2, batch_id="b2", db=db, watch_root=app_paths.downloads_dir, settle_seconds=0.0
     )
     assert rec2 is not None and rec2["is_duplicate"] is True
-    assert "_Duplicates" in rec2["dest_path"]
+    assert "Duplicates" in rec2["dest_path"]
     assert Path(rec2["dest_path"]).is_file()
     assert rec2["existing_path"] == str(Path(rec1["dest_path"]).resolve())
 

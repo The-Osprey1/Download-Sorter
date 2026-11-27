@@ -113,7 +113,7 @@ def test_sorting_progress_hud_and_mascot_working_render(v3_qapp) -> None:  # noq
 def test_duplicate_listing_boundary_and_manager_dialog(v3_qapp, app_paths: AppPaths, monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setattr(fs_ops, "_send_to_recycle_bin_win32", _fake_recycle_unlink)
 
-    dup_dir = app_paths.downloads_dir / "_Duplicates" / "2026-11"
+    dup_dir = app_paths.downloads_dir / "Duplicates" / "2026-11"
     dup_dir.mkdir(parents=True, exist_ok=True)
     d1 = dup_dir / "driver_setup.exe"
     d2 = dup_dir / "driver_setup (2).exe"
@@ -135,7 +135,7 @@ def test_duplicate_listing_boundary_and_manager_dialog(v3_qapp, app_paths: AppPa
     try:
         assert "Duplicates (3)" in win.btn_duplicates.text()
 
-        # Security boundary: delete_duplicate_files must refuse non-_Duplicates paths
+        # Security boundary: delete_duplicate_files must refuse non-Duplicates paths
         refused = win.service.delete_duplicate_files([outside_file, sorted_original])
         assert len(refused["deleted"]) == 0
         assert len(refused["failed"]) == 2
@@ -188,7 +188,7 @@ def test_select_and_delete_files_in_preview_table(v3_qapp, app_paths: AppPaths, 
         f.write_bytes(b"hello-world")
 
     # Add a quarantined duplicate too so we test 900x560 layout with BOTH badges visible!
-    dup_file = app_paths.downloads_dir / "_Duplicates" / "2026-11" / "extra.zip"
+    dup_file = app_paths.downloads_dir / "Duplicates" / "2026-11" / "extra.zip"
     dup_file.parent.mkdir(parents=True, exist_ok=True)
     dup_file.write_bytes(b"dup")
 

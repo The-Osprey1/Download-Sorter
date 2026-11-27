@@ -89,6 +89,7 @@ FILE_TYPE_CHIP_SPECS: tuple[tuple[str, tuple[str, ...], str], ...] = (
 _PROTECTED_DIR_NAMES: frozenset[str] = frozenset(
     {
         "_duplicates",
+        "duplicates",
         "_extracted",
         "extracted",
         "_archive",
@@ -1064,7 +1065,7 @@ class FolderSetupStudioDialog(QDialog):
         self.card_scan.selected.connect(self._on_mode_card_clicked)
         scan_cnt = self._scan_info["folder_count"]
         prot = self._scan_info["protected_folders"]
-        prot_preview = ", ".join(prot[:4]) if prot else "Games, Extracted, _Duplicates"
+        prot_preview = ", ".join(prot[:4]) if prot else "Games, Extracted, Duplicates"
         if scan_cnt > 0:
             self.card_scan.set_meta_summary(
                 f"Found {scan_cnt} folder{'s' if scan_cnt != 1 else ''} ({self._scan_info['file_count']} files sampled) "
@@ -1729,14 +1730,14 @@ class FolderSetupStudioDialog(QDialog):
         prot = self._scan_info["protected_folders"]
         if prot:
             prot_low = {p.lower() for p in prot}
-            extra_examples = [ex for ex in ("Games", "Extracted", "_Duplicates", "Portable Apps") if ex.lower() not in prot_low]
+            extra_examples = [ex for ex in ("Games", "Extracted", "Duplicates", "Portable Apps") if ex.lower() not in prot_low]
             extra_tail = f" (plus {', '.join(extra_examples)} and git/app bundles)" if extra_examples else " (plus git/app bundles)"
             self.lbl_step1_protected.setText(
                 f"Detected on disk & kept 100% untouched: {', '.join(prot)}{extra_tail}."
             )
         else:
             self.lbl_step1_protected.setText(
-                "Folders like Games, Extracted, _Duplicates, Portable Apps, and git/app bundles are never scanned or altered."
+                "Folders like Games, Extracted, Duplicates, Portable Apps, and git/app bundles are never scanned or altered."
             )
 
     # ------------------------------------------------------------------
@@ -2582,7 +2583,7 @@ class FolderSetupStudioDialog(QDialog):
             self.lbl_step3_prot_sub.setText(f"Left untouched: {', '.join(prot[:5])}")
         else:
             self.lbl_step3_prot_headline.setText("100% Untouched")
-            self.lbl_step3_prot_sub.setText("Games, Extracted, _Duplicates & project bundles stay safe")
+            self.lbl_step3_prot_sub.setText("Games, Extracted, Duplicates & project bundles stay safe")
 
         collisions = self._detect_cue_collisions()
         if collisions:

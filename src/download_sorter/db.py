@@ -400,6 +400,24 @@ class StateDB:
             row = conn.execute("SELECT * FROM moves WHERE id = ?", (int(move_id),)).fetchone()
             return dict(row) if row else None
 
+    def rewrite_dest_prefix(self, old_prefix: str, new_prefix: str) -> int:
+        """Point history rows whose destination is under ``old_prefix`` at ``new_prefix``."""
+        old_prefix = str(old_prefix).rstrip("\\/")
+        new_prefix = str(new_prefix).rstrip("\\/")
+        changed = 0
+        with self._lock, self._connection() as conn:
+            rows = conn.execute("SELECT id, dest_path FROM moves").fetchall()
+            for row in rows:
+                dest = str(row["dest_path"])
+                if dest == old_prefix or dest.startswith((old_prefix + "\\", old_prefix + "/")):
+                    conn.execute(
+                        "UPDATE moves SET dest_path = ? WHERE id = ?",
+                        (new_prefix + dest[len(old_prefix) :], int(row["id"])),
+                    )
+                    changed += 1
+            conn.commit()
+        return changed
+
     def mark_undone(self, move_ids: list[int]) -> None:
         if not move_ids:
             return
