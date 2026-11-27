@@ -617,3 +617,95 @@ def test_manual_premade_key_roundtrip_and_spine_rule_merge_on_edit(v3_qapp) -> N
     dec_removed = evaluate(FileCandidate(filename="temp_kw_only.pdf"), cfg_s)
     assert str(dec_removed.relative_dest) != r"Receipts\temp_kw_only.pdf"
 
+
+
+# ---------------------------------------------------------------------------
+# Rule Collision Preview (amber note + "put this folder ahead" opt-in)
+# ---------------------------------------------------------------------------
+
+
+def _collision_config() -> Config:
+    from download_sorter.config import Rule
+
+    cfg = Config.new_install()
+    cfg.rules = [
+        Rule(
+            id="user-quarterly",
+            name="Quarterly Reports",
+            destination=r"Documents\Quarterly",
+            keywords=["quarterlyzz"],
+            enabled=True,
+        ),
+        *cfg.rules,
+    ]
+    return cfg
+
+
+def test_collision_note_for_extension_folder_offers_priority(v3_qapp, app_paths: AppPaths) -> None:  # noqa: ANN001
+    dl = app_paths.downloads_dir
+    (dl / "quarterlyzz_q3.pdf").write_bytes(b"%PDF-1.4 q3")
+    (dl / "quarterlyzz_q4.pdf").write_bytes(b"%PDF-1.4 q4")
+    (dl / "plain_manual.pdf").write_bytes(b"%PDF-1.4 manual")
+
+    cfg = _collision_config()
+    arch = FolderArchitecture.from_preset("standard")
+    dlg = GuidedFolderDialog(arch, config=cfg, watch_root=dl)
+    try:
+        dlg.edit_name.setText("All PDFs")
+        dlg.add_extension("pdf")
+        dlg._refresh_all()
+        v3_qapp.processEvents()
+
+        collisions = dlg.rule_collisions()
+        assert ("Quarterly Reports", r"Documents\Quarterly", 2) in collisions
+        assert not dlg.lbl_collision.isHidden()
+        assert "runs first" in dlg.lbl_collision.text()
+        assert "Quarterly Reports" in dlg.lbl_collision.text()
+        assert not dlg.chk_priority.isHidden()
+        assert dlg.result_data()["priority_over_rules"] is False
+
+        # Without opting in, the existing rule still wins after apply
+        _arch1, cfg1, rel1 = dlg.apply_to_architecture(arch, cfg)
+        d1 = evaluate(FileCandidate(filename="quarterlyzz_q3.pdf", path=dl / "quarterlyzz_q3.pdf"), cfg1)
+        assert d1.matched_rule == "Quarterly Reports"
+
+        # Opting in puts the new folder first
+        dlg.chk_priority.setChecked(True)
+        v3_qapp.processEvents()
+        assert "will go first" in dlg.lbl_collision.text()
+        assert dlg.result_data()["priority_over_rules"] is True
+        _arch2, cfg2, rel2 = dlg.apply_to_architecture(arch, cfg)
+        d2 = evaluate(FileCandidate(filename="quarterlyzz_q3.pdf", path=dl / "quarterlyzz_q3.pdf"), cfg2)
+        assert d2.relative_dest is not None
+        assert str(d2.relative_dest.parent).replace("/", "\\") == rel2
+        # Pure-extension mapping is still kept for the category map
+        assert cfg2.category_map.get(".pdf") == "All PDFs"
+    finally:
+        dlg.close()
+
+
+def test_collision_note_for_keyword_folder_says_it_wins(v3_qapp, app_paths: AppPaths) -> None:  # noqa: ANN001
+    dl = app_paths.downloads_dir
+    (dl / "quarterlyzz_board.pdf").write_bytes(b"%PDF-1.4 board")
+
+    cfg = _collision_config()
+    arch = FolderArchitecture.from_preset("standard")
+    dlg = GuidedFolderDialog(arch, config=cfg, watch_root=dl)
+    try:
+        dlg.edit_name.setText("Board Packs")
+        dlg.add_keyword("board")
+        dlg._refresh_all()
+        v3_qapp.processEvents()
+
+        assert not dlg.lbl_collision.isHidden()
+        assert "will go first" in dlg.lbl_collision.text()
+        assert dlg.chk_priority.isHidden()
+
+        # No collision when nothing else catches the matches
+        dlg.remove_keyword("board")
+        dlg.add_keyword("manualzz")
+        dlg._refresh_all()
+        assert dlg.lbl_collision.isHidden()
+        assert dlg.rule_collisions() == []
+    finally:
+        dlg.close()

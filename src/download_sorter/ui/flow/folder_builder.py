@@ -41,7 +41,9 @@ from download_sorter.pipeline import infer_teach_cues
 from download_sorter.router import (
     FileCandidate,
     _evaluate_rule,
+    RouteDecision,
     _normalize_tokens,
+    evaluate,
     extract_host,
     read_zone_url,
     sniff_magic_extension,
@@ -934,6 +936,10 @@ class GuidedFolderDialog(QDialog):
         self._watch_domains: list[str] = []
         self._scan_loose_watch_root()
         self._matching_paths: list[Path] = []
+        # Current routing of each loose file under the existing rules (cues don't change it, so cache it)
+        self._current_decisions: dict[Path, RouteDecision | None] = {}
+        self._competing_config: Config | None = None
+        self._collisions: list[tuple[str, str, int]] = []
 
         self.setObjectName("GuidedFolderDialog")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1550,6 +1556,22 @@ class GuidedFolderDialog(QDialog):
         self.chk_align_now.setVisible(False)
         self.chk_align_now.toggled.connect(lambda _c: self._update_cta_and_completeness())
         sb_lay.addWidget(self.chk_align_now)
+
+        # Amber rule-collision note: an existing rule already catches some of the matching files
+        self.lbl_collision = QLabel("", sentence_box)
+        self.lbl_collision.setObjectName("GuidedCollisionNote")
+        self.lbl_collision.setWordWrap(True)
+        self.lbl_collision.setStyleSheet("font-size: 12px; color: #FFB340;")
+        self.lbl_collision.setVisible(False)
+        sb_lay.addWidget(self.lbl_collision)
+
+        self.chk_priority = QCheckBox("Put this folder ahead of those rules", sentence_box)
+        self.chk_priority.setToolTip(
+            "Add this folder as a rule at the top of your rule list so it wins over the rules named above"
+        )
+        self.chk_priority.setVisible(False)
+        self.chk_priority.toggled.connect(lambda _c: self._refresh_preview_and_cta())
+        sb_lay.addWidget(self.chk_priority)
 
         v.addWidget(sentence_box)
         return card
@@ -2196,6 +2218,8 @@ class GuidedFolderDialog(QDialog):
                 if ok and cand.path is not None:
                     self._matching_paths.append(cand.path)
 
+        self._refresh_collision_note(preview_rel, exts, kws, doms, is_manual)
+
         match_count = len(self._matching_paths)
         if is_manual:
             self.lbl_live_matches.setText(
@@ -2238,6 +2262,100 @@ class GuidedFolderDialog(QDialog):
             self.chk_align_now.setVisible(False)
 
         self._update_cta_and_completeness()
+
+    # ------------------------------------------------------------------
+    # Rule Collision Preview
+    # ------------------------------------------------------------------
+
+    def _rules_for_competition(self) -> Config:
+        """Live config minus any rule this dialog is replacing, used to see who wins today."""
+        if self._competing_config is not None:
+            return self._competing_config
+        cfg = copy.deepcopy(self._config)
+        own_paths: set[str] = set()
+        own_rule_ids: set[str] = set()
+        if self.editing_node is not None:
+            own_rule_ids.add(f"arch-{self.editing_node.id}")
+            old_rel = self._arch.node_relative_path(self.editing_node.id) or ""
+            if old_rel:
+                own_paths.add(old_rel.replace("/", "\\").strip("\\").lower())
+        cfg.rules = [
+            r
+            for r in cfg.rules
+            if r.id not in own_rule_ids
+            and r.destination.replace("/", "\\").strip("\\").lower() not in own_paths
+        ]
+        self._competing_config = cfg
+        return cfg
+
+    def _current_decision(self, path: Path) -> RouteDecision | None:
+        if path in self._current_decisions:
+            return self._current_decisions[path]
+        cand = next((c for c in self._loose_candidates if c.path == path), None)
+        decision: RouteDecision | None = None
+        if cand is not None:
+            try:
+                decision = evaluate(cand, self._rules_for_competition(), include_trace=False)
+            except Exception:  # noqa: BLE001 - preview only; never block the dialog
+                decision = None
+        self._current_decisions[path] = decision
+        return decision
+
+    def _new_folder_gets_priority_rule(self, exts: list[str], kws: list[str], doms: list[str]) -> bool:
+        """Mirror ``apply_to_architecture``: which folders become a top-of-list rule."""
+        pnode = self._current_parent_node()
+        tier = min(FolderArchitecture.MAX_TIERS, pnode.tier + 1) if pnode is not None else 1
+        return bool(kws or doms or (exts and tier >= 3))
+
+    def rule_collisions(self) -> list[tuple[str, str, int]]:
+        """Return ``(rule name, current destination, file count)`` for existing rules that catch matches."""
+        return list(self._collisions)
+
+    def _refresh_collision_note(
+        self,
+        preview_rel: str,
+        exts: list[str],
+        kws: list[str],
+        doms: list[str],
+        is_manual: bool,
+    ) -> None:
+        self._collisions = []
+        own = (preview_rel or "").replace("/", "\\").strip("\\").lower()
+        if not is_manual and self._matching_paths:
+            counts: Counter[tuple[str, str]] = Counter()
+            for path in self._matching_paths[:120]:
+                decision = self._current_decision(path)
+                if decision is None or decision.match_type != "rule" or decision.relative_dest is None:
+                    continue
+                dest = str(decision.relative_dest.parent).replace("/", "\\").strip("\\")
+                if dest.lower() == own:
+                    continue
+                counts[(decision.matched_rule, dest)] += 1
+            self._collisions = [(rule, dest, n) for (rule, dest), n in counts.most_common()]
+
+        if not self._collisions:
+            self.lbl_collision.setVisible(False)
+            self.chk_priority.setVisible(False)
+            return
+
+        first_rule, first_dest, first_n = self._collisions[0]
+        others = len(self._collisions) - 1
+        tail = f" (and {others} more rule{'s' if others != 1 else ''})" if others else ""
+        files = f"{first_n} matching file{'s' if first_n != 1 else ''}"
+        wins_by_default = self._new_folder_gets_priority_rule(exts, kws, doms)
+        if wins_by_default or self.chk_priority.isChecked():
+            text = (
+                f"Heads up: rule '{first_rule}' sends {files} to {first_dest} today{tail}. "
+                "This folder will go first, so they will come here instead."
+            )
+        else:
+            text = (
+                f"Heads up: rule '{first_rule}' runs first and will keep sending {files} "
+                f"to {first_dest}{tail}."
+            )
+        self.lbl_collision.setText(text)
+        self.lbl_collision.setVisible(True)
+        self.chk_priority.setVisible(not wins_by_default)
 
     def _update_cta_and_completeness(self) -> None:
         name_ok, name_err = self.validate_name()
@@ -2339,6 +2457,9 @@ class GuidedFolderDialog(QDialog):
             "domains": doms,
             "manual_only": is_manual,
             "align_now": align_now,
+            "priority_over_rules": bool(
+                not is_manual and not self.chk_priority.isHidden() and self.chk_priority.isChecked()
+            ),
         }
 
     def apply_to_architecture(
@@ -2475,7 +2596,8 @@ class GuidedFolderDialog(QDialog):
 
         # Ensure custom folder rules take priority over starter template rules so evaluate() / trace_file()
         # immediately route matching files into this folder.
-        if not manual_only and (kws or doms or (exts and target_node.tier >= 3)):
+        priority = bool(data.get("priority_over_rules"))
+        if not manual_only and (kws or doms or (exts and (target_node.tier >= 3 or priority))):
             rule_id = f"arch-{target_node.id}"
             custom_rule = Rule(
                 id=rule_id,
@@ -2489,7 +2611,7 @@ class GuidedFolderDialog(QDialog):
             )
             remaining = [r for r in new_cfg.rules if r.id != rule_id]
             new_cfg.rules = [custom_rule, *remaining]
-        elif not manual_only and exts and not kws and not doms:
+        if not manual_only and exts and not kws and not doms and target_node.tier <= 2:
             if target_node.tier == 1:
                 for ext in exts:
                     new_cfg.category_map[ext] = target_node.name
