@@ -248,7 +248,7 @@ def test_the_window_fits_and_no_button_is_cut_off(window, width: int, height: in
 def test_a_narrow_window_shows_header_icons_and_keeps_the_words_in_tooltips(window) -> None:  # noqa: ANN001
     _resize(window, 1400, 900)
     assert window.btn_undo_last.text() == "Undo"
-    assert window.lbl_status_badge.isVisible()
+    assert not window.lbl_status_badge.isVisible()  # the dot and Auto-Sort button say the same
     _resize(window, 900, 560)
     for btn in (window.btn_undo_last, window.btn_open_downloads, window.btn_walkthrough, window.btn_pause):
         assert btn.is_collapsed() and btn.text() == ""

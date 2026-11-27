@@ -582,15 +582,31 @@ namespace DownloadSorterInstaller
 
         internal class InstallerForm : Form
         {
+            // A short four-page wizard: Welcome, Options, Installing, Done.
+            private static readonly Color Bg = Color.FromArgb(28, 28, 30);
+            private static readonly Color HeaderBg = Color.FromArgb(22, 22, 24);
+            private static readonly Color Line = Color.FromArgb(44, 44, 46);
+            private static readonly Color Ink = Color.FromArgb(245, 245, 247);
+            private static readonly Color Muted = Color.FromArgb(152, 152, 157);
+            private static readonly Color Accent = Color.FromArgb(10, 132, 255);
+            private static readonly Color Good = Color.FromArgb(48, 209, 88);
+            private static readonly Color Bad = Color.FromArgb(255, 69, 58);
+
             private readonly string _targetDir;
             public int ExitCode { get; private set; }
 
+            private Label _lblStep;
+            private Label _lblTitle;
+            private Label _lblSub;
+            private Panel[] _pages;
+            private int _page;
             private Label _lblStatus;
             private ProgressBar _progressBar;
             private CheckBox _chkDesktop;
             private CheckBox _chkStartMenu;
             private CheckBox _chkLaunch;
-            private Button _btnInstall;
+            private Button _btnNext;
+            private Button _btnBack;
             private Button _btnCancel;
             private bool _isFinished;
 
@@ -599,162 +615,203 @@ namespace DownloadSorterInstaller
                 _targetDir = targetDir;
                 ExitCode = 0;
                 InitializeComponents();
+                ShowPage(0);
+            }
+
+            private static Label MakeLabel(string text, float size, FontStyle style, Color color, int x, int y, int w, int h)
+            {
+                return new Label
+                {
+                    Text = text,
+                    Font = new Font("Segoe UI", size, style),
+                    ForeColor = color,
+                    BackColor = Color.Transparent,
+                    Location = new Point(x, y),
+                    Size = new Size(w, h)
+                };
+            }
+
+            private static CheckBox MakeCheck(string text, int y)
+            {
+                return new CheckBox
+                {
+                    Text = text,
+                    Checked = true,
+                    Location = new Point(28, y),
+                    AutoSize = true,
+                    ForeColor = Ink,
+                    Font = new Font("Segoe UI", 10f, FontStyle.Regular)
+                };
+            }
+
+            private static Button MakeButton(string text, int x, bool primary)
+            {
+                var b = new Button
+                {
+                    Text = text,
+                    Location = new Point(x, 14),
+                    Size = new Size(96, 34),
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = primary ? Accent : Color.FromArgb(44, 44, 46),
+                    ForeColor = primary ? Color.White : Ink,
+                    Font = new Font("Segoe UI", 9.5f, primary ? FontStyle.Bold : FontStyle.Regular),
+                    Cursor = Cursors.Hand
+                };
+                b.FlatAppearance.BorderSize = 0;
+                return b;
+            }
+
+            private Panel NewPage()
+            {
+                var p = new Panel
+                {
+                    Location = new Point(0, 96),
+                    Size = new Size(560, 300),
+                    BackColor = Bg,
+                    Visible = false
+                };
+                this.Controls.Add(p);
+                return p;
+            }
+
+            private void AddPoint(Panel page, int y, string title, string body)
+            {
+                var dot = MakeLabel("●", 9f, FontStyle.Regular, Accent, 28, y + 2, 18, 18);
+                page.Controls.Add(dot);
+                page.Controls.Add(MakeLabel(title, 10.5f, FontStyle.Bold, Ink, 50, y, 480, 22));
+                page.Controls.Add(MakeLabel(body, 9.5f, FontStyle.Regular, Muted, 50, y + 22, 480, 22));
             }
 
             private void InitializeComponents()
             {
-                this.Text = "Download Sorter Setup (v" + AppVersion + ")";
-                this.ClientSize = new Size(500, 420);
+                this.Text = AppName + " Setup";
+                this.ClientSize = new Size(560, 460);
                 this.StartPosition = FormStartPosition.CenterScreen;
                 this.FormBorderStyle = FormBorderStyle.FixedDialog;
                 this.MaximizeBox = false;
                 this.MinimizeBox = false;
-                this.BackColor = Color.FromArgb(11, 13, 18);
-                this.ForeColor = Color.FromArgb(237, 241, 248);
+                this.BackColor = Bg;
+                this.ForeColor = Ink;
                 this.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
+                try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-                var headerPanel = new Panel
-                {
-                    Location = new Point(0, 0),
-                    Size = new Size(500, 85),
-                    BackColor = Color.FromArgb(23, 27, 36)
-                };
+                var header = new Panel { Location = new Point(0, 0), Size = new Size(560, 96), BackColor = HeaderBg };
+                _lblStep = MakeLabel("", 8.5f, FontStyle.Bold, Accent, 28, 16, 500, 18);
+                _lblTitle = MakeLabel("", 16f, FontStyle.Bold, Ink, 26, 34, 510, 32);
+                _lblSub = MakeLabel("", 9.5f, FontStyle.Regular, Muted, 28, 66, 510, 22);
+                header.Controls.Add(_lblStep);
+                header.Controls.Add(_lblTitle);
+                header.Controls.Add(_lblSub);
+                this.Controls.Add(header);
+                this.Controls.Add(new Panel { Location = new Point(0, 96), Size = new Size(560, 1), BackColor = Line });
 
-                var lblTitle = new Label
-                {
-                    Text = "Download Sorter Setup",
-                    Font = new Font("Segoe UI", 14f, FontStyle.Bold),
-                    ForeColor = Color.FromArgb(237, 241, 248),
-                    Location = new Point(24, 16),
-                    AutoSize = true
-                };
+                // Page 0: Welcome
+                var welcome = NewPage();
+                AddPoint(welcome, 22, "New downloads go to the right folder", "It watches your Downloads folder and files each new download for you.");
+                AddPoint(welcome, 78, "Design your folders on one screen", "Make a folder, say what goes in it, and matching files move in.");
+                AddPoint(welcome, 134, "Nothing is ever deleted", "Every move is recorded, so you can undo it at any time.");
+                AddPoint(welcome, 190, "Private by design", "Everything happens on this PC. Your files never leave it.");
+                welcome.Controls.Add(MakeLabel(CreditText, 8.5f, FontStyle.Italic, Color.FromArgb(99, 99, 102), 28, 256, 500, 20));
 
-                var lblSub = new Label
-                {
-                    Text = "Automated local-first file organizer for Windows",
-                    Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-                    ForeColor = Color.FromArgb(139, 148, 167),
-                    Location = new Point(25, 48),
-                    AutoSize = true
-                };
+                // Page 1: Options
+                var options = NewPage();
+                options.Controls.Add(MakeLabel("Install to", 10f, FontStyle.Bold, Ink, 28, 22, 500, 22));
+                options.Controls.Add(MakeLabel(_targetDir, 9f, FontStyle.Regular, Muted, 28, 46, 500, 36));
+                options.Controls.Add(MakeLabel("Only for you. No administrator password is needed.", 9f, FontStyle.Regular, Muted, 28, 84, 500, 20));
+                _chkDesktop = MakeCheck("Put a shortcut on the desktop", 128);
+                _chkStartMenu = MakeCheck("Add it to the Start menu", 160);
+                options.Controls.Add(_chkDesktop);
+                options.Controls.Add(_chkStartMenu);
 
-                headerPanel.Controls.Add(lblTitle);
-                headerPanel.Controls.Add(lblSub);
-                this.Controls.Add(headerPanel);
-
-                var lblDestHeader = new Label
-                {
-                    Text = "Installation Target Folder:",
-                    Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                    ForeColor = Color.FromArgb(237, 241, 248),
-                    Location = new Point(24, 105),
-                    AutoSize = true
-                };
-                this.Controls.Add(lblDestHeader);
-
-                var lblDestPath = new Label
-                {
-                    Text = _targetDir,
-                    Font = new Font("Segoe UI", 8.5f, FontStyle.Regular),
-                    ForeColor = Color.FromArgb(139, 148, 167),
-                    Location = new Point(24, 128),
-                    Size = new Size(450, 36)
-                };
-                this.Controls.Add(lblDestPath);
-
-                _chkDesktop = new CheckBox
-                {
-                    Text = "Create Desktop shortcut",
-                    Checked = true,
-                    Location = new Point(24, 175),
-                    AutoSize = true,
-                    ForeColor = Color.FromArgb(237, 241, 248)
-                };
-                this.Controls.Add(_chkDesktop);
-
-                _chkStartMenu = new CheckBox
-                {
-                    Text = "Create Start Menu shortcut",
-                    Checked = true,
-                    Location = new Point(24, 205),
-                    AutoSize = true,
-                    ForeColor = Color.FromArgb(237, 241, 248)
-                };
-                this.Controls.Add(_chkStartMenu);
-
-                _chkLaunch = new CheckBox
-                {
-                    Text = "Launch Download Sorter and open Welcome Wizard",
-                    Checked = true,
-                    Location = new Point(24, 235),
-                    AutoSize = true,
-                    ForeColor = Color.FromArgb(237, 241, 248)
-                };
-                this.Controls.Add(_chkLaunch);
-
-                var lblCredit = new Label
-                {
-                    Text = CreditText,
-                    Font = new Font("Segoe UI", 8.5f, FontStyle.Italic),
-                    ForeColor = Color.FromArgb(101, 112, 132),
-                    Location = new Point(24, 275),
-                    AutoSize = true
-                };
-                this.Controls.Add(lblCredit);
-
-                _lblStatus = new Label
-                {
-                    Text = "Ready to install. Click Install to begin.",
-                    Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-                    ForeColor = Color.FromArgb(139, 148, 167),
-                    Location = new Point(24, 310),
-                    Size = new Size(450, 20)
-                };
-                this.Controls.Add(_lblStatus);
-
+                // Page 2: Installing
+                var installing = NewPage();
+                _lblStatus = MakeLabel("Getting ready...", 10f, FontStyle.Regular, Ink, 28, 60, 500, 24);
+                installing.Controls.Add(_lblStatus);
                 _progressBar = new ProgressBar
                 {
-                    Location = new Point(24, 335),
-                    Size = new Size(452, 18),
+                    Location = new Point(28, 96),
+                    Size = new Size(504, 10),
                     Style = ProgressBarStyle.Marquee,
-                    MarqueeAnimationSpeed = 30,
-                    Visible = false
+                    MarqueeAnimationSpeed = 30
                 };
-                this.Controls.Add(_progressBar);
+                installing.Controls.Add(_progressBar);
 
-                _btnCancel = new Button
-                {
-                    Text = "Cancel",
-                    Location = new Point(300, 370),
-                    Size = new Size(85, 32),
-                    BackColor = Color.FromArgb(23, 27, 36),
-                    ForeColor = Color.FromArgb(237, 241, 248),
-                    FlatStyle = FlatStyle.Flat
-                };
-                _btnCancel.FlatAppearance.BorderColor = Color.FromArgb(42, 48, 59);
-                _btnCancel.Click += (s, e) => {
-                    ExitCode = 1;
-                    this.Close();
-                };
-                this.Controls.Add(_btnCancel);
+                // Page 3: Done
+                var done = NewPage();
+                done.Controls.Add(MakeLabel("✔", 28f, FontStyle.Bold, Good, 26, 14, 60, 52));
+                done.Controls.Add(MakeLabel("When it opens, Sorty shows you around in three short steps.", 10f, FontStyle.Regular, Ink, 28, 76, 500, 22));
+                done.Controls.Add(MakeLabel("Then open the Folders screen to design your folders. Press + to make one.", 9.5f, FontStyle.Regular, Muted, 28, 100, 500, 22));
+                done.Controls.Add(MakeLabel("It keeps running in the system tray, by the clock.", 9.5f, FontStyle.Regular, Muted, 28, 124, 500, 22));
+                _chkLaunch = MakeCheck("Open Download Sorter now", 170);
+                done.Controls.Add(_chkLaunch);
 
-                _btnInstall = new Button
-                {
-                    Text = "Install",
-                    Location = new Point(393, 370),
-                    Size = new Size(85, 32),
-                    BackColor = Color.FromArgb(105, 230, 173),
-                    ForeColor = Color.FromArgb(11, 13, 18),
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Segoe UI", 9.5f, FontStyle.Bold)
-                };
-                _btnInstall.FlatAppearance.BorderColor = Color.FromArgb(105, 230, 173);
-                _btnInstall.Click += OnInstallClick;
-                this.Controls.Add(_btnInstall);
+                _pages = new Panel[] { welcome, options, installing, done };
+
+                var footer = new Panel { Location = new Point(0, 398), Size = new Size(560, 62), BackColor = HeaderBg };
+                _btnCancel = MakeButton("Cancel", 20, false);
+                _btnBack = MakeButton("Back", 336, false);
+                _btnNext = MakeButton("Continue", 444, true);
+                _btnCancel.Click += (s, e) => { ExitCode = 1; this.Close(); };
+                _btnBack.Click += (s, e) => { if (_page > 0 && _page < 2) { ShowPage(_page - 1); } };
+                _btnNext.Click += OnNextClick;
+                footer.Controls.Add(_btnCancel);
+                footer.Controls.Add(_btnBack);
+                footer.Controls.Add(_btnNext);
+                this.Controls.Add(footer);
+                this.AcceptButton = _btnNext;
             }
 
-            private void OnInstallClick(object sender, EventArgs e)
+            private void ShowPage(int index)
             {
+                _page = index;
+                for (int i = 0; i < _pages.Length; i++)
+                {
+                    _pages[i].Visible = i == index;
+                }
+                _btnBack.Visible = index == 1;
+                _btnCancel.Visible = index < 2;
+                _btnNext.Enabled = index != 2;
+                if (index == 0)
+                {
+                    _lblStep.Text = "VERSION " + AppVersion;
+                    _lblTitle.Text = "Welcome to " + AppName;
+                    _lblSub.Text = "Your Downloads folder, kept tidy on its own.";
+                    _btnNext.Text = "Continue";
+                }
+                else if (index == 1)
+                {
+                    _lblStep.Text = "STEP 1 OF 2";
+                    _lblTitle.Text = "Choose your shortcuts";
+                    _lblSub.Text = "You can change these later.";
+                    _btnNext.Text = "Install";
+                }
+                else if (index == 2)
+                {
+                    _lblStep.Text = "STEP 2 OF 2";
+                    _lblTitle.Text = "Installing...";
+                    _lblSub.Text = "This takes a few seconds.";
+                }
+                else
+                {
+                    _lblStep.Text = "DONE";
+                    _lblTitle.Text = "You're all set";
+                    _lblSub.Text = AppName + " is installed.";
+                    _btnNext.Text = "Finish";
+                }
+            }
+
+            private void OnNextClick(object sender, EventArgs e)
+            {
+                if (_page == 0)
+                {
+                    ShowPage(1);
+                    return;
+                }
+                if (_page == 1)
+                {
+                    RunInstall();
+                    return;
+                }
                 if (_isFinished)
                 {
                     if (_chkLaunch.Checked)
@@ -770,40 +827,51 @@ namespace DownloadSorterInstaller
                         }
                     }
                     this.Close();
-                    return;
                 }
+            }
 
-                _btnInstall.Enabled = false;
-                _btnCancel.Enabled = false;
-                _chkDesktop.Enabled = false;
-                _chkStartMenu.Enabled = false;
-                _chkLaunch.Enabled = false;
-                _progressBar.Visible = true;
+            private void RunInstall()
+            {
+                ShowPage(2);
                 _lblStatus.Text = "Closing Download Sorter if it is running...";
+                _lblStatus.ForeColor = Ink;
                 Application.DoEvents();
 
                 try
                 {
                     StopRunningApp(_targetDir);
-                    _lblStatus.Text = "Extracting files and setting up shortcuts...";
+                    _lblStatus.Text = "Copying files and adding shortcuts...";
                     Application.DoEvents();
                     PerformInstall(_targetDir, _chkDesktop.Checked, _chkStartMenu.Checked);
-                    _progressBar.Visible = false;
-                    _lblStatus.Text = "Installation completed successfully!";
-                    _lblStatus.ForeColor = Color.FromArgb(105, 230, 173);
-                    _btnInstall.Text = "Finish";
-                    _btnInstall.Enabled = true;
-                    _btnCancel.Visible = false;
                     _isFinished = true;
+                    ShowPage(3);
                 }
                 catch (Exception ex)
                 {
                     _progressBar.Visible = false;
-                    _lblStatus.Text = "Installation failed: " + ex.Message;
-                    _lblStatus.ForeColor = Color.FromArgb(250, 113, 131);
-                    _btnInstall.Enabled = true;
-                    _btnCancel.Enabled = true;
+                    _lblTitle.Text = "Something went wrong";
+                    _lblSub.Text = "Close anything that is using Download Sorter, then try again.";
+                    _lblStatus.Text = "Setup could not finish: " + ex.Message;
+                    _lblStatus.ForeColor = Bad;
+                    _btnCancel.Visible = true;
+                    _btnCancel.Text = "Close";
+                    _btnBack.Visible = true;
+                    _btnBack.Text = "Try again";
+                    _btnBack.Click -= RetryClick;
+                    _btnBack.Click += RetryClick;
                 }
+            }
+
+            private void RetryClick(object sender, EventArgs e)
+            {
+                if (_page != 2)
+                {
+                    return;
+                }
+                _progressBar.Visible = true;
+                _btnBack.Text = "Back";
+                _btnBack.Click -= RetryClick;
+                RunInstall();
             }
         }
     }

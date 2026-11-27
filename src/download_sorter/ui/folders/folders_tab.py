@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QFont
+import shiboken6
+from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -42,6 +43,10 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleFactory,
+    QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
     QTreeWidgetItemIterator,
@@ -51,7 +56,7 @@ from PySide6.QtWidgets import (
 )
 
 from download_sorter import folder_designer as fd
-from download_sorter.config import STARTER_PACK_LABELS, Config
+from download_sorter.config import Config
 from download_sorter.router import FileCandidate, RouteDecision, candidate_from_path, evaluate
 from download_sorter.ui.motion import crossfade_stacked_widget, fade_in, make_vector_icon
 from download_sorter.ui.settings_widgets import MacToggle
@@ -76,16 +81,22 @@ QLineEdit#TesterField { background: #1C1C1E; border: 1px solid #2C2C2E; border-r
 QLineEdit#TesterField:focus { border-color: #0A84FF; }
 QLabel#TesterResult { color: #98989D; font-size: 12px; padding: 2px 2px; }
 QTreeWidget#FolderList { background: transparent; border: none; outline: 0; font-size: 13px; }
-QTreeWidget#FolderList::item { height: 28px; border-radius: 6px; padding-left: 2px; }
-QTreeWidget#FolderList::item:hover { background: #232326; }
+QLabel#DropZone { color: #98989D; font-size: 12px; border: 1px dashed #3D3D41; border-radius: 8px; padding: 8px; }
+QLabel#DropZone[active="true"] { color: #F5F5F7; border: 2px solid #0A84FF; background: rgba(10,132,255,0.18); }
+QLabel#DragBanner { color: #F5F5F7; background: rgba(10,132,255,0.16); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
+QTreeWidget#FolderList::item { height: 30px; border-radius: 6px; padding-left: 2px; }
 QTreeWidget#FolderList { show-decoration-selected: 0; }
-QTreeWidget#FolderList::item:selected { background: rgba(10,132,255,0.22); color: #F5F5F7; }
-QTreeWidget#FolderList::branch { background: transparent; }
-QTreeWidget#FolderList::branch:selected { background: transparent; }
+QTreeWidget#FolderList::item:selected, QTreeWidget#FolderList::item:hover { background: transparent; color: #F5F5F7; }
+QTreeWidget#FolderList::branch, QTreeWidget#FolderList::branch:selected,
+QTreeWidget#FolderList::branch:hover { background: transparent; image: none; border-image: none; }
 QPushButton#SideRow { text-align: left; background: transparent; border: none; border-radius: 6px;
     padding: 6px 8px; color: #E5E5EA; }
 QPushButton#SideRow:hover { background: #232326; }
 QPushButton#SideRow:checked { background: rgba(10,132,255,0.22); }
+QLabel#SideRowTitle { color: #E5E5EA; font-size: 13px; font-weight: 600; background: transparent; }
+QLabel#SideRowSub { color: #8E8E93; font-size: 11px; background: transparent; }
+QLabel#SideBadge { color: #AEAEB2; background: #2C2C2E; border-radius: 8px; padding: 1px 7px; font-size: 11px;
+    font-weight: 600; }
 QPushButton#SideTool { background: transparent; border: none; border-radius: 6px; padding: 3px 8px;
     color: #0A84FF; font-weight: 600; }
 QPushButton#SideTool:hover { background: #232326; }
@@ -269,28 +280,136 @@ class _Tile(QFrame):
 # ---------------------------------------------------------------------------
 # Folder list with mistake-proof drag to nest
 # ---------------------------------------------------------------------------
+ROLE_COUNT = Qt.ItemDataRole.UserRole + 2
+
+
+class _FolderRowDelegate(QStyledItemDelegate):
+    """Draws each folder row: name, how many files are inside, a grip on hover,
+    and a clear outline on the folder a drag would drop into."""
+
+    def __init__(self, tree: _FolderTree) -> None:
+        super().__init__(tree)
+        self._tree = tree
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802, ANN001
+        size = super().sizeHint(option, index)
+        return QSize(size.width(), max(size.height(), 30))
+
+    def paint(self, painter, option, index) -> None:  # noqa: ANN001
+        tree = self._tree
+        if not shiboken6.isValid(tree):
+            return
+        path = str(index.data(ROLE_PATH) or "")
+        is_target = bool(path) and path == tree.drop_target
+        hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        count = int(index.data(ROLE_COUNT) or 0)
+        opt = QStyleOptionViewItem(option)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        # Draw hover and selection ourselves across the whole row, then let the
+        # style draw only the icon and name, so nothing paints a second bar.
+        opt.state &= ~QStyle.StateFlag.State_Selected
+        opt.state &= ~QStyle.StateFlag.State_MouseOver
+        opt.state &= ~QStyle.StateFlag.State_HasFocus
+        reserve = 0
+        if count:
+            reserve += opt.fontMetrics.horizontalAdvance(str(count)) + 14
+        if hovered and not tree.dragging:
+            reserve += 16
+        if reserve:
+            opt.rect = opt.rect.adjusted(0, 0, -reserve, 0)
+        painter.save()
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            if selected or (hovered and not tree.dragging):
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(10, 132, 255, 56) if selected else QColor("#232326"))
+                painter.drawRoundedRect(option.rect.adjusted(0, 1, -1, -1), 6, 6)
+            if is_target:
+                r = option.rect.adjusted(1, 1, -2, -2)
+                painter.setPen(QPen(QColor(ACCENT), 2))
+                painter.setBrush(QColor(10, 132, 255, 60))
+                painter.drawRoundedRect(r, 6, 6)
+            super().paint(painter, opt, index)
+            right = option.rect.right() - 6
+            if hovered and not tree.dragging:
+                painter.setPen(QColor("#636366"))
+                cx, cy = right - 4, option.rect.center().y()
+                painter.setBrush(QColor("#636366"))
+                for dx in (-2, 2):
+                    for dy in (-4, 0, 4):
+                        painter.drawEllipse(QPoint(cx + dx, cy + dy), 1, 1)
+                right -= 16
+            if count:
+                text = str(count)
+                w = option.fontMetrics.horizontalAdvance(text) + 10
+                pill = QRect(right - w, option.rect.center().y() - 9, w, 18)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor("#2C2C2E"))
+                painter.drawRoundedRect(pill, 9, 9)
+                painter.setPen(QColor("#AEAEB2"))
+                painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
+        finally:
+            painter.restore()
+
+
 class _FolderTree(QTreeWidget):
     move_requested = Signal(str, str)  # (folder path, new parent path or "")
     menu_requested = Signal(str, QPoint)
+    drag_state_changed = Signal(bool)  # True while a folder is being dragged
+    hover_target_changed = Signal(str)  # name of the folder a drop would go into, or ""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("FolderList")
+        # Fusion draws a plain rounded highlight; the Windows 11 style adds an accent bar.
+        fusion = QStyleFactory.create("Fusion")
+        if fusion is not None:
+            fusion.setParent(self)
+            self.setStyle(fusion)
         self.setHeaderHidden(True)
         self.setIndentation(16)
         self.setAnimated(True)
         self.setUniformRowHeights(True)
+        self.setMouseTracking(True)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
+        self.setDropIndicatorShown(False)  # the delegate draws a clearer target outline
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context)
         self.setAccessibleName("Your folders")
+        self.setItemDelegate(_FolderRowDelegate(self))
+        pal = self.palette()
+        for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive):
+            pal.setColor(group, QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
+            pal.setColor(group, QPalette.ColorRole.HighlightedText, QColor("#F5F5F7"))
+        self.setPalette(pal)
         self.can_drop: Callable[[str, str], bool] = lambda _src, _dst: True
         self._drag_path = ""
+        self.drop_target = ""
+        self.dragging = False
+
+    def drag_path(self) -> str:
+        return self._drag_path
+
+    def drawBranches(self, painter, rect, index) -> None:  # noqa: N802, ANN001
+        """Draw only a small chevron for folders that hold folders; never a highlight."""
+        if not self.model().hasChildren(index):
+            return
+        painter.save()
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(QPen(QColor("#8E8E93"), 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            cx = rect.right() - self.indentation() // 2
+            cy = rect.center().y()
+            if self.isExpanded(index):
+                painter.drawPolyline([QPoint(cx - 4, cy - 2), QPoint(cx, cy + 2), QPoint(cx + 4, cy - 2)])
+            else:
+                painter.drawPolyline([QPoint(cx - 2, cy - 4), QPoint(cx + 2, cy), QPoint(cx - 2, cy + 4)])
+        finally:
+            painter.restore()
 
     def _on_context(self, pos: QPoint) -> None:
         item = self.itemAt(pos)
@@ -302,8 +421,23 @@ class _FolderTree(QTreeWidget):
     def startDrag(self, actions) -> None:  # noqa: N802, ANN001
         item = self.currentItem()
         self._drag_path = str(item.data(0, ROLE_PATH) or "") if item else ""
-        super().startDrag(actions)
-        self._drag_path = ""
+        if not self._drag_path:
+            return
+        self.dragging = True
+        self.drag_state_changed.emit(True)
+        try:
+            super().startDrag(actions)
+        finally:
+            self.dragging = False
+            self._drag_path = ""
+            self._set_target("")
+            self.drag_state_changed.emit(False)
+
+    def _set_target(self, path: str) -> None:
+        if path != self.drop_target:
+            self.drop_target = path
+            self.hover_target_changed.emit(path)
+            self.viewport().update()
 
     def _target_for(self, event) -> str | None:  # noqa: ANN001
         pos = event.position().toPoint()
@@ -312,7 +446,7 @@ class _FolderTree(QTreeWidget):
             return ""  # empty space: top of Downloads
         rect = self.visualItemRect(item)
         # Dropping on the top or bottom edge of a row means "next to it", so the parent.
-        edge = max(4, rect.height() // 4)
+        edge = max(4, rect.height() // 5)
         if pos.y() < rect.top() + edge or pos.y() > rect.bottom() - edge:
             parent = item.parent()
             return str(parent.data(0, ROLE_PATH) or "") if parent else ""
@@ -324,15 +458,20 @@ class _FolderTree(QTreeWidget):
         else:
             event.ignore()
 
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802, ANN001
+        self._set_target("")
+        super().dragLeaveEvent(event)
+
     def dragMoveEvent(self, event) -> None:  # noqa: N802, ANN001
         if event.source() is not self or not self._drag_path:
             event.ignore()
             return
         target = self._target_for(event)
         if target is not None and self.can_drop(self._drag_path, target):
-            super().dragMoveEvent(event)
+            self._set_target(target)
             event.acceptProposedAction()
         else:
+            self._set_target("")
             event.ignore()
 
     def dropEvent(self, event) -> None:  # noqa: N802, ANN001
@@ -341,8 +480,46 @@ class _FolderTree(QTreeWidget):
         # Never let the view rearrange rows itself; the model is rebuilt from settings.
         event.setDropAction(Qt.DropAction.IgnoreAction)
         event.accept()
+        self._set_target("")
         if src and target is not None and self.can_drop(src, target):
             QTimer.singleShot(0, lambda s=src, t=target: self.move_requested.emit(s, t))
+
+
+class _TopDropZone(QLabel):
+    """Shown only while dragging: drop here to move a folder to the top of Downloads."""
+
+    def __init__(self, tree: _FolderTree, parent: QWidget | None = None) -> None:
+        super().__init__("Drop here to move it to the top of Downloads", parent)
+        self.setObjectName("DropZone")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setAcceptDrops(True)
+        self.setProperty("active", False)
+        self._tree = tree
+
+    def _set_active(self, on: bool) -> None:
+        self.setProperty("active", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802, ANN001
+        src = self._tree.drag_path()
+        if event.source() is self._tree and src and self._tree.can_drop(src, ""):
+            self._set_active(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802, ANN001
+        self._set_active(False)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802, ANN001
+        src = self._tree.drag_path()
+        event.setDropAction(Qt.DropAction.IgnoreAction)
+        event.accept()
+        self._set_active(False)
+        if src and self._tree.can_drop(src, ""):
+            QTimer.singleShot(0, lambda s=src: self._tree.move_requested.emit(s, ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1194,8 +1371,10 @@ class _EmptyPage(QWidget):
         lay.addWidget(self.text)
         row = QHBoxLayout()
         row.addStretch(1)
-        self.b_start = _quiet_button("Set up my folders", "Start from a ready-made layout", self, "Primary")
-        self.b_start.clicked.connect(lambda: tab.action_requested.emit("tree_tool:setup_studio", ""))
+        self.b_start = _quiet_button(
+            "Use my existing folders", "Add the folders already in your Downloads to this list", self, "Primary"
+        )
+        self.b_start.clicked.connect(lambda: tab.action_requested.emit("tree_tool:scan_folders", ""))
         self.b_new = _quiet_button("New folder", "Make an empty folder", self)
         self.b_new.clicked.connect(lambda: tab.new_folder(""))
         row.addWidget(self.b_new)
@@ -1208,7 +1387,7 @@ class _EmptyPage(QWidget):
         self.text.setText(
             "Pick a folder on the left to see what goes in it."
             if has
-            else "You have no folders yet. Start with a ready-made layout, or make one."
+            else "You have no folders yet. Make one, or use the folders already in your Downloads."
         )
         self.b_start.setVisible(not has)
 
@@ -1248,6 +1427,7 @@ class FoldersTab(QWidget):
         self._scan_running = False
         self._scan_again = False
         self._suggestion: dict | None = None
+        self.last_undo: Callable[[], None] | None = None
         self.setStyleSheet(_STYLE)
 
         root = QVBoxLayout(self)
@@ -1295,10 +1475,6 @@ class FoldersTab(QWidget):
         yf = QLabel("YOUR FOLDERS", side)
         yf.setObjectName("SideEyebrow")
         head.addWidget(yf, 1)
-        self.btn_layout = _quiet_button("⋯", "Layout: use existing folders, save or restore a layout", side, "SideTool")
-        self.btn_layout.setAccessibleName("Layout options")
-        self.btn_layout.clicked.connect(self._open_layout_menu)
-        head.addWidget(self.btn_layout)
         self.btn_new = _quiet_button("+", "New folder", side, "SideTool")
         self.btn_new.setAccessibleName("New folder")
         self.btn_new.clicked.connect(self._open_new_menu)
@@ -1310,18 +1486,47 @@ class FoldersTab(QWidget):
         self.tree.move_requested.connect(self.move_folder)
         self.tree.menu_requested.connect(self._open_folder_menu)
         self.tree.currentItemChanged.connect(self._on_tree_current)
+        self.tree.drag_state_changed.connect(self._on_drag_state)
+        self.tree.hover_target_changed.connect(self._on_drag_target)
         sl.addWidget(self.tree, 1)
-        self.drag_tip = QLabel("Drag a folder onto another to put it inside.", side)
+        self.drag_banner = QLabel("", side)
+        self.drag_banner.setObjectName("DragBanner")
+        self.drag_banner.setWordWrap(True)
+        self.drag_banner.hide()
+        sl.addWidget(self.drag_banner)
+        self.drop_top = _TopDropZone(self.tree, side)
+        self.drop_top.hide()
+        sl.addWidget(self.drop_top)
+        self.drag_tip = QLabel("Tip: drag a folder onto another to put it inside. Right-click for more.", side)
         self.drag_tip.setObjectName("TesterResult")
         self.drag_tip.setWordWrap(True)
         sl.addWidget(self.drag_tip)
 
-        hf = QLabel("HANDLED FOR YOU", side)
+        hf = QLabel("HANDLED AUTOMATICALLY", side)
         hf.setObjectName("SideEyebrow")
+        hf.setToolTip("The app looks after these on its own. You don't need to set anything up.")
         sl.addWidget(hf)
-        self.row_other = self._side_row("Everything else", "Files no folder asked for", PAGE_OTHER, side)
-        self.row_dupes = self._side_row("Duplicates", "Files you downloaded twice", PAGE_DUPES, side)
-        self.row_wait = self._side_row("Waiting", "3D print files waiting a few days", PAGE_WAITING, side)
+        self.row_other = self._side_row(
+            "Everything else",
+            "Into a folder for its type",
+            "Files no folder asks for go into a folder for their type, like Documents or Images.",
+            PAGE_OTHER,
+            side,
+        )
+        self.row_dupes = self._side_row(
+            "Duplicates",
+            "Second copies, never deleted",
+            "Second copies of a file are set aside in the Duplicates folder. Nothing is deleted.",
+            PAGE_DUPES,
+            side,
+        )
+        self.row_wait = self._side_row(
+            "Waiting",
+            "3D print files, held a few days",
+            "3D print files wait in Downloads a few days so your slicer can find them, then move.",
+            PAGE_WAITING,
+            side,
+        )
         for r in (self.row_other, self.row_dupes, self.row_wait):
             sl.addWidget(r)
         split.addWidget(side)
@@ -1385,15 +1590,65 @@ class FoldersTab(QWidget):
     def config(self) -> Config:
         return self.service.config
 
-    def _side_row(self, text: str, tip: str, page: int, parent: QWidget) -> QPushButton:
-        btn = QPushButton(text, parent)
+    def _side_row(self, text: str, short: str, explain: str, page: int, parent: QWidget) -> QPushButton:
+        """A two-line sidebar row: a title with a count, and one plain sentence under it."""
+        btn = QPushButton("", parent)
         btn.setObjectName("SideRow")
-        btn.setToolTip(tip)
+        btn.setToolTip(explain)
         btn.setAccessibleName(text)
+        btn.setAccessibleDescription(explain)
         btn.setCheckable(True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        lay = QVBoxLayout(btn)
+        lay.setContentsMargins(10, 4, 10, 4)
+        lay.setSpacing(0)
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        title = QLabel(text, btn)
+        title.setObjectName("SideRowTitle")
+        badge = QLabel("", btn)
+        badge.setObjectName("SideBadge")
+        badge.hide()
+        top.addWidget(title, 1)
+        top.addWidget(badge, 0)
+        lay.addLayout(top)
+        sub = QLabel(short, btn)
+        sub.setObjectName("SideRowSub")
+        lay.addWidget(sub)
+        for w in (title, badge, sub):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        btn.setMinimumHeight(lay.sizeHint().height())
+        btn.setProperty("_badge", badge)
+        btn._badge = badge  # type: ignore[attr-defined]
         btn.clicked.connect(lambda: self.show_page(page))
         return btn
+
+    @staticmethod
+    def _set_badge(row: QPushButton, count: int) -> None:
+        badge: QLabel = row._badge  # type: ignore[attr-defined]
+        badge.setText(str(count))
+        badge.setVisible(count > 0)
+
+    def _on_drag_state(self, dragging: bool) -> None:
+        self.drag_tip.setVisible(not dragging and self.tree.topLevelItemCount() > 0)
+        src = self.tree.drag_path()
+        on_top = bool(src) and "\\" not in fd.norm_path(src)
+        self.drop_top.setVisible(dragging and not on_top)
+        self.drag_banner.setVisible(dragging)
+        if dragging:
+            self._on_drag_target("")
+
+    def _on_drag_target(self, target: str) -> None:
+        src = self.tree.drag_path()
+        if not src:
+            return
+        name = fd.norm_path(src).split("\\")[-1]
+        if target:
+            dest = fd.norm_path(target).split("\\")[-1]
+            self.drag_banner.setText(f"Let go to put “{name}” inside “{dest}”.")
+        else:
+            self.drag_banner.setText(f"Drop “{name}” on a folder to put it inside.")
 
     def run_action(self, work: Callable[..., Any], on_done: Callable[[Any], None], busy: str) -> None:
         if self._run_service_action is not None:
@@ -1405,7 +1660,7 @@ class FoldersTab(QWidget):
         """Save ``cfg`` and show ``message`` with Undo."""
         before = copy.deepcopy(self.service.config)
         self.config_committed.emit(cfg)
-        has_disk = bool(change and (change.disk_moves or change.disk_removals))
+        has_disk = bool(change and (change.disk_moves or change.disk_removals or change.fill_path))
         if has_disk:
             self.disk_change_requested.emit(change)
 
@@ -1415,6 +1670,7 @@ class FoldersTab(QWidget):
                 self.action_requested.emit("folders:undo_disk", "")
             self.refresh()
 
+        self.last_undo = _undo
         self.notice.emit(message, _undo)
         self.refresh()
 
@@ -1590,7 +1846,12 @@ class FoldersTab(QWidget):
                 item.setData(0, ROLE_PATH, path)
                 manual = fd.is_manual(cfg, path, arch)
                 item.setIcon(0, manual_icon if manual else icon)
-                item.setToolTip(0, fd.describe_cues(fd.folder_cues(cfg, path, arch)))
+                n_inside = self.files_inside(path)
+                item.setData(0, ROLE_COUNT, n_inside)
+                tip = fd.describe_cues(fd.folder_cues(cfg, path, arch))
+                if n_inside:
+                    tip += f"\n{n_inside} file{'s' if n_inside != 1 else ''} inside"
+                item.setToolTip(0, tip + "\nDrag onto another folder to put it inside.")
                 if parent is None:
                     self.tree.addTopLevelItem(item)
                 else:
@@ -1615,11 +1876,16 @@ class FoldersTab(QWidget):
             self._page = PAGE_EMPTY
         self.page_empty.set_has_folders(bool(arch.nodes))
         self.drag_tip.setVisible(len(arch.nodes) > 1)
+        self.drop_top.hide()
+        self.drag_banner.hide()
 
     def _refresh_handled_rows(self) -> None:
         n_d, n_w = len(self._dupes), len(self._waiting)
-        self.row_dupes.setText(f"Duplicates  ·  {n_d}" if n_d else "Duplicates")
-        self.row_wait.setText(f"Waiting  ·  {n_w}" if n_w else "Waiting")
+        self._set_badge(self.row_other, self.fallback_count())
+        self._set_badge(self.row_dupes, n_d)
+        self._set_badge(self.row_wait, n_w)
+        # Waiting only matters when 3D print files are held, or some still are.
+        self.row_wait.setVisible(bool(getattr(self.config(), "hold_3mf_enabled", False)) or n_w > 0)
         for row, page in ((self.row_other, PAGE_OTHER), (self.row_dupes, PAGE_DUPES), (self.row_wait, PAGE_WAITING)):
             row.setChecked(self._page == page)
 
@@ -1822,31 +2088,16 @@ class FoldersTab(QWidget):
             self.apply(lambda cfg: fd.merge_folder(cfg, src, dst))
 
     def _open_new_menu(self) -> None:
-        menu = QMenu(self)
         sel = self.selected_path()
-        menu.addAction("Empty folder…").triggered.connect(lambda: self.new_folder(""))
-        if sel:
-            menu.addAction(f"Inside “{_elide(sel.split(chr(92))[-1], 22)}”…").triggered.connect(lambda: self.new_folder(sel))
-        menu.addSeparator()
-        ready = menu.addMenu("Ready-made")
-        for key, (label, desc) in STARTER_PACK_LABELS.items():
-            act = ready.addAction(label)
-            act.setToolTip(desc)
-            act.triggered.connect(lambda _=False, k=key: self.action_requested.emit("apply_pack", k))
-        menu.exec(self.btn_new.mapToGlobal(self.btn_new.rect().bottomLeft()))
-
-    def _open_layout_menu(self) -> None:
+        if not sel:
+            self.new_folder("")
+            return
         menu = QMenu(self)
-        items = (
-            ("Use folders already in Downloads…", "tree_tool:scan_folders"),
-            ("Save or restore a layout…", "tree_tool:snapshots"),
-            ("Tidy files already inside folders", "tree_tool:sort_lower_tiers"),
-            ("Start over with a ready-made layout…", "tree_tool:setup_studio"),
-            ("Advanced canvas…", "tree_tool:open_canvas"),
+        menu.addAction("New folder in Downloads…").triggered.connect(lambda: self.new_folder(""))
+        menu.addAction(f"New folder inside “{_elide(sel.split(chr(92))[-1], 22)}”…").triggered.connect(
+            lambda: self.new_folder(sel)
         )
-        for text, action in items:
-            menu.addAction(text).triggered.connect(lambda _=False, a=action: self.action_requested.emit(a, ""))
-        menu.exec(self.btn_layout.mapToGlobal(self.btn_layout.rect().bottomLeft()))
+        menu.exec(self.btn_new.mapToGlobal(self.btn_new.rect().bottomLeft()))
 
     # ------------------------------------------------------------------
     # Still in Downloads + Tidy

@@ -69,6 +69,8 @@ class Change:
     disk_moves: list[tuple[str, str]] = field(default_factory=list)
     disk_removals: list[tuple[str, str | None]] = field(default_factory=list)
     selected_path: str = ""
+    # A folder to create on disk and fill with the loose files that now belong in it.
+    fill_path: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +356,7 @@ def add_folder(cfg: Config, name: str, parent_path: str = "", cues: FolderCues |
         result.message = f"Added “{clean}”"
         result.selected_path = path
         return result
-    return Change(change_cfg, f"Added “{clean}”", selected_path=path)
+    return Change(change_cfg, f"Added “{clean}”", selected_path=path, fill_path=path)
 
 
 def set_cues(cfg: Config, path: str, cues: FolderCues) -> Change:
@@ -386,7 +388,8 @@ def set_cues(cfg: Config, path: str, cues: FolderCues) -> Change:
     msg = f"Updated “{node.name}”"
     if released:
         msg += " (moved those types here from " + ", ".join(dict.fromkeys(released)) + ")"
-    return Change(_compile(arch, work), msg, selected_path=path_of(arch, node))
+    node_path = path_of(arch, node)
+    return Change(_compile(arch, work), msg, selected_path=node_path, fill_path=node_path)
 
 
 def rename_folder(cfg: Config, path: str, new_name: str) -> Change:

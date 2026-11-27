@@ -1113,6 +1113,103 @@ class SorterService:
             "moved_count": len(moved),
         }
 
+    def fill_folder_on_disk(
+        self,
+        folder_rel: str,
+        *,
+        root: Path | None = None,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Create ``folder_rel`` in Downloads and move in the loose files that now belong there.
+
+        Looks at files sitting loose at the top of Downloads and, for a folder inside
+        another, the files sitting directly in its parent. A file moves only when the
+        current settings send it into this folder. Held 3D print files and files still
+        being written are left alone. Every move is recorded so it can be undone.
+        """
+        with self._lock:
+            cfg = self.config
+        watch_dir = (root or self.watch_root).resolve()
+        clean = to_relative_dest(folder_rel, fallback="")
+        if not clean or not watch_dir.is_dir():
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+        folder_dir = (watch_dir / clean).resolve()
+        if folder_dir == watch_dir or not is_under_watch_root(folder_dir, watch_dir):
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+        created = not folder_dir.exists()
+        try:
+            folder_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logging.warning("Could not create folder %s: %s", folder_dir, exc)
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+
+        want = Path(clean).as_posix().lower().strip("/")
+        look_in = [watch_dir]
+        parent_dir = folder_dir.parent
+        if parent_dir != watch_dir and is_under_watch_root(parent_dir, watch_dir):
+            look_in.append(parent_dir)
+        now = time.time()
+        plan: list[tuple[Path, RouteDecision, str]] = []
+        for base in look_in:
+            try:
+                entries = sorted((e for e in base.iterdir() if e.is_file()), key=lambda p: p.name.lower())
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if now - entry.stat().st_mtime < 5.0:
+                        continue  # probably still downloading
+                except OSError:
+                    continue
+                cand = candidate_from_path(entry)
+                decision = evaluate(cand, cfg, include_trace=False)
+                if decision.action != "move" or decision.relative_dest is None:
+                    continue
+                dest_folder = Path(decision.relative_dest).parent.as_posix().lower().strip("/")
+                if dest_folder != want and not dest_folder.startswith(want + "/"):
+                    continue
+                if self._is_3mf_held(entry, cfg):
+                    continue
+                plan.append((entry, decision, cand.source_url))
+
+        total = len(plan)
+        batch_id = f"fill-{uuid.uuid4().hex[:8]}"
+        moved: list[dict[str, Any]] = []
+        for idx, (entry, decision, url) in enumerate(plan, start=1):
+            if on_progress is not None:
+                on_progress(idx - 1, total, entry.name)
+            try:
+                rec = execute_move(
+                    entry,
+                    decision,
+                    batch_id=batch_id,
+                    db=self.db,
+                    watch_root=watch_dir,
+                    settle_seconds=0.0,
+                    source_url=url,
+                )
+            except OSError as exc:
+                logging.warning("Folder fill skipped %s: %s", entry, exc)
+                continue
+            if rec is not None:
+                moved.append(rec)
+        if on_progress is not None and total > 0:
+            on_progress(total, total, "Complete")
+        if moved:
+            self.db.checkpoint()
+            if self.on_moves_completed is not None:
+                try:
+                    self.on_moves_completed(batch_id, moved)
+                except Exception:
+                    logging.exception("Error in on_moves_completed callback")
+        return {
+            "ok": True,
+            "batch_id": batch_id if moved else "",
+            "moved": moved,
+            "moved_count": len(moved),
+            "created": created,
+        }
+
     def inspect_folder_on_disk(
         self,
         rel_path: str,

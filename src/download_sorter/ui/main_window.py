@@ -14,7 +14,8 @@ from collections.abc import Callable
 import logging
 from typing import Any
 
-from PySide6.QtCore import QAbstractAnimation, QPoint, Qt, QTimer, Signal
+import shiboken6
+from PySide6.QtCore import QAbstractAnimation, QPoint, QPointF, Qt, QTimer, Signal
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -92,6 +93,7 @@ from download_sorter.ui.motion import (
     AnimatedRibbon,
     CollapsibleRibbonBtn,
     ConfettiOverlayWidget,
+    SortyTossOverlay,
     ElidedLabel,
     InteractiveRibbonBtn,
     SortingProgressHUD,
@@ -1072,16 +1074,12 @@ class WalkthroughDialog(QDialog):
         # Concise 1-line footnote per step (unboxed, zero nested border clutter)
         self.pages = QStackedWidget()
         self.pages.setFixedHeight(28)
-        self.pages.addWidget(self._build_page(f"Watching top-level only: {watch_root}"))
+        self.pages.addWidget(self._build_page(f"Watching: {watch_root}  ·  Every move can be undone"))
         self.pages.addWidget(
-            self._build_page(
-                "Everything else is still sorted by file type · Every move can be undone"
-            )
+            self._build_page("Files nothing asks for still go into a folder for their type, like Documents or Images")
         )
         self.pages.addWidget(
-            self._build_page(
-                "Notifications slide in at the top-right · Reopen '? Guide' anytime in the toolbar"
-            )
+            self._build_page("Type a file name in “Where would a file go?” to test  ·  Reopen Guide from the toolbar")
         )
         layout.addWidget(self.pages)
 
@@ -1131,18 +1129,20 @@ class WalkthroughDialog(QDialog):
         self._step_meta = [
             (
                 "STEP 1 OF 3",
-                "Top-Level Downloads, Kept Tidy",
-                "I'm Sorty — loose downloads flow into organized category folders while your existing subfolders stay untouched.",
+                "Downloads, Kept Tidy",
+                "I'm Sorty. When a file lands in Downloads, I put it in the right folder. "
+                "Folders you made yourself are left alone.",
             ),
             (
                 "STEP 2 OF 3",
                 "What Do You Download Most?",
-                "Tick any that fit and I'll add rules for them. You can add or remove rule packs later on the Custom Rules page.",
+                "Tick any that fit and I'll add folders for them. You can change all of it later on the Folders screen.",
             ),
             (
                 "STEP 3 OF 3",
-                "Custom Rules & Top-Right Side Ribbons",
-                "Match filenames or URLs in Rules, and glance at sorted files via the top-right Side Ribbon with pause-on-hover.",
+                "Design Your Folders",
+                "On Folders, press + to make a folder, then click the blue words to say what goes in it. "
+                "Drag a folder onto another to put it inside.",
             ),
         ]
         self._go(0)
@@ -2027,6 +2027,8 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self._confetti = ConfettiOverlayWidget(self)
+        self._sorty_toss = SortyTossOverlay(self)
+        self._last_toss_label = ""
         self.setWindowTitle(f"Download Sorter v{__version__}")
         self.resize(1100, 760)
         self.setStyleSheet(STYLESHEET)
@@ -2154,8 +2156,11 @@ class MainWindow(QMainWindow):
             tooltip="Automatically organizes loose top-level files in this folder into subfolders.",
         )
         self.lbl_watch_path.setStyleSheet("color: #8E8E93; font-size: 11.5px;")
-        self.btn_watch_switcher = QPushButton("Switch ▾")
-        self.btn_watch_switcher.setToolTip("Switch between watched folders or add another folder to tidy")
+        self.btn_watch_switcher = QPushButton("Watched folders ▾")
+        self.btn_watch_switcher.setToolTip(
+            "See which folders are kept tidy, add another folder (like Desktop), or stop watching one"
+        )
+        self.btn_watch_switcher.setAccessibleName("Watched folders")
         self.btn_watch_switcher.setStyleSheet(
             "QPushButton { border: none; background: transparent; color: #0A84FF; font-size: 11px; font-weight: 600; padding: 0 4px; }"
             "QPushButton:hover { color: #64D2FF; }"
@@ -2223,6 +2228,7 @@ class MainWindow(QMainWindow):
         attach_press_feedback(self.btn_undo_last, "#5AC8FA")
         attach_press_feedback(self.btn_open_downloads, "#0A84FF")
         attach_press_feedback(self.btn_sort_now, "#0A84FF")
+        self._sync_header_for_tab()
         return bar
 
     # ------------------------------------------------------------------
@@ -3167,10 +3173,20 @@ class MainWindow(QMainWindow):
         page = self.tabs.widget(index)
         if page is not None:
             fade_in(page, 180)
+        self._sync_header_for_tab()
+
+    def _sync_header_for_tab(self) -> None:
+        """The Folders screen has its own Tidy button, so hide the header's copy there."""
+        if not hasattr(self, "btn_sort_now") or not hasattr(self, "folders_tab"):
+            return
+        self.btn_sort_now.setVisible(self.tabs.currentWidget() is not self.folders_tab)
 
     def _on_background_moves_received(self, _batch_id: str, moves: list[dict[str, Any]]) -> None:
         def _after_refresh() -> None:
             if moves:
+                for i, rec in enumerate(moves[:6]):
+                    name = str(rec.get("filename") or Path(str(rec.get("dest_path") or "")).name)
+                    QTimer.singleShot(i * 140, lambda n=name: self._sorty_tosses_file(n))
                 self.header_mascot.celebrate()
                 if self.tbl_activity.rowCount() > 0:
                     flash_rows(
@@ -3318,7 +3334,8 @@ class MainWindow(QMainWindow):
             f"Move Held .3MF ({held_count})" if held_count else "Move Held .3MF"
         )
         self.btn_file_held.setEnabled(held_count > 0)
-        self.btn_file_held.setVisible(held_count > 0)
+        # Folders › Waiting has "File them now", so the header copy stays hidden.
+        self.btn_file_held.setVisible(False)
 
         dup_count = int(snap.get("dup_count", 0))
         dup_bytes = int(snap.get("dup_bytes", 0))
@@ -3472,7 +3489,21 @@ class MainWindow(QMainWindow):
         except updater.UpdateError as exc:  # inline (test) mode raises directly
             _failed(str(exc))
 
+    def _sorty_tosses_file(self, label: str) -> None:
+        """Sorty hops and tosses a little file card for each file it sorts."""
+        label = str(label or "")
+        if not label or label == self._last_toss_label or label in ("Complete", "Preparing...") or "." not in label:
+            return
+        self._last_toss_label = label
+        mascot = self.header_mascot
+        if not shiboken6.isValid(mascot) or not shiboken6.isValid(self._sorty_toss):
+            return
+        origin = mascot.mapTo(self, QPoint(mascot.width() // 2, mascot.height() // 3))
+        self._sorty_toss.toss(QPointF(origin), label)
+        mascot.hop()
+
     def _restore_mascot_resting(self) -> None:
+        self._last_toss_label = ""
         self.header_mascot.set_working(False)
         self.header_mascot.set_pose("sleeping" if self.service.paused else ("safe" if self._held_count > 0 else "smart"))
 
@@ -3484,6 +3515,7 @@ class MainWindow(QMainWindow):
     def _on_arch_action_progress(self, done: int, total: int, label: str) -> None:
         if total > 0:
             self.header_mascot.set_working(True, mode="working")
+            self._sorty_tosses_file(label)
         self.progress_hud.update_progress(done, total, label)
 
     def _on_arch_action_finished(self, summary: str, kind: str) -> None:
@@ -3515,6 +3547,7 @@ class MainWindow(QMainWindow):
         def _on_progress(done: int, total: int, label: str) -> None:
             if total > 0:
                 self.header_mascot.set_working(True, mode="working")
+                self._sorty_tosses_file(label)
             self.progress_hud.update_progress(done, total, label)
 
         def _finished(result: Any) -> None:
@@ -4671,7 +4704,8 @@ class MainWindow(QMainWindow):
     def _fit_to_window(self) -> None:
         width, height = self.width(), self.height()
         if hasattr(self, "lbl_status_badge"):
-            self.lbl_status_badge.setVisible(width >= scaled_px(self.HEADER_COMPACT_WIDTH))
+            # The green dot and the Auto-Sort button already say whether sorting is on.
+            self.lbl_status_badge.setVisible(False)
             # The widths were tuned for 100% text; bigger text needs room sooner.
             compact, tight = scaled_px(self.HEADER_COMPACT_WIDTH), scaled_px(self.HEADER_TIGHT_WIDTH)
             for btn in (self.btn_undo_last, self.btn_open_downloads, self.btn_walkthrough):
@@ -4714,18 +4748,57 @@ class MainWindow(QMainWindow):
     # Sorting Flow Integration (v4)
     # ------------------------------------------------------------------
     def _open_watch_switcher_menu(self) -> None:
+        """List the folders the app keeps tidy, and add or stop watching one."""
         menu = QMenu(self.btn_watch_switcher)
         primary = self.service.watch_root
-        act_primary = menu.addAction(f"● {primary.name or 'Downloads'}  (Primary)")
-        act_primary.triggered.connect(lambda: self.flow_tab.set_watch_label(primary.name or "Downloads"))
-        for raw in self.service.config.extra_watch_folders:
+        head = menu.addAction("Keeping these folders tidy, with the same rules:")
+        head.setEnabled(False)
+        act_primary = menu.addAction(f"{primary.name or 'Downloads'}  (main)")
+        act_primary.setToolTip(str(primary))
+        act_primary.triggered.connect(lambda: self._open_path(primary))
+        for raw in list(self.service.config.extra_watch_folders):
             p = Path(raw).expanduser()
-            act = menu.addAction(f"● {p.name or raw}")
-            act.triggered.connect(lambda _=False, lbl=(p.name or raw): self.flow_tab.set_watch_label(lbl))
+            sub = menu.addMenu(p.name or raw)
+            sub.setToolTipsVisible(True)
+            sub.addAction("Open").triggered.connect(lambda _=False, q=p: self._open_path(q))
+            sub.addAction("Stop watching").triggered.connect(lambda _=False, r=raw: self._stop_watching_folder(r))
         menu.addSeparator()
-        act_add = menu.addAction("+ Watch another folder...")
-        act_add.triggered.connect(self._add_extra_folder)
+        menu.addAction("Watch another folder…").triggered.connect(self._watch_another_folder)
+        menu.addAction("Change the main folder…").triggered.connect(self._open_watch_folder_setting)
         menu.exec(self.btn_watch_switcher.mapToGlobal(self.btn_watch_switcher.rect().bottomLeft()))
+
+    def _open_path(self, path: Path) -> None:
+        if path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _watch_another_folder(self, chosen: str = "") -> None:
+        if not chosen:
+            chosen = QFileDialog.getExistingDirectory(self, "Choose a folder to keep tidy", str(Path.home()))
+        chosen = str(chosen or "").strip()
+        if not chosen:
+            return
+        cfg = copy.deepcopy(self.service.config)
+        known = {str(Path(x).expanduser()).lower() for x in cfg.extra_watch_folders}
+        known.add(str(self.service.watch_root).lower())
+        if str(Path(chosen).expanduser()).lower() in known:
+            self.banner.show_message(f"{Path(chosen).name} is already kept tidy.", kind="info", timeout_ms=3600)
+            return
+        cfg.extra_watch_folders = [*cfg.extra_watch_folders, chosen]
+        self._commit_config(cfg)
+        self.banner.show_message(f"Now keeping {Path(chosen).name or chosen} tidy too.", kind="success", timeout_ms=4200)
+
+    def _stop_watching_folder(self, raw: str) -> None:
+        cfg = copy.deepcopy(self.service.config)
+        cfg.extra_watch_folders = [x for x in cfg.extra_watch_folders if x != raw]
+        self._commit_config(cfg)
+        self.banner.show_message(
+            f"Stopped watching {Path(raw).name or raw}. Its files were not touched.", kind="info", timeout_ms=4200
+        )
+
+    def _open_watch_folder_setting(self) -> None:
+        idx = self.tabs.indexOf(self._settings_tab)
+        self.tabs.setCurrentIndex(max(0, idx))
+        self.edit_watch_folder.setFocus()
 
     def _on_activity_trace_row(self, index) -> None:  # noqa: ANN001
         row = index.row()
@@ -4798,9 +4871,12 @@ class MainWindow(QMainWindow):
         """
         moves = list(getattr(change, "disk_moves", []) or [])
         removals = list(getattr(change, "disk_removals", []) or [])
+        fill = str(getattr(change, "fill_path", "") or "")
         root = self.service.watch_root
-        if not any((root / old).is_dir() for old, _new in moves) and not any(
-            (root / old).is_dir() for old, _t in removals
+        if (
+            not fill
+            and not any((root / old).is_dir() for old, _new in moves)
+            and not any((root / old).is_dir() for old, _t in removals)
         ):
             return
         svc = self.service
@@ -4808,6 +4884,7 @@ class MainWindow(QMainWindow):
         def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
             batches: list[str] = []
             moved = 0
+            filled = 0
             for old, new in moves:
                 if not (root / old).is_dir():
                     continue
@@ -4820,13 +4897,26 @@ class MainWindow(QMainWindow):
                 moved += int(res.get("moved_count", 0))
                 if res.get("batch_id"):
                     batches.append(str(res["batch_id"]))
-            return {"batches": batches, "moved": moved}
+            if fill:
+                res = svc.fill_folder_on_disk(fill, on_progress=report)
+                filled = int(res.get("moved_count", 0))
+                if res.get("batch_id"):
+                    batches.append(str(res["batch_id"]))
+            return {"batches": batches, "moved": moved, "filled": filled}
 
         def _done(res: dict[str, Any]) -> None:
             self._folder_disk_batches = list(res.get("batches", []))
+            filled = int(res.get("filled", 0) or 0)
             self.refresh_all()
+            if filled:
+                leaf = fill.replace("/", "\\").split("\\")[-1]
+                self._on_folders_notice(
+                    f"Moved {filled} matching file{'s' if filled != 1 else ''} into “{leaf}”",
+                    getattr(self.folders_tab, "last_undo", None),
+                )
 
-        self._run_service_action(_work, _done, busy_text="Moving files…", pass_progress=True, finish_text="Files moved")
+        busy = "Finding files that belong here…" if fill and not (moves or removals) else "Moving files…"
+        self._run_service_action(_work, _done, busy_text=busy, pass_progress=True, finish_text="Done")
 
     def _undo_folder_disk_change(self) -> None:
         from download_sorter.fs_ops import undo_batch

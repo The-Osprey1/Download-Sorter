@@ -8,12 +8,14 @@ import os
 import random
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import (
     Property,
     QAbstractAnimation,
     QEasingCurve,
+    QElapsedTimer,
     QEvent,
     QObject,
     QParallelAnimationGroup,
@@ -816,17 +818,15 @@ class SortyMascotWidget(QWidget):
         "scanning",
     )
     SORTY_TIPS: tuple[str, ...] = (
-        "Open the Folder Architecture tab to add layers (tiers), pick premade folders, or design custom rule folders.",
-        "Clicked 'Apply & Shift Files'? Don't worry — Undo always puts shifted files and folders right back.",
-        "Upgrading from Download Sorter v2.8? Use 'Carry Over v2.8 / Setup...' to bring all rules, type folders, and holds over.",
-        "Double-click any folder card on the Folder Architecture canvas to edit its extensions, keywords, or websites.",
-        "Prefer simple folders? Switch Blueprint to 'Minimalist 1-Tier' or remove extra tiers anytime.",
-        "New .3MF print files stay safe in Downloads for your slicer until their hold period ends — or click Move Held .3MF.",
-        "Top-right Side Ribbons pause their countdown timer whenever you hover over them so you never miss Undo.",
-        "Want custom priority? Tier 3 specific rules automatically match before Tier 2 subfolders and Tier 1 categories.",
-        "Export your Folder Architecture & Custom Rules to JSON in Settings to share or back up your setup.",
-        "Only loose top-level files and managed category folders shift — your private subfolders stay 100% untouched.",
-        "Psst... rapid-click me 5 times (or type 'sorty' in the rule tester) for a secret surprise!",
+        "Press + on the Folders screen to make a folder. I'll create it in Downloads for you.",
+        "Click the blue words on a folder's page to say what goes in it. Matching loose files move in right away.",
+        "Drag a folder onto another folder to put it inside. The blue outline shows where it will land.",
+        "Not sure where a file would go? Type its name in “Where would a file go?” at the top left.",
+        "Right-click a file under “Still in Downloads” to put it somewhere and teach me for next time.",
+        "Every move can be undone. Look for Undo in the message that slides in after a change.",
+        "Second copies of a file go into Duplicates. I never delete anything.",
+        "Want Desktop kept tidy too? Click “Watched folders” under the title and choose “Watch another folder…”.",
+        "Psst... click me 5 times fast for a secret surprise!",
     )
 
     def __init__(self, size: int = 64, parent: QWidget | None = None) -> None:
@@ -966,6 +966,20 @@ class SortyMascotWidget(QWidget):
             self.update()
             if animations_enabled() and not os.environ.get("PYTEST_CURRENT_TEST"):
                 self._celebrate_timer.start(max(400, duration_ms))
+
+    def hop(self) -> None:
+        """A quick happy hop, used once per file while sorting. No tip, no pose change."""
+        if self._pose == "sleeping" or self._party_mode:
+            return
+        if animations_enabled() and not os.environ.get("PYTEST_CURRENT_TEST"):
+            if self._cute_anim.state() == QAbstractAnimation.State.Running and self._cute_prog < 0.6:
+                return  # still mid-hop; let it land
+            self._cute_anim.stop()
+            self._cute_prog = 0.01
+            self._cute_anim.start()
+        else:
+            self._cute_prog = 0.0
+            self.update()
 
     def start_party_mode(self, duration_ms: int = 5000) -> None:
         """Secret Sorty Party Mode Easter Egg with crown, shades, and dance bounce."""
@@ -1317,6 +1331,106 @@ class SortyMascotWidget(QWidget):
 SorterMascotWidget = SortyMascotWidget
 
 
+class SortyTossOverlay(QWidget):
+    """Click-through overlay: little file cards Sorty tosses into folders while sorting.
+
+    Each card leaves Sorty, flies along an arc, spins a little and fades out. It
+    draws only the cards, never a background, and is never translucent itself.
+    """
+
+    COLORS = ("#0A84FF", "#30D158", "#FFD60A", "#FF9F0A", "#BF5AF2", "#64D2FF")
+    MAX_CARDS = 14
+    LIFE_MS = 900
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self._cards: list[dict[str, Any]] = []
+        self._rng = random.Random(7)
+        self._clock = QElapsedTimer()
+        self._clock.start()
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._tick)
+        self.tossed = 0
+        self.hide()
+
+    def toss(self, origin: QPointF, label: str = "") -> None:
+        """Throw one file card from ``origin`` (in this widget's coordinates)."""
+        self.tossed += 1
+        if not animations_enabled() or os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        parent = self.parentWidget()
+        if parent is not None:
+            self.setGeometry(parent.rect())
+        if len(self._cards) >= self.MAX_CARDS:
+            self._cards.pop(0)
+        ext = Path(label).suffix.lstrip(".").upper()[:4] if label else ""
+        rng = self._rng
+        self._cards.append(
+            {
+                "x0": origin.x(),
+                "y0": origin.y(),
+                "dx": rng.uniform(90.0, 260.0) * (1 if rng.random() > 0.25 else -0.5),
+                "dy": rng.uniform(120.0, 260.0),
+                "lift": rng.uniform(40.0, 80.0),
+                "spin": rng.uniform(-200.0, 200.0),
+                "born": self._clock.elapsed(),
+                "color": self.COLORS[self.tossed % len(self.COLORS)],
+                "text": ext,
+            }
+        )
+        self.show()
+        self.raise_()
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def _tick(self) -> None:
+        now = self._clock.elapsed()
+        self._cards = [c for c in self._cards if now - c["born"] < self.LIFE_MS]
+        if not self._cards:
+            self._timer.stop()
+            self.hide()
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001
+        if not self._cards:
+            return
+        now = self._clock.elapsed()
+        p = QPainter(self)
+        try:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            font = p.font()
+            font.setPixelSize(8)
+            font.setBold(True)
+            p.setFont(font)
+            for c in self._cards:
+                t = max(0.0, min(1.0, (now - c["born"]) / self.LIFE_MS))
+                ease = 1.0 - (1.0 - t) ** 3
+                x = c["x0"] + c["dx"] * ease
+                # Up first, then down: a toss.
+                y = c["y0"] + c["dy"] * t * t - c["lift"] * math.sin(t * math.pi)
+                scale = 1.0 - 0.35 * t
+                p.save()
+                p.setOpacity(1.0 if t < 0.7 else max(0.0, (1.0 - t) / 0.3))
+                p.translate(x, y)
+                p.rotate(c["spin"] * t)
+                p.scale(scale, scale)
+                p.setPen(QPen(QColor(0, 0, 0, 60), 1))
+                p.setBrush(QColor("#F5F5F7"))
+                p.drawRoundedRect(QRectF(-9, -11, 18, 22), 3, 3)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(c["color"]))
+                p.drawRoundedRect(QRectF(-9, -11, 18, 7), 3, 3)
+                if c["text"]:
+                    p.setPen(QColor("#1C1C1E"))
+                    p.drawText(QRectF(-9, -3, 18, 12), Qt.AlignmentFlag.AlignCenter, c["text"])
+                p.restore()
+        finally:
+            p.end()
+
+
 class ConfettiOverlayWidget(QWidget):
     """Click-through translucent confetti celebration burst overlay for Easter Eggs."""
 
@@ -1410,9 +1524,9 @@ class WalkthroughDiagramCanvas(QWidget):
     STEPS: list[tuple[tuple[str, str, str], tuple[str, str, str], tuple[str, str, str]]] = [
         # Step 0: Top-Level Only
         (
-            ("Downloads/", "Watched Root", "#8E8E93"),
-            ("Top-Level Files", "Sorted Automatically", "#30D158"),
-            ("Subfolders", "Left Untouched", "#0A84FF"),
+            ("Downloads", "New files land here", "#8E8E93"),
+            ("Sorty", "Picks a folder", "#30D158"),
+            ("Your folders", "Left as you made them", "#0A84FF"),
         ),
         # Step 1: Safe .3MF Hold
         (
@@ -1420,11 +1534,11 @@ class WalkthroughDiagramCanvas(QWidget):
             ("Safe Slicer Hold", "Ready for Bambu", "#FF9F0A"),
             ("3D Models/", "Auto-Filed After", "#30D158"),
         ),
-        # Step 2: Categorized Routing + Side Ribbon
+        # Step 2: Folders screen
         (
-            ("invoice.pdf", "Matches Rule", "#8E8E93"),
-            ("/Documents/PDF", "Auto-Routed", "#0A84FF"),
-            ("Top-Right Ribbon", "1-Click Undo", "#69E6AD"),
+            ("+ New folder", "Name it", "#8E8E93"),
+            ("What goes here", "Click the blue words", "#0A84FF"),
+            ("Files move in", "Undo anytime", "#69E6AD"),
         ),
     ]
 
