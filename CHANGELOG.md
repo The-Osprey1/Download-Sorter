@@ -9,12 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0-beta.2] - 2026-11-27
+
+A simpler, single-screen way to design your folders, built from feedback that 4.0.0-beta.1 had too many overlapping panels and too much jargon.
+
 ### Added
+- **Folders screen (`ui/folders/folders_tab.py`).** The first tab is now one screen, in the style of Finder:
+  - **Sidebar.** A "Where would a file go?" box, your folder list and a "Handled for you" section. Drag a folder onto another to put it inside; a drop that cannot work is refused while you drag.
+  - **Folder page.** Each folder reads as one sentence, "Put [types] [named …] [from …] in this folder.", and you click a blue part to change it. Rename a folder by clicking its name. A note explains when a more specific folder wins, and other rules that send files there are listed with Edit and Remove.
+  - **Will land here.** Shows the loose files that would go to the folder and how many files are already inside.
+  - **More options.** Turn automatic sorting on or off, skip files with certain words, add an advanced rule (PDF words, renaming, size, unzip), show the folder in File Explorer, find projects inside, or remove the folder.
+  - **Folder menu.** Right-click a folder to make a folder inside it, rename, move, combine, find projects, show it in File Explorer, or remove it.
+  - **Layout menu (⋯).** Use folders already in Downloads, save or restore a layout, tidy files already inside folders, start over from a ready-made layout, or open the advanced canvas.
+  - **New folder menu (+).** Make an empty folder, or add a ready-made set (School, Job hunting, Bills & receipts, Travel, Contracts, 3D printing).
+  - **Handled for you.** "Everything else" (an Other folder or leave in Downloads, and optional guessing from past moves), "Duplicates" (keep both, keep the new one or keep the old one; a removed copy goes to the Recycle Bin), and "Waiting" (3D print files held for your slicer, with "File them now").
+  - **Still in Downloads.** Lists every loose file and where it would go. Right-click a file to put it in a folder once, or teach the app to always do that. **Tidy** shows the full plan before anything moves.
+  - **Messages with Undo.** Every change shows a message with Undo, and folder renames, moves, merges and removals move the files on disk with Undo.
+  - **Animations.** Pages crossfade, and new sections fade in.
+- **Mistake-proof folder logic (`folder_designer.py`).** All edits go through one module that refuses changes that cannot work and explains why in plain words:
+  - names that Windows reserves or that use characters it does not allow;
+  - two folders with the same name in one place;
+  - moving a folder into itself, or deeper than five levels.
+  - A file type lives in one folder at a time, so giving a type to a new folder takes it from the old one and says so.
+  - Clearing every part of the sentence makes the folder a manual one instead of deleting it.
+  - Renaming or moving a folder updates the rules that point at it.
+  - Removing a folder moves its files to the parent folder; nothing is deleted.
 - **Rule collision note in New Folder (`ui/flow/folder_builder.py`).** When an existing rule already catches some of the loose files a new folder would match, step 3 shows an amber note naming that rule and where those files go today. Extension-only folders get a **Put this folder ahead of those rules** option; folders with words or websites already go first, and the note says so.
 
 ### Changed
+- **Tabs are now Folders, Activity and Settings.** The Sorting Flow view is no longer a tab; its dialogs remain reachable from the Folders screen menus. "Trace" from Activity fills the Folders tester.
 - **First run opens Folder Setup (`ui/main_window.py`).** New installs go straight into the interactive 3-step Folder Setup Studio instead of the v3 slideshow. Closing it still counts as seen, so automatic sorting is not held back, and the **Guide** button still opens the tour.
 - **Taller folder dialogs on roomy screens (`ui/flow/folder_builder.py`, `ui/flow/setup_studio.py`).** New Folder opens at 840px and Folder Setup at 880px when the screen has room, so the website chip row in step 2 no longer needs a scroll. Smaller screens are capped to the usable height.
+
+### Fixed
+- Notification bars with a button (such as Undo) no longer log a style sheet error.
 
 ## [4.0.0-beta.1] - 2026-11-25
 

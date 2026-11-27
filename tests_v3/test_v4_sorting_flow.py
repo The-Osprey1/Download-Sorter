@@ -116,11 +116,11 @@ def test_sorting_flow_tab_live_trace_focus_teach_and_activity_trace(
         win.show()
         v3_qapp.processEvents()
 
-        # 3-tab structure with Sorting Flow first
+        # 3-tab structure with the Folders designer first
         assert win.tabs.count() == 3
-        assert win.tabs.tabText(0) == "Sorting Flow"
+        assert win.tabs.tabText(0) == "Folders"
         assert win.tabs.tabText(1) == "Activity"
-        assert win.tabs.tabText(2) == "Preferences"
+        assert win.tabs.tabText(2) == "Settings"
         assert hasattr(win, "btn_watch_switcher")
 
         # Live trace updates
@@ -278,7 +278,7 @@ def test_v4_preferences_sidebar_disk_sync_and_align_dialog(v3_qapp, app_paths: A
         v3_qapp.processEvents()
         win._on_sim_trace_row(win.tbl_sim.model().index(0, 0))
         v3_qapp.processEvents()
-        assert win.tabs.currentWidget() is win.flow_tab
+        assert win.tabs.currentWidget() is win.folders_tab
 
         # Every Sorting Flow -> MainWindow / ArchitectureTab action target exists and is callable
         for attr in (
@@ -459,6 +459,10 @@ def test_sorting_flow_drag_and_drop_adjustments(
         win.show()
         v3_qapp.processEvents()
         flow = win.flow_tab
+        # The Sorting Flow view is hidden behind the Folders screen; show it so its rows get real sizes.
+        flow.resize(win.size())
+        flow.show()
+        v3_qapp.processEvents()
 
         # 1. Reorder rule via QDropEvent (drop r_b onto upper half of r_a -> r_b moves first)
         row_a = flow.spine.rules_layout.itemAt(0).widget()

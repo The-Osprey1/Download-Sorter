@@ -7,4 +7,4 @@ package itself; ``verify_release.py`` fails the release if the two ever differ.
 
 from __future__ import annotations
 
-__version__ = "4.0.0-beta.1"
+__version__ = "4.0.0-beta.2"

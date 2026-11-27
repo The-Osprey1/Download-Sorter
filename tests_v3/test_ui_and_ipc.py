@@ -437,7 +437,7 @@ def test_folder_architecture_tiers_premade_custom_shift_undo_and_defaults(
     svc = SorterService(app_paths)
     win = MainWindow(svc)
     assert win.tabs.count() == 3
-    assert win.tabs.tabText(0) == "Sorting Flow"
+    assert win.tabs.tabText(0) == "Folders"
     assert not win.arch_tab.btn_arch_undo.isHidden()
     assert not win.arch_tab.btn_arch_defaults.isHidden()
 
