@@ -1,9 +1,11 @@
-"""Left-hand 3-step Sorting Flow spine with continuous painted rails and inline editors."""
+"""Left-hand 3-step Sorting Flow spine with continuous painted rails and guided inline rule composer."""
 
 from __future__ import annotations
 
 import copy
 from pathlib import Path
+import re
+from typing import Any
 
 from PySide6.QtCore import QMimeData, QPoint, QPointF, QRectF, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QFont, QFontMetrics, QPainter, QPen, QPixmap
@@ -31,13 +33,220 @@ from download_sorter.pipeline import (
     build_rule_from_cues,
     infer_teach_cues,
 )
-from download_sorter.router import apply_rename_template
+from download_sorter.router import apply_rename_template, extract_host
 from download_sorter.ui.motion import InteractiveRibbonBtn, make_vector_icon
 from download_sorter.ui.settings_widgets import MacToggle
 from download_sorter.ui.text_scale import scaled_px
 
 MIME_RULE_ID = "application/x-ds-rule-id"
 MIME_BUCKET_ID = "application/x-ds-bucket-id"
+NEW_FOLDER_SENTINEL = "__NEW_FOLDER__"
+
+QUICK_FILE_TYPE_CHIPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (".pdf", (".pdf",)),
+    (".docx", (".docx",)),
+    (".xlsx/.csv", (".xlsx", ".csv")),
+    (".png/.jpg", (".png", ".jpg")),
+    (".zip", (".zip",)),
+    (".3mf/.stl", (".3mf", ".stl")),
+    (".exe", (".exe",)),
+)
+_CHIP_EXT_SET: frozenset[str] = frozenset(
+    ext for _lbl, exts in QUICK_FILE_TYPE_CHIPS for ext in exts
+)
+
+
+def normalize_ext_tokens(raw: str | list[str] | tuple[str, ...]) -> list[str]:
+    """Normalize file extension tokens (e.g. ``'pdf, *.DOCX, .xlsx/.csv'`` -> ``['.pdf', '.docx', '.xlsx', '.csv']``)."""
+    pieces: list[str] = []
+    if isinstance(raw, str):
+        pieces = [p for p in re.split(r"[,;\s/]+", raw) if p]
+    else:
+        for item in raw:
+            pieces.extend(p for p in re.split(r"[,;\s/]+", str(item or "")) if p)
+    out: list[str] = []
+    for tok in pieces:
+        cleaned = tok.strip().lstrip("*").strip().lower()
+        if not cleaned:
+            continue
+        if not cleaned.startswith("."):
+            cleaned = "." + cleaned
+        if len(cleaned) < 2 or not re.match(r"^\.[a-z0-9_+-]+$", cleaned):
+            continue
+        if cleaned not in out:
+            out.append(cleaned)
+    return out
+
+
+def normalize_domain_tokens(raw: str | list[str] | tuple[str, ...]) -> list[str]:
+    """Normalize website URLs or domains via ``extract_host`` (``'https://stripe.com/pay'`` -> ``'stripe.com'``)."""
+    pieces: list[str] = []
+    if isinstance(raw, str):
+        pieces = [p for p in re.split(r"[,;\s]+", raw) if p]
+    else:
+        for item in raw:
+            pieces.extend(p for p in re.split(r"[,;\s]+", str(item or "")) if p)
+    out: list[str] = []
+    for tok in pieces:
+        cleaned = tok.strip().strip("\"'")
+        if not cleaned:
+            continue
+        host = extract_host(cleaned)
+        if not host:
+            continue
+        if host not in out:
+            out.append(host)
+    return out
+
+
+def normalize_word_tokens(raw: str | list[str] | tuple[str, ...]) -> list[str]:
+    """Normalize comma-separated filename keyword tokens cleanly."""
+    pieces: list[str] = []
+    if isinstance(raw, str):
+        pieces = raw.split(",")
+    else:
+        pieces = [str(item or "") for item in raw]
+    out: list[str] = []
+    for tok in pieces:
+        cleaned = tok.strip().strip("\"'")
+        if cleaned and cleaned not in out:
+            out.append(cleaned)
+    return out
+
+
+def rule_has_any_cue(
+    *,
+    extensions: list[str] | tuple[str, ...] = (),
+    keywords: list[str] | tuple[str, ...] = (),
+    domains: list[str] | tuple[str, ...] = (),
+    content_keywords: list[str] | tuple[str, ...] = (),
+    regex_pattern: str = "",
+    min_size_mb: float = 0.0,
+    max_size_mb: float = 0.0,
+    min_age_days: int = 0,
+) -> bool:
+    """Return True when at least one positive file-matching cue is configured."""
+    return bool(
+        extensions
+        or keywords
+        or domains
+        or content_keywords
+        or (regex_pattern or "").strip()
+        or min_size_mb > 0
+        or max_size_mb > 0
+        or min_age_days > 0
+    )
+
+
+def suggest_rule_name(
+    extensions: list[str],
+    keywords: list[str],
+    domains: list[str],
+    destination: str,
+) -> str:
+    """Generate a concise human-friendly rule name when the user leaves the title blank."""
+    leaf = destination.replace("/", "\\").strip("\\").split("\\")[-1] or "Sorted"
+    if domains and keywords:
+        return f"{domains[0]} ({keywords[0]})"
+    if domains:
+        return f"From {domains[0]}"
+    if keywords:
+        return f"{leaf} ({keywords[0]})"
+    if extensions:
+        ext_label = ", ".join(extensions[:2])
+        return f"{ext_label} → {leaf}"
+    return f"{leaf} Rule"
+
+
+def _join_or(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} or {items[1]}"
+    return f"{', '.join(items[:-1])}, or {items[-1]}"
+
+
+def describe_rule_plain_english(
+    *,
+    extensions: list[str] | tuple[str, ...] = (),
+    keywords: list[str] | tuple[str, ...] = (),
+    domains: list[str] | tuple[str, ...] = (),
+    destination: str = "Documents",
+    match_mode: str = "any",
+    exclude_keywords: list[str] | tuple[str, ...] = (),
+    content_keywords: list[str] | tuple[str, ...] = (),
+    regex_pattern: str = "",
+    min_size_mb: float = 0.0,
+    max_size_mb: float = 0.0,
+    min_age_days: int = 0,
+) -> str:
+    """Build a live plain-English summary sentence (or completeness prompt when empty)."""
+    exts = list(extensions)
+    words = list(keywords)
+    doms = list(domains)
+    ckws = list(content_keywords)
+    excl = list(exclude_keywords)
+    rx = (regex_pattern or "").strip()
+
+    if not rule_has_any_cue(
+        extensions=exts,
+        keywords=words,
+        domains=doms,
+        content_keywords=ckws,
+        regex_pattern=rx,
+        min_size_mb=min_size_mb,
+        max_size_mb=max_size_mb,
+        min_age_days=min_age_days,
+    ):
+        return "Add at least one file type, filename word, or website above"
+
+    if exts:
+        shown_exts = exts[:3]
+        ext_part = _join_or(shown_exts)
+        if len(exts) > 3:
+            ext_part = f"{', '.join(shown_exts)} (+{len(exts) - 3})"
+        subject = f"{ext_part} files"
+    else:
+        subject = "files"
+
+    clauses: list[str] = []
+    if words:
+        quoted = [f"'{w}'" for w in words[:3]]
+        w_str = _join_or(quoted)
+        if len(words) > 3:
+            w_str += f" (+{len(words) - 3})"
+        clauses.append(f"containing {w_str}")
+    if doms:
+        d_str = _join_or(doms[:2])
+        if len(doms) > 2:
+            d_str += f" (+{len(doms) - 2})"
+        clauses.append(f"from {d_str}")
+    if ckws:
+        clauses.append(f"with PDF text '{ckws[0]}'")
+    if rx:
+        clauses.append(f"matching /{rx}/")
+
+    joiner = " and " if match_mode == "all" else " or "
+    cond_str = f" {joiner.join(clauses)}" if clauses else ""
+
+    bounds: list[str] = []
+    if min_size_mb > 0:
+        bounds.append(f"≥{min_size_mb:g} MB")
+    if max_size_mb > 0:
+        bounds.append(f"≤{max_size_mb:g} MB")
+    if min_age_days > 0:
+        bounds.append(f"≥{min_age_days}d old")
+    bound_str = f" ({', '.join(bounds)})" if bounds else ""
+
+    excl_str = ""
+    if excl:
+        excl_quoted = ", ".join(f"'{x}'" for x in excl[:2])
+        excl_str = f" (except {excl_quoted})"
+
+    dest_crumb = destination.replace("/", "\\").strip("\\").replace("\\", " › ") or "Downloads"
+    return f"Moves {subject}{cond_str}{bound_str}{excl_str} → {dest_crumb}"
 
 
 def make_flow_drag_pixmap(title: str, subtitle: str = "", accent: str = "#0A84FF") -> QPixmap:
@@ -122,6 +331,741 @@ class _PortDotWidget(QWidget):
         painter.drawEllipse(QPointF(4.0, 4.0), 3.0, 3.0)
 
 
+class _GuidedRuleComposerWidget(QFrame):
+    """Structured 3-part Guided Rule Composer shared by New Rule drafts and expanded rule rows."""
+
+    fields_committed = Signal(dict)  # emitted when editing an existing rule & cues are valid
+    draft_updated = Signal(dict)  # emitted live in draft mode (without rebuilding parent)
+    draft_saved = Signal(object)  # emits completed Rule
+    draft_cancelled = Signal()
+    new_folder_requested = Signal(str)  # emits current destination / parent hint
+    open_full_editor = Signal()
+    delete_requested = Signal()
+    collapse_requested = Signal()
+
+    def __init__(
+        self,
+        rule: Rule,
+        *,
+        is_draft: bool = False,
+        folder_choices: list[str] | None = None,
+        sample_filename: str = "March_Invoice_2026.pdf",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._rule = copy.deepcopy(rule)
+        self._is_draft = is_draft
+        self._sample_filename = sample_filename
+        self._suppress = False
+
+        init_exts = normalize_ext_tokens(rule.extensions)
+        self._chip_exts: set[str] = {e for e in init_exts if e in _CHIP_EXT_SET}
+        extra_exts = [e for e in init_exts if e not in _CHIP_EXT_SET]
+
+        if is_draft:
+            self.setObjectName("GuidedRuleDraftCard")
+            self.setStyleSheet(
+                "QFrame#GuidedRuleDraftCard { background-color: #161619; "
+                "border: 1px solid rgba(10, 132, 255, 0.55); border-radius: 11px; }"
+            )
+        else:
+            self.setObjectName("GuidedRuleInlineBody")
+            self.setStyleSheet("QFrame#GuidedRuleInlineBody { border-top: 1px solid #262629; }")
+
+        cl = QVBoxLayout(self)
+        cl.setContentsMargins(10 if is_draft else 0, 9 if is_draft else 8, 10 if is_draft else 0, 9 if is_draft else 0)
+        cl.setSpacing(8)
+
+        # Draft Header: Rule title + live destination port badge
+        self.port_badge: QFrame | None = None
+        self.lbl_port_dest: QLabel | None = None
+        self.edit_name: QLineEdit | None = None
+        if is_draft:
+            hdr = QHBoxLayout()
+            hdr.setSpacing(8)
+            name_col = QVBoxLayout()
+            name_col.setSpacing(2)
+            lbl_kicker = QLabel("NEW SORTING RULE")
+            lbl_kicker.setStyleSheet(
+                "color: #60A5FA; font-size: 10px; font-weight: 700; letter-spacing: 0.6px; border: none;"
+            )
+            self.edit_name = QLineEdit(rule.name)
+            self.edit_name.setPlaceholderText("Rule name (optional — auto-named from your cues)")
+            self.edit_name.setToolTip("Optional name for this rule (leave blank to name it automatically)")
+            self.edit_name.setStyleSheet(
+                "background-color: #111113; border: 1px solid #2C2C2E; border-radius: 7px; "
+                "padding: 4px 8px; color: #F5F5F7; font-weight: 600; font-size: 12px;"
+            )
+            self.edit_name.textChanged.connect(self._on_live_inputs_changed)
+            name_col.addWidget(lbl_kicker)
+            name_col.addWidget(self.edit_name)
+            hdr.addLayout(name_col, 1)
+
+            leaf = (rule.destination.replace("/", "\\").strip("\\").split("\\")[-1]) or "Documents"
+            self.port_badge = QFrame()
+            self.port_badge.setStyleSheet(
+                "QFrame { background-color: #111113; border: 1px solid #0A84FF; border-radius: 7px; }"
+            )
+            pb = QHBoxLayout(self.port_badge)
+            pb.setContentsMargins(8, 3, 7, 3)
+            pb.setSpacing(5)
+            self.lbl_port_dest = QLabel(f"→ {leaf}")
+            self.lbl_port_dest.setStyleSheet("color: #F5F5F7; font-size: 11.5px; font-weight: 600; border: none;")
+            pb.addWidget(self.lbl_port_dest)
+            pb.addWidget(_PortDotWidget("#3B82F6"))
+            hdr.addWidget(self.port_badge, 0, Qt.AlignmentFlag.AlignTop)
+            cl.addLayout(hdr)
+
+        # ------------------------------------------------------------------
+        # 1. What files should this rule catch?
+        # ------------------------------------------------------------------
+        lbl_s1 = QLabel("1. What files should this rule catch?")
+        lbl_s1.setStyleSheet("color: #EAEAEF; font-size: 11.5px; font-weight: 600; border: none;")
+        cl.addWidget(lbl_s1)
+
+        self._chip_buttons: dict[str, QPushButton] = {}
+        chips_row1 = QHBoxLayout()
+        chips_row1.setSpacing(5)
+        chips_row2 = QHBoxLayout()
+        chips_row2.setSpacing(5)
+        for idx, (chip_label, chip_exts) in enumerate(QUICK_FILE_TYPE_CHIPS):
+            btn = QPushButton(chip_label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(f"Match {chip_label} files")
+            btn.setAccessibleName(f"File type {chip_label}")
+            is_on = all(e in self._chip_exts for e in chip_exts)
+            btn.setChecked(is_on)
+            self._style_chip_btn(btn, is_on)
+            btn.clicked.connect(lambda checked=False, exts=chip_exts, b=btn: self._on_chip_toggled(b, exts, checked))
+            self._chip_buttons[chip_label] = btn
+            if idx < 4:
+                chips_row1.addWidget(btn)
+            else:
+                chips_row2.addWidget(btn)
+
+        self.edit_custom_ext = QLineEdit(", ".join(extra_exts))
+        self.edit_custom_ext.setPlaceholderText("+ .ext")
+        self.edit_custom_ext.setToolTip("Optional extra file extensions (e.g. .step, .flac — dot added automatically)")
+        self.edit_custom_ext.setMaximumWidth(scaled_px(96))
+        self.edit_custom_ext.setStyleSheet(
+            "background-color: #111113; border: 1px solid #2C2C2E; border-radius: 6px; "
+            "padding: 2px 7px; font-size: 11px; color: #F5F5F7;"
+        )
+        self.edit_custom_ext.textChanged.connect(self._on_live_inputs_changed)
+        self.edit_custom_ext.editingFinished.connect(self._on_custom_ext_finished)
+        chips_row2.addWidget(self.edit_custom_ext)
+
+        chips_row1.addStretch(1)
+        chips_row2.addStretch(1)
+        cl.addLayout(chips_row1)
+        cl.addLayout(chips_row2)
+
+        inputs_row = QHBoxLayout()
+        inputs_row.setSpacing(8)
+
+        words_col = QVBoxLayout()
+        words_col.setSpacing(2)
+        lbl_words = QLabel("Filename words")
+        lbl_words.setStyleSheet("color: #8E8E93; font-size: 11px; border: none;")
+        self.edit_words = QLineEdit(", ".join(rule.keywords))
+        self.edit_words.setPlaceholderText("e.g. invoice, receipt")
+        self.edit_words.setToolTip("Match files whose name contains any of these words (comma-separated)")
+        self.edit_words.textChanged.connect(self._on_live_inputs_changed)
+        self.edit_words.editingFinished.connect(self._on_words_finished)
+        words_col.addWidget(lbl_words)
+        words_col.addWidget(self.edit_words)
+        inputs_row.addLayout(words_col, 1)
+
+        dom_col = QVBoxLayout()
+        dom_col.setSpacing(2)
+        lbl_dom = QLabel("Website domain")
+        lbl_dom.setStyleSheet("color: #8E8E93; font-size: 11px; border: none;")
+        self.edit_domains = QLineEdit(", ".join(rule.domains))
+        self.edit_domains.setPlaceholderText("e.g. stripe.com or URL")
+        self.edit_domains.setToolTip("Match files downloaded from this website (paste a full URL or domain)")
+        self.edit_domains.textChanged.connect(self._on_live_inputs_changed)
+        self.edit_domains.editingFinished.connect(self._on_domains_finished)
+        dom_col.addWidget(lbl_dom)
+        dom_col.addWidget(self.edit_domains)
+        inputs_row.addLayout(dom_col, 1)
+        cl.addLayout(inputs_row)
+
+        # Backwards-compatible alias for any caller inspecting edit_match
+        self.edit_match = self.edit_words
+
+        # ------------------------------------------------------------------
+        # 2. Where should they go?
+        # ------------------------------------------------------------------
+        lbl_s2 = QLabel("2. Where should they go?  (pick below or click any folder →)")
+        lbl_s2.setStyleSheet("color: #EAEAEF; font-size: 11.5px; font-weight: 600; border: none;")
+        cl.addWidget(lbl_s2)
+
+        dest_row = QHBoxLayout()
+        dest_row.setSpacing(6)
+        self.cmb_dest = QComboBox()
+        self.cmb_dest.setToolTip("Choose which folder inside Downloads receives matching files")
+        self.cmb_dest.setAccessibleName("Destination folder")
+        self._last_valid_dest = rule.destination.replace("/", "\\").strip("\\") or "Documents"
+        self._populate_dest_combo(folder_choices or [], self._last_valid_dest)
+        self.cmb_dest.currentIndexChanged.connect(self._on_dest_combo_changed)
+        dest_row.addWidget(self.cmb_dest, 1)
+
+        self.btn_dest_new_folder = QPushButton("+ Folder...")
+        self.btn_dest_new_folder.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_dest_new_folder.setToolTip("Create a new custom folder with guided setup")
+        self.btn_dest_new_folder.setAccessibleName("Create new destination folder")
+        self.btn_dest_new_folder.setStyleSheet(
+            "QPushButton { padding: 4px 9px; font-size: 11.5px; border-radius: 7px; "
+            "background-color: #1C1C1E; border: 1px solid #3A3A3E; color: #64D2FF; font-weight: 600; }"
+            "QPushButton:hover { background-color: #0A84FF; border-color: #0A84FF; color: #FFFFFF; }"
+        )
+        self.btn_dest_new_folder.clicked.connect(
+            lambda: self.new_folder_requested.emit(self._current_parent_hint())
+        )
+        dest_row.addWidget(self.btn_dest_new_folder)
+        cl.addLayout(dest_row)
+
+        # Optional progressive power fields (shown when populated or toggled on)
+        self._show_excl = bool(rule.exclude_keywords)
+        self._show_pdf = bool(rule.content_keywords)
+        self._show_rename = bool(rule.rename_template)
+
+        self.excl_wrap = QWidget()
+        ex_row = QVBoxLayout(self.excl_wrap)
+        ex_row.setContentsMargins(0, 0, 0, 0)
+        ex_row.setSpacing(2)
+        lbl_ex = QLabel("Skip if filename contains")
+        lbl_ex.setStyleSheet("color: #8E8E93; font-size: 11px;")
+        self.edit_excl = QLineEdit(", ".join(rule.exclude_keywords))
+        self.edit_excl.setPlaceholderText("e.g. draft, sample")
+        self.edit_excl.textChanged.connect(self._on_live_inputs_changed)
+        self.edit_excl.editingFinished.connect(self._commit_if_edit_mode)
+        ex_row.addWidget(lbl_ex)
+        ex_row.addWidget(self.edit_excl)
+        self.excl_wrap.setVisible(self._show_excl)
+        cl.addWidget(self.excl_wrap)
+
+        self.pdf_wrap = QWidget()
+        pdf_row = QVBoxLayout(self.pdf_wrap)
+        pdf_row.setContentsMargins(0, 0, 0, 0)
+        pdf_row.setSpacing(2)
+        lbl_pdf = QLabel("Inside PDF text contains")
+        lbl_pdf.setStyleSheet("color: #8E8E93; font-size: 11px;")
+        self.edit_pdf = QLineEdit(", ".join(rule.content_keywords))
+        self.edit_pdf.setPlaceholderText("e.g. total due, packing slip")
+        self.edit_pdf.textChanged.connect(self._on_live_inputs_changed)
+        self.edit_pdf.editingFinished.connect(self._commit_if_edit_mode)
+        pdf_row.addWidget(lbl_pdf)
+        pdf_row.addWidget(self.edit_pdf)
+        self.pdf_wrap.setVisible(self._show_pdf)
+        cl.addWidget(self.pdf_wrap)
+
+        self.ren_box = QFrame()
+        self.ren_box.setStyleSheet("QFrame { background-color: #111113; border: 1px solid #2C2C2E; border-radius: 8px; }")
+        rl = QVBoxLayout(self.ren_box)
+        rl.setContentsMargins(8, 6, 8, 6)
+        rl.setSpacing(4)
+        ren_hdr = QHBoxLayout()
+        lbl_ren = QLabel("Rename template")
+        lbl_ren.setStyleSheet("color: #8E8E93; font-size: 11px; border: none;")
+        ren_hdr.addWidget(lbl_ren)
+        ren_hdr.addStretch(1)
+        self.edit_rename = QLineEdit(rule.rename_template)
+        self.edit_rename.setPlaceholderText("{year}-{month}_{stem}{ext}")
+        for tok in ("{year}", "{month}", "{stem}", "{host}"):
+            tb = QPushButton(tok)
+            tb.setStyleSheet(
+                "padding: 1px 6px; font-size: 10.5px; border-radius: 5px; "
+                "background-color: #1C1C1E; border: 1px solid #2C2C2E; color: #AEAEB2;"
+            )
+            tb.clicked.connect(lambda _=False, t=tok: self._append_rename_token(t))
+            ren_hdr.addWidget(tb)
+        rl.addLayout(ren_hdr)
+        self.edit_rename.textChanged.connect(self._on_rename_changed)
+        self.edit_rename.editingFinished.connect(self._commit_if_edit_mode)
+        rl.addWidget(self.edit_rename)
+        self.lbl_rename_prev = QLabel("")
+        self.lbl_rename_prev.setStyleSheet("color: #8E8E93; font-size: 11px; border: none;")
+        rl.addWidget(self.lbl_rename_prev)
+        self.ren_box.setVisible(self._show_rename)
+        cl.addWidget(self.ren_box)
+
+        # ------------------------------------------------------------------
+        # 3. Plain-English Live Preview & Completeness Guard
+        # ------------------------------------------------------------------
+        self.preview_card = QFrame()
+        self.preview_card.setObjectName("RuleLivePreviewCard")
+        pv_l = QHBoxLayout(self.preview_card)
+        pv_l.setContentsMargins(10, 7, 10, 7)
+        pv_l.setSpacing(7)
+        self.lbl_preview_dot = QLabel("●")
+        self.lbl_preview_dot.setStyleSheet("font-size: 10px; border: none; background: transparent;")
+        self.lbl_preview_sentence = QLabel("")
+        self.lbl_preview_sentence.setWordWrap(True)
+        self.lbl_preview_sentence.setMinimumWidth(0)
+        self.lbl_preview_sentence.setStyleSheet("font-size: 11.5px; border: none; background: transparent;")
+        pv_l.addWidget(self.lbl_preview_dot, 0, Qt.AlignmentFlag.AlignTop)
+        pv_l.addWidget(self.lbl_preview_sentence, 1)
+        cl.addWidget(self.preview_card)
+
+        # Progressive options row (kept separate from CTA row so narrow 900x560 windows never clip buttons)
+        opt_bar = QHBoxLayout()
+        opt_bar.setSpacing(8)
+        self.btn_add_excl = self._text_action_btn("+ Exclude words")
+        self.btn_add_excl.setToolTip("Skip files containing certain words (e.g. draft)")
+        self.btn_add_excl.setVisible(not self._show_excl)
+        self.btn_add_excl.clicked.connect(self._reveal_excl)
+        opt_bar.addWidget(self.btn_add_excl)
+
+        self.btn_add_pdf = self._text_action_btn("+ PDF text")
+        self.btn_add_pdf.setToolTip("Match words inside a PDF document's text")
+        self.btn_add_pdf.setVisible(not self._show_pdf)
+        self.btn_add_pdf.clicked.connect(self._reveal_pdf)
+        opt_bar.addWidget(self.btn_add_pdf)
+
+        self.btn_add_rename = self._text_action_btn("+ Rename")
+        self.btn_add_rename.setToolTip("Automatically rename matched files using date/host tokens")
+        self.btn_add_rename.setVisible(not self._show_rename)
+        self.btn_add_rename.clicked.connect(self._reveal_rename)
+        opt_bar.addWidget(self.btn_add_rename)
+
+        self._auto_unzip = bool(rule.auto_unzip)
+        self.btn_unzip = self._text_action_btn(
+            "✓ Auto-unzip" if self._auto_unzip else "+ Auto-unzip",
+            active=self._auto_unzip,
+        )
+        self.btn_unzip.setToolTip("Automatically unpack .zip archives matched by this rule")
+        self.btn_unzip.clicked.connect(self._toggle_unzip)
+        opt_bar.addWidget(self.btn_unzip)
+
+        if not is_draft:
+            btn_full = self._text_action_btn("More options...")
+            btn_full.setToolTip("Open full rule editor (regex, file size/age limits, ALL/ANY mode)")
+            btn_full.clicked.connect(self.open_full_editor.emit)
+            opt_bar.addWidget(btn_full)
+
+        opt_bar.addStretch(1)
+        cl.addLayout(opt_bar)
+
+        # Primary CTA / Footer row
+        act_bar = QHBoxLayout()
+        act_bar.setSpacing(8)
+        act_bar.addStretch(1)
+
+        if is_draft:
+            self.btn_cancel_draft = QPushButton("Cancel")
+            self.btn_cancel_draft.setToolTip("Discard this draft rule (Esc)")
+            self.btn_cancel_draft.setStyleSheet("padding: 4px 10px; font-size: 11.5px;")
+            self.btn_cancel_draft.clicked.connect(self.draft_cancelled.emit)
+            self.btn_save_draft = QPushButton("Pick a file type, word, or website")
+            self.btn_save_draft.setObjectName("PrimaryButton")
+            self.btn_save_draft.setAccessibleName("Save Rule")
+            self.btn_save_draft.setToolTip("Save this sorting rule once at least one file type, word, or website is chosen")
+            self.btn_save_draft.setStyleSheet("padding: 4px 12px; font-size: 11.5px;")
+            self.btn_save_draft.clicked.connect(self._on_save_draft_clicked)
+            act_bar.addWidget(self.btn_cancel_draft)
+            act_bar.addWidget(self.btn_save_draft)
+        else:
+            btn_del = QPushButton("Delete")
+            btn_del.setToolTip("Delete this sorting rule")
+            btn_del.setStyleSheet("border: none; background: transparent; color: #FF453A; font-size: 11.5px; padding: 2px 6px;")
+            btn_del.clicked.connect(self.delete_requested.emit)
+            btn_done = QPushButton("Done")
+            btn_done.setToolTip("Collapse rule editor")
+            btn_done.setStyleSheet("padding: 3px 10px; font-size: 11.5px;")
+            btn_done.clicked.connect(self.collapse_requested.emit)
+            act_bar.addWidget(btn_del)
+            act_bar.addWidget(btn_done)
+
+        cl.addLayout(act_bar)
+        self._refresh_rename_preview()
+        self._sync_live_preview(emit_draft=False)
+
+    @staticmethod
+    def _style_chip_btn(btn: QPushButton, active: bool) -> None:
+        if active:
+            btn.setStyleSheet(
+                "QPushButton { padding: 2px 8px; font-size: 11px; border-radius: 6px; font-weight: 600; "
+                "background-color: rgba(10, 132, 255, 0.22); border: 1px solid #0A84FF; color: #FFFFFF; }"
+                "QPushButton:hover { background-color: rgba(10, 132, 255, 0.32); }"
+            )
+        else:
+            btn.setStyleSheet(
+                "QPushButton { padding: 2px 8px; font-size: 11px; border-radius: 6px; font-weight: 500; "
+                "background-color: #111113; border: 1px solid #2C2C2E; color: #AEAEB2; }"
+                "QPushButton:hover { border-color: #48484A; color: #F5F5F7; }"
+            )
+
+    @staticmethod
+    def _text_action_btn(text: str, *, active: bool = False) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        col = "#0A84FF" if active else "#8E8E93"
+        btn.setStyleSheet(
+            f"QPushButton {{ border: none; background: transparent; color: {col}; font-size: 11px; padding: 2px 3px; }}"
+            "QPushButton:hover { color: #F5F5F7; }"
+        )
+        return btn
+
+    def _populate_dest_combo(self, folder_choices: list[str], selected_dest: str) -> None:
+        self._suppress = True
+        try:
+            self.cmb_dest.clear()
+            choices: list[str] = []
+            for ch in folder_choices:
+                norm = ch.replace("/", "\\").strip("\\")
+                if norm and norm not in choices:
+                    choices.append(norm)
+            norm_sel = selected_dest.replace("/", "\\").strip("\\") or "Documents"
+            if norm_sel not in choices:
+                choices.insert(0, norm_sel)
+            for ch in choices:
+                self.cmb_dest.addItem(ch.replace("\\", " › "), ch)
+            self.cmb_dest.addItem("+ New Folder...", NEW_FOLDER_SENTINEL)
+            idx = self.cmb_dest.findData(norm_sel)
+            if idx >= 0:
+                self.cmb_dest.setCurrentIndex(idx)
+            self._last_valid_dest = norm_sel
+        finally:
+            self._suppress = False
+
+    def set_destination(self, folder_path: str, folder_choices: list[str] | None = None) -> None:
+        norm = folder_path.replace("/", "\\").strip("\\")
+        if not norm:
+            return
+        if folder_choices is not None:
+            self._populate_dest_combo(folder_choices, norm)
+        else:
+            self._suppress = True
+            try:
+                idx = self.cmb_dest.findData(norm)
+                if idx < 0:
+                    insert_at = max(0, self.cmb_dest.count() - 1)
+                    self.cmb_dest.insertItem(insert_at, norm.replace("\\", " › "), norm)
+                    idx = insert_at
+                self.cmb_dest.setCurrentIndex(idx)
+                self._last_valid_dest = norm
+            finally:
+                self._suppress = False
+        self._update_port_badge()
+        self._sync_live_preview(emit_draft=True)
+        self._commit_if_edit_mode()
+
+    def _current_parent_hint(self) -> str:
+        dest = self._last_valid_dest
+        return dest.split("\\")[0] if dest else ""
+
+    def _update_port_badge(self) -> None:
+        if self.lbl_port_dest is not None:
+            leaf = self._last_valid_dest.split("\\")[-1] or "Downloads"
+            self.lbl_port_dest.setText(f"→ {leaf}")
+
+    def current_fields(self) -> dict[str, Any]:
+        custom_exts = normalize_ext_tokens(self.edit_custom_ext.text())
+        ordered_exts: list[str] = []
+        for _lbl, exts in QUICK_FILE_TYPE_CHIPS:
+            for e in exts:
+                if e in self._chip_exts and e not in ordered_exts:
+                    ordered_exts.append(e)
+        for e in custom_exts:
+            if e not in ordered_exts:
+                ordered_exts.append(e)
+
+        words = normalize_word_tokens(self.edit_words.text())
+        domains = normalize_domain_tokens(self.edit_domains.text())
+        excl = normalize_word_tokens(self.edit_excl.text()) if self.excl_wrap.isVisible() else []
+        pdf_kws = normalize_word_tokens(self.edit_pdf.text()) if self.pdf_wrap.isVisible() else []
+        ren = self.edit_rename.text().strip() if self.ren_box.isVisible() else ""
+        dest = self._last_valid_dest or "Documents"
+
+        typed_name = self.edit_name.text().strip() if self.edit_name is not None else self._rule.name
+        return {
+            "name": typed_name,
+            "destination": dest,
+            "extensions": ordered_exts,
+            "keywords": words,
+            "domains": domains,
+            "exclude_keywords": excl,
+            "content_keywords": pdf_kws,
+            "rename_template": ren,
+            "auto_unzip": self._auto_unzip,
+        }
+
+    def has_valid_cues(self) -> bool:
+        f = self.current_fields()
+        return rule_has_any_cue(
+            extensions=f["extensions"],
+            keywords=f["keywords"],
+            domains=f["domains"],
+            content_keywords=f["content_keywords"],
+            regex_pattern=self._rule.regex_pattern,
+            min_size_mb=self._rule.min_size_mb,
+            max_size_mb=self._rule.max_size_mb,
+            min_age_days=self._rule.min_age_days,
+        )
+
+    def build_rule(self) -> Rule:
+        f = self.current_fields()
+        final_name = f["name"] or suggest_rule_name(
+            f["extensions"],
+            f["keywords"],
+            f["domains"],
+            f["destination"],
+        )
+        new_id = self._rule.id or f"rule_{abs(hash((final_name, f['destination'], tuple(f['keywords']), tuple(f['domains']), tuple(f['extensions'])))) % 10_000_000}"
+        return Rule(
+            id=new_id,
+            name=final_name,
+            destination=f["destination"],
+            keywords=f["keywords"],
+            domains=f["domains"],
+            extensions=f["extensions"],
+            content_keywords=f["content_keywords"],
+            exclude_keywords=f["exclude_keywords"],
+            regex_pattern=self._rule.regex_pattern,
+            match_mode=self._rule.match_mode,
+            min_size_mb=self._rule.min_size_mb,
+            max_size_mb=self._rule.max_size_mb,
+            min_age_days=self._rule.min_age_days,
+            rename_template=f["rename_template"],
+            auto_unzip=f["auto_unzip"],
+            enabled=self._rule.enabled,
+        )
+
+    def _sync_live_preview(self, *, emit_draft: bool = True) -> None:
+        f = self.current_fields()
+        has_cue = self.has_valid_cues()
+        sentence = describe_rule_plain_english(
+            extensions=f["extensions"],
+            keywords=f["keywords"],
+            domains=f["domains"],
+            destination=f["destination"],
+            match_mode=self._rule.match_mode,
+            exclude_keywords=f["exclude_keywords"],
+            content_keywords=f["content_keywords"],
+            regex_pattern=self._rule.regex_pattern,
+            min_size_mb=self._rule.min_size_mb,
+            max_size_mb=self._rule.max_size_mb,
+            min_age_days=self._rule.min_age_days,
+        )
+        self.lbl_preview_sentence.setText(sentence)
+        if has_cue:
+            self.preview_card.setStyleSheet(
+                "QFrame#RuleLivePreviewCard { background-color: rgba(10, 132, 255, 0.10); "
+                "border: 1px solid rgba(10, 132, 255, 0.34); border-radius: 8px; }"
+            )
+            self.lbl_preview_dot.setStyleSheet("color: #3B82F6; font-size: 10px; border: none; background: transparent;")
+            self.lbl_preview_sentence.setStyleSheet("color: #F5F5F7; font-size: 11.5px; border: none; background: transparent;")
+        else:
+            self.preview_card.setStyleSheet(
+                "QFrame#RuleLivePreviewCard { background-color: rgba(255, 159, 10, 0.09); "
+                "border: 1px solid rgba(255, 159, 10, 0.32); border-radius: 8px; }"
+            )
+            self.lbl_preview_dot.setStyleSheet("color: #FF9F0A; font-size: 10px; border: none; background: transparent;")
+            self.lbl_preview_sentence.setStyleSheet("color: #FFD60A; font-size: 11.5px; border: none; background: transparent;")
+
+        if self._is_draft and hasattr(self, "btn_save_draft"):
+            self.btn_save_draft.setEnabled(has_cue)
+            if has_cue:
+                leaf = f["destination"].replace("/", "\\").strip("\\").split("\\")[-1] or "Downloads"
+                short_leaf = (leaf[:20] + "…") if len(leaf) > 21 else leaf
+                self.btn_save_draft.setText(f"Save Rule → {short_leaf}")
+            else:
+                self.btn_save_draft.setText("Pick a file type, word, or website")
+            if self.edit_name is not None and not self.edit_name.text().strip() and has_cue:
+                auto_title = suggest_rule_name(f["extensions"], f["keywords"], f["domains"], f["destination"])
+                self.edit_name.setPlaceholderText(f"Auto-named: {auto_title}")
+            elif self.edit_name is not None and not has_cue:
+                self.edit_name.setPlaceholderText("Rule name (optional — auto-named from your cues)")
+
+        if emit_draft and self._is_draft:
+            self.draft_updated.emit(f)
+
+    def _on_chip_toggled(self, btn: QPushButton, chip_exts: tuple[str, ...], checked: bool) -> None:
+        if checked:
+            for e in chip_exts:
+                self._chip_exts.add(e)
+        else:
+            for e in chip_exts:
+                self._chip_exts.discard(e)
+        self._style_chip_btn(btn, checked)
+        self._sync_live_preview(emit_draft=True)
+        self._commit_if_edit_mode()
+
+    def _on_custom_ext_finished(self) -> None:
+        norm = normalize_ext_tokens(self.edit_custom_ext.text())
+        extra = [e for e in norm if e not in _CHIP_EXT_SET]
+        for chip_label, chip_exts in QUICK_FILE_TYPE_CHIPS:
+            if any(e in norm for e in chip_exts):
+                for e in chip_exts:
+                    self._chip_exts.add(e)
+                btn = self._chip_buttons.get(chip_label)
+                if btn is not None:
+                    btn.setChecked(True)
+                    self._style_chip_btn(btn, True)
+        self._suppress = True
+        try:
+            self.edit_custom_ext.setText(", ".join(extra))
+        finally:
+            self._suppress = False
+        self._sync_live_preview(emit_draft=True)
+        self._commit_if_edit_mode()
+
+    def _on_words_finished(self) -> None:
+        words = normalize_word_tokens(self.edit_words.text())
+        self._suppress = True
+        try:
+            self.edit_words.setText(", ".join(words))
+        finally:
+            self._suppress = False
+        self._sync_live_preview(emit_draft=True)
+        self._commit_if_edit_mode()
+
+    def _on_domains_finished(self) -> None:
+        doms = normalize_domain_tokens(self.edit_domains.text())
+        self._suppress = True
+        try:
+            self.edit_domains.setText(", ".join(doms))
+        finally:
+            self._suppress = False
+        self._sync_live_preview(emit_draft=True)
+        self._commit_if_edit_mode()
+
+    def _on_dest_combo_changed(self) -> None:
+        if self._suppress:
+            return
+        data = str(self.cmb_dest.currentData() or "")
+        if data == NEW_FOLDER_SENTINEL:
+            self._suppress = True
+            try:
+                prev_idx = self.cmb_dest.findData(self._last_valid_dest)
+                if prev_idx >= 0:
+                    self.cmb_dest.setCurrentIndex(prev_idx)
+            finally:
+                self._suppress = False
+            self.new_folder_requested.emit(self._current_parent_hint())
+            return
+        if data:
+            self._last_valid_dest = data
+            self._update_port_badge()
+            self._sync_live_preview(emit_draft=True)
+            self._commit_if_edit_mode()
+
+    def _on_live_inputs_changed(self) -> None:
+        if self._suppress:
+            return
+        self._sync_live_preview(emit_draft=True)
+
+    def _reveal_excl(self) -> None:
+        self.excl_wrap.setVisible(True)
+        self.btn_add_excl.setVisible(False)
+        self.edit_excl.setFocus()
+
+    def _reveal_pdf(self) -> None:
+        self.pdf_wrap.setVisible(True)
+        self.btn_add_pdf.setVisible(False)
+        self.edit_pdf.setFocus()
+
+    def _reveal_rename(self) -> None:
+        self.ren_box.setVisible(True)
+        self.btn_add_rename.setVisible(False)
+        if not self.edit_rename.text().strip():
+            self.edit_rename.setText("{year}-{month}_{stem}{ext}")
+        self._refresh_rename_preview()
+        self.edit_rename.setFocus()
+        self._commit_if_edit_mode()
+
+    def _append_rename_token(self, tok: str) -> None:
+        cur = self.edit_rename.text().strip()
+        new_tpl = f"{cur}_{tok}" if cur else f"{tok}_{{stem}}{{ext}}"
+        self.edit_rename.setText(new_tpl)
+        self._refresh_rename_preview()
+        self._commit_if_edit_mode()
+
+    def _on_rename_changed(self) -> None:
+        self._refresh_rename_preview()
+        self._on_live_inputs_changed()
+
+    def _refresh_rename_preview(self) -> None:
+        tpl = self.edit_rename.text().strip()
+        if tpl:
+            preview_name = apply_rename_template(tpl, self._sample_filename)
+            self.lbl_rename_prev.setText(f"Example: {self._sample_filename} → {preview_name}")
+        else:
+            self.lbl_rename_prev.setText("")
+
+    def _toggle_unzip(self) -> None:
+        self._auto_unzip = not self._auto_unzip
+        self.btn_unzip.setText("✓ Auto-unzip" if self._auto_unzip else "+ Auto-unzip")
+        col = "#0A84FF" if self._auto_unzip else "#8E8E93"
+        self.btn_unzip.setStyleSheet(
+            f"QPushButton {{ border: none; background: transparent; color: {col}; font-size: 11px; padding: 2px 3px; }}"
+            "QPushButton:hover { color: #F5F5F7; }"
+        )
+        self._sync_live_preview(emit_draft=True)
+        self._commit_if_edit_mode()
+
+    def flush_and_collect_updates(self) -> dict[str, Any] | None:
+        """Normalize all text inputs in-place and return rule field updates if cues are valid."""
+        norm_ext = normalize_ext_tokens(self.edit_custom_ext.text())
+        extra_ext = [e for e in norm_ext if e not in _CHIP_EXT_SET]
+        for chip_label, chip_exts in QUICK_FILE_TYPE_CHIPS:
+            if any(e in norm_ext for e in chip_exts):
+                for e in chip_exts:
+                    self._chip_exts.add(e)
+                btn = self._chip_buttons.get(chip_label)
+                if btn is not None:
+                    btn.setChecked(True)
+                    self._style_chip_btn(btn, True)
+        words = normalize_word_tokens(self.edit_words.text())
+        doms = normalize_domain_tokens(self.edit_domains.text())
+        self._suppress = True
+        try:
+            self.edit_custom_ext.setText(", ".join(extra_ext))
+            self.edit_words.setText(", ".join(words))
+            self.edit_domains.setText(", ".join(doms))
+        finally:
+            self._suppress = False
+        self._sync_live_preview(emit_draft=self._is_draft)
+        if not self.has_valid_cues():
+            return None
+        f = self.current_fields()
+        return {
+            "destination": f["destination"],
+            "extensions": f["extensions"],
+            "keywords": f["keywords"],
+            "domains": f["domains"],
+            "exclude_keywords": f["exclude_keywords"],
+            "content_keywords": f["content_keywords"],
+            "rename_template": f["rename_template"],
+            "auto_unzip": f["auto_unzip"],
+        }
+
+    def _commit_if_edit_mode(self) -> None:
+        if self._is_draft or self._suppress:
+            return
+        if not self.has_valid_cues():
+            return
+        f = self.current_fields()
+        updates = {
+            "destination": f["destination"],
+            "extensions": f["extensions"],
+            "keywords": f["keywords"],
+            "domains": f["domains"],
+            "exclude_keywords": f["exclude_keywords"],
+            "content_keywords": f["content_keywords"],
+            "rename_template": f["rename_template"],
+            "auto_unzip": f["auto_unzip"],
+        }
+        self.fields_committed.emit(updates)
+
+    def _on_save_draft_clicked(self) -> None:
+        if not self.has_valid_cues():
+            return
+        self.draft_saved.emit(self.build_rule())
+
+
 class _RuleRowWidget(QFrame):
     """Collapsible, drag-reorderable Step 2 rule row with flush-right port badge."""
 
@@ -133,8 +1077,11 @@ class _RuleRowWidget(QFrame):
     flow_drag_started = Signal(object, str)  # (port_widget, color)
     flow_drag_finished = Signal()
     rule_updated = Signal(str, dict)
+    rule_inline_edited = Signal(str, dict)
+    collapse_with_updates = Signal(str, dict)
     rule_deleted = Signal(str)
     open_full_editor = Signal(str)
+    new_folder_requested = Signal(str)
 
     def __init__(
         self,
@@ -154,6 +1101,7 @@ class _RuleRowWidget(QFrame):
         self.rule = rule
         self._is_expanded = is_expanded
         self._drag_start = None
+        self.composer: _GuidedRuleComposerWidget | None = None
         self.setAcceptDrops(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -195,12 +1143,14 @@ class _RuleRowWidget(QFrame):
 
         if is_expanded:
             self.edit_title = QLineEdit(rule.name)
+            self.edit_title.setPlaceholderText("Rule name")
+            self.edit_title.setToolTip("Edit sorting rule name")
             self.edit_title.setStyleSheet(
                 "background: transparent; border: none; border-bottom: 1px solid #3A3A3E; "
                 "color: #F5F5F7; font-weight: 600; font-size: 12.5px; padding: 1px 0;"
             )
             self.edit_title.editingFinished.connect(
-                lambda: self.rule_updated.emit(rule.id, {"name": self.edit_title.text().strip() or rule.name})
+                lambda: self.rule_inline_edited.emit(rule.id, {"name": self.edit_title.text().strip() or rule.name})
             )
             mid.addWidget(self.edit_title)
         else:
@@ -239,7 +1189,6 @@ class _RuleRowWidget(QFrame):
             lbl_bl = QLabel(f'Skipped ("{blocked_word}" excluded)')
             lbl_bl.setStyleSheet("color: #FF9F0A; font-size: 11px;")
             sub_row.addWidget(lbl_bl)
-        sub_row.addStretch(1)
         mid.addLayout(sub_row)
         top.addLayout(mid, 1)
 
@@ -268,154 +1217,38 @@ class _RuleRowWidget(QFrame):
 
         root.addLayout(top)
 
-        # Expanded inline WHEN / THEN composer
+        # Expanded inline Guided Rule Composer
         if is_expanded:
-            comp = QFrame()
-            comp.setStyleSheet("QFrame { border-top: 1px solid #262629; }")
-            cl = QVBoxLayout(comp)
-            cl.setContentsMargins(0, 8, 0, 0)
-            cl.setSpacing(8)
-
-            grid_row = QHBoxLayout()
-            grid_row.setSpacing(8)
-
-            when_col = QVBoxLayout()
-            when_col.setSpacing(3)
-            lbl_w = QLabel("WHEN filename or site matches")
-            lbl_w.setStyleSheet("color: #8E8E93; font-size: 11px;")
-            raw_match = ", ".join(list(rule.domains) + list(rule.keywords))
-            self.edit_match = QLineEdit(raw_match)
-            self.edit_match.setPlaceholderText("invoice, receipt, stripe.com")
-            self.edit_match.editingFinished.connect(self._commit_match_tokens)
-            when_col.addWidget(lbl_w)
-            when_col.addWidget(self.edit_match)
-            grid_row.addLayout(when_col, 1)
-
-            then_col = QVBoxLayout()
-            then_col.setSpacing(3)
-            lbl_t = QLabel("THEN move to (or click folder →)")
-            lbl_t.setStyleSheet("color: #8E8E93; font-size: 11px;")
-            self.cmb_dest = QComboBox()
-            choices = list(folder_choices or [])
-            norm_dest = rule.destination.replace("/", "\\").strip("\\")
-            if norm_dest and norm_dest not in choices:
-                choices.insert(0, norm_dest)
-            for ch in choices:
-                self.cmb_dest.addItem(ch.replace("\\", " › "), ch)
-            idx = self.cmb_dest.findData(norm_dest)
-            if idx >= 0:
-                self.cmb_dest.setCurrentIndex(idx)
-            self.cmb_dest.currentIndexChanged.connect(
-                lambda: self.rule_updated.emit(rule.id, {"destination": self.cmb_dest.currentData()})
+            self.composer = _GuidedRuleComposerWidget(
+                rule,
+                is_draft=False,
+                folder_choices=folder_choices,
+                sample_filename=sample_filename,
+                parent=self,
             )
-            then_col.addWidget(lbl_t)
-            then_col.addWidget(self.cmb_dest)
-            grid_row.addLayout(then_col, 1)
-            cl.addLayout(grid_row)
+            self.edit_match = self.composer.edit_words
+            self.cmb_dest = self.composer.cmb_dest
+            self.composer.fields_committed.connect(lambda updates: self.rule_inline_edited.emit(rule.id, updates))
+            self.composer.new_folder_requested.connect(self.new_folder_requested.emit)
+            self.composer.open_full_editor.connect(lambda: self.open_full_editor.emit(rule.id))
+            self.composer.delete_requested.connect(lambda: self.rule_deleted.emit(rule.id))
+            self.composer.collapse_requested.connect(self._flush_and_collapse)
+            root.addWidget(self.composer)
 
-            if rule.exclude_keywords:
-                ex_row = QVBoxLayout()
-                ex_row.setSpacing(3)
-                lbl_ex = QLabel("Exclude words (skip if filename contains)")
-                lbl_ex.setStyleSheet("color: #8E8E93; font-size: 11px;")
-                self.edit_excl = QLineEdit(", ".join(rule.exclude_keywords))
-                self.edit_excl.editingFinished.connect(
-                    lambda: self.rule_updated.emit(
-                        rule.id,
-                        {"exclude_keywords": [s.strip() for s in self.edit_excl.text().split(",") if s.strip()]},
-                    )
-                )
-                ex_row.addWidget(lbl_ex)
-                ex_row.addWidget(self.edit_excl)
-                cl.addLayout(ex_row)
+    def collect_pending_updates(self) -> dict[str, Any]:
+        updates: dict[str, Any] = {}
+        if self.composer is not None:
+            comp_updates = self.composer.flush_and_collect_updates()
+            if comp_updates is not None:
+                updates.update(comp_updates)
+        if hasattr(self, "edit_title"):
+            clean_title = self.edit_title.text().strip()
+            if clean_title:
+                updates["name"] = clean_title
+        return updates
 
-            if rule.content_keywords:
-                pdf_row = QVBoxLayout()
-                pdf_row.setSpacing(3)
-                lbl_pdf = QLabel("Inside PDF text contains")
-                lbl_pdf.setStyleSheet("color: #8E8E93; font-size: 11px;")
-                self.edit_pdf = QLineEdit(", ".join(rule.content_keywords))
-                self.edit_pdf.editingFinished.connect(
-                    lambda: self.rule_updated.emit(
-                        rule.id,
-                        {"content_keywords": [s.strip() for s in self.edit_pdf.text().split(",") if s.strip()]},
-                    )
-                )
-                pdf_row.addWidget(lbl_pdf)
-                pdf_row.addWidget(self.edit_pdf)
-                cl.addLayout(pdf_row)
-
-            if rule.rename_template:
-                ren_box = QFrame()
-                ren_box.setStyleSheet("QFrame { background-color: #111113; border: 1px solid #2C2C2E; border-radius: 8px; }")
-                rl = QVBoxLayout(ren_box)
-                rl.setContentsMargins(8, 6, 8, 6)
-                rl.setSpacing(4)
-                ren_hdr = QHBoxLayout()
-                lbl_ren = QLabel("Rename template")
-                lbl_ren.setStyleSheet("color: #8E8E93; font-size: 11px; border: none;")
-                ren_hdr.addWidget(lbl_ren)
-                ren_hdr.addStretch(1)
-                for tok in ("{year}", "{month}", "{stem}", "{host}"):
-                    tb = QPushButton(tok)
-                    tb.setStyleSheet(
-                        "padding: 1px 6px; font-size: 10.5px; border-radius: 5px; "
-                        "background-color: #1C1C1E; border: 1px solid #2C2C2E; color: #AEAEB2;"
-                    )
-                    tb.clicked.connect(
-                        lambda _=False, t=tok: self.rule_updated.emit(
-                            rule.id,
-                            {"rename_template": f"{rule.rename_template}_{t}" if rule.rename_template else f"{t}_{{stem}}{{ext}}"},
-                        )
-                    )
-                    ren_hdr.addWidget(tb)
-                rl.addLayout(ren_hdr)
-                self.edit_rename = QLineEdit(rule.rename_template)
-                self.edit_rename.editingFinished.connect(
-                    lambda: self.rule_updated.emit(rule.id, {"rename_template": self.edit_rename.text().strip()})
-                )
-                rl.addWidget(self.edit_rename)
-                preview_name = apply_rename_template(rule.rename_template, sample_filename)
-                lbl_prev = QLabel(f"Example: {sample_filename} → {preview_name}")
-                lbl_prev.setStyleSheet("color: #8E8E93; font-size: 11px; border: none;")
-                rl.addWidget(lbl_prev)
-                cl.addWidget(ren_box)
-
-            # Progressive action bar
-            act_bar = QHBoxLayout()
-            act_bar.setSpacing(8)
-            if not rule.exclude_keywords:
-                b = self._text_action_btn("+ Exclude words")
-                b.clicked.connect(lambda: self.rule_updated.emit(rule.id, {"exclude_keywords": ["draft"]}))
-                act_bar.addWidget(b)
-            if not rule.content_keywords:
-                b = self._text_action_btn("+ PDF text")
-                b.clicked.connect(lambda: self.rule_updated.emit(rule.id, {"content_keywords": ["total due"]}))
-                act_bar.addWidget(b)
-            if not rule.rename_template:
-                b = self._text_action_btn("+ Rename")
-                b.clicked.connect(lambda: self.rule_updated.emit(rule.id, {"rename_template": "{year}-{month}_{stem}{ext}"}))
-                act_bar.addWidget(b)
-
-            btn_unzip = self._text_action_btn("✓ Auto-unzip .zip" if rule.auto_unzip else "+ Auto-unzip", active=rule.auto_unzip)
-            btn_unzip.clicked.connect(lambda: self.rule_updated.emit(rule.id, {"auto_unzip": not rule.auto_unzip}))
-            act_bar.addWidget(btn_unzip)
-
-            btn_full = self._text_action_btn("More options...")
-            btn_full.clicked.connect(lambda: self.open_full_editor.emit(rule.id))
-            act_bar.addWidget(btn_full)
-
-            act_bar.addStretch(1)
-            btn_del = QPushButton("Delete")
-            btn_del.setStyleSheet("border: none; background: transparent; color: #FF453A; font-size: 11.5px;")
-            btn_del.clicked.connect(lambda: self.rule_deleted.emit(rule.id))
-            btn_done = QPushButton("Done")
-            btn_done.setStyleSheet("padding: 3px 10px; font-size: 11.5px;")
-            btn_done.clicked.connect(lambda: self.expand_requested.emit(rule.id))
-            act_bar.addWidget(btn_del)
-            act_bar.addWidget(btn_done)
-            cl.addLayout(act_bar)
-            root.addWidget(comp)
+    def _flush_and_collapse(self) -> None:
+        self.collapse_with_updates.emit(self.rule.id, self.collect_pending_updates())
 
     @staticmethod
     def _micro_chip(text: str, *, warn: bool = False) -> QLabel:
@@ -427,23 +1260,6 @@ class _RuleRowWidget(QFrame):
             "border-radius: 5px; padding: 0px 5px; font-size: 10.5px;"
         )
         return lbl
-
-    @staticmethod
-    def _text_action_btn(text: str, *, active: bool = False) -> QPushButton:
-        btn = QPushButton(text)
-        col = "#0A84FF" if active else "#8E8E93"
-        btn.setStyleSheet(
-            f"QPushButton {{ border: none; background: transparent; color: {col}; font-size: 11.5px; padding: 2px 4px; }}"
-            "QPushButton:hover { color: #F5F5F7; }"
-        )
-        return btn
-
-    def _commit_match_tokens(self) -> None:
-        parts = [s.strip().lower() for s in self.edit_match.text().split(",") if s.strip()]
-        domains = [p for p in parts if "." in p and not p.startswith(".")]
-        exts = [p for p in parts if p.startswith(".")]
-        words = [p for p in parts if p not in domains and p not in exts]
-        self.rule_updated.emit(self.rule.id, {"domains": domains, "keywords": words, "extensions": exts})
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -479,7 +1295,10 @@ class _RuleRowWidget(QFrame):
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
             if (event.position().toPoint() - self._drag_start).manhattanLength() < 10:
-                self.expand_requested.emit(self.rule.id)
+                if self._is_expanded:
+                    self._flush_and_collapse()
+                else:
+                    self.expand_requested.emit(self.rule.id)
         self._drag_start = None
         super().mouseReleaseEvent(event)
 
@@ -721,6 +1540,7 @@ class SpinePanel(QScrollArea):
     """Left-hand 3-step Sorting Flow spine (Hold & Group -> Rules -> File Types & AI)."""
 
     config_mutated = Signal(object)  # emits new Config
+    config_mutated_inline = Signal(object)  # persists Config without destroying active expanded composer row
     rule_port_hovered = Signal(object, str)  # (port_widget, destination_folder)
     port_hover_left = Signal()
     flow_drag_started = Signal(object, str)  # (port_widget, color)
@@ -729,6 +1549,7 @@ class SpinePanel(QScrollArea):
     bucket_reset = Signal(str)  # bucket_id
     teach_committed = Signal(object, bool, object)  # (Rule, also_move_now, source_path)
     teach_cancelled = Signal()
+    draft_target_changed = Signal(str)  # live destination change inside draft composer
     action_requested = Signal(str, str)  # (action, arg)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -748,11 +1569,15 @@ class SpinePanel(QScrollArea):
         self._expanded_rule_id: str | None = None
         self._teach_draft: dict | None = None
         self._teach_cue_checks: list[tuple[str, str, bool]] = []
+        self._rule_draft: dict | None = None
+        self._draft_composer: _GuidedRuleComposerWidget | None = None
+        self._last_folder_choices: list[str] = []
         self._rule_ports: dict[str, QWidget] = {}
         self._type_ports: dict[str, QWidget] = {}
         self._hold_port: QWidget | None = None
         self._ai_port: QWidget | None = None
         self._teach_port: QWidget | None = None
+        self._rule_draft_port: QWidget | None = None
 
         self.body = _SpineBodyWidget()
         self.body.setMinimumWidth(0)
@@ -821,6 +1646,10 @@ class SpinePanel(QScrollArea):
         row.setSpacing(10)
         row.setAlignment(Qt.AlignmentFlag.AlignTop)
 
+        badge_wrap = QWidget()
+        bw_l = QVBoxLayout(badge_wrap)
+        bw_l.setContentsMargins(0, 8, 0, 0)
+        bw_l.setSpacing(0)
         badge = QLabel(num)
         badge.setFixedSize(scaled_px(26), scaled_px(26))
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -828,7 +1657,8 @@ class SpinePanel(QScrollArea):
             "background-color: #24272E; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 13px; "
             "color: #F5F5F7; font-size: 12px; font-weight: 700;"
         )
-        row.addWidget(badge)
+        bw_l.addWidget(badge)
+        row.addWidget(badge_wrap, 0, Qt.AlignmentFlag.AlignTop)
 
         card = QFrame()
         card.setObjectName("SurfaceCard")
@@ -892,6 +1722,7 @@ class SpinePanel(QScrollArea):
         self.spin_hold_days = QSpinBox()
         self.spin_hold_days.setRange(1, 30)
         self.spin_hold_days.setSuffix("d")
+        self.spin_hold_days.setToolTip("Number of days to hold .3mf files at the top of Downloads")
         self.spin_hold_days.setFixedWidth(scaled_px(76))
         self.spin_hold_days.valueChanged.connect(self._on_hold_3mf_changed)
         hrow.addWidget(self.spin_hold_days)
@@ -931,6 +1762,7 @@ class SpinePanel(QScrollArea):
         pl.addLayout(pinfo, 1)
         btn_detect = InteractiveRibbonBtn("Detect Projects", make_vector_icon("search", "#F5F5F7", 13))
         btn_detect.setObjectName("GhostButton")
+        btn_detect.setToolTip("Scan Downloads for multi-file project bursts")
         btn_detect.clicked.connect(lambda: self.action_requested.emit("detect_projects", ""))
         pl.addWidget(btn_detect)
         cl.addWidget(self.proj_row_frame)
@@ -941,11 +1773,13 @@ class SpinePanel(QScrollArea):
 
         # + New rule ▾ split controls + ⋯ overflow
         self.btn_new_rule = InteractiveRibbonBtn("New rule", make_vector_icon("plus", "#F5F5F7", 13))
+        self.btn_new_rule.setToolTip("Open the guided rule composer to create a new sorting rule")
         self.btn_new_rule.setStyleSheet("padding: 4px 9px;")
         self.btn_new_rule.clicked.connect(self._on_add_blank_rule)
 
         self.btn_rule_packs = InteractiveRibbonBtn("Packs ▾")
         self.btn_rule_packs.setObjectName("GhostButton")
+        self.btn_rule_packs.setToolTip("Add ready-made starter rule packs (School, Finance, 3D Printing, and more)")
         self.btn_rule_packs.setStyleSheet("padding: 4px 8px;")
         self.menu_packs = QMenu(self.btn_rule_packs)
         for key, (label, desc) in STARTER_PACK_LABELS.items():
@@ -957,10 +1791,11 @@ class SpinePanel(QScrollArea):
             )
         )
 
-        self.btn_step2_more = InteractiveRibbonBtn("⋯")
+        self.btn_step2_more = InteractiveRibbonBtn("•••")
         self.btn_step2_more.setObjectName("GhostButton")
-        self.btn_step2_more.setStyleSheet("padding: 4px 6px; min-width: 0px;")
-        self.btn_step2_more.setFixedWidth(28)
+        self.btn_step2_more.setAccessibleName("More rule options")
+        self.btn_step2_more.setToolTip("More rule options: Smart Order, Carry Over v2.8 / Setup...")
+        self.btn_step2_more.setStyleSheet("padding: 4px 7px; font-size: 10px; min-width: 0px;")
         self.menu_step2 = QMenu(self.btn_step2_more)
         self.menu_step2.addAction("Smart Order (Most Specific First)", lambda: self.action_requested.emit("smart_order", ""))
         self.menu_step2.addAction("Carry Over v2.8 / Setup...", lambda: self.action_requested.emit("carry_over", ""))
@@ -988,9 +1823,11 @@ class SpinePanel(QScrollArea):
         self.lbl_sugg.setWordWrap(True)
         btn_accept = QPushButton("Review & Add")
         btn_accept.setObjectName("PrimaryButton")
+        btn_accept.setToolTip("Review and add this suggested rule")
         btn_accept.setStyleSheet("padding: 3px 10px; font-size: 11.5px;")
         btn_accept.clicked.connect(lambda: self.action_requested.emit("accept_suggestion", ""))
         btn_dismiss = QPushButton("Dismiss")
+        btn_dismiss.setToolTip("Dismiss this rule suggestion")
         btn_dismiss.setStyleSheet("padding: 3px 8px; font-size: 11.5px;")
         btn_dismiss.clicked.connect(lambda: self.action_requested.emit("dismiss_suggestion", ""))
         sb.addWidget(self.lbl_sugg, 1)
@@ -1009,6 +1846,14 @@ class SpinePanel(QScrollArea):
         self.teach_layout.setSpacing(7)
         cl.addWidget(self.teach_card)
 
+        # Guided New Rule Draft Host (0px when inactive; never saves incomplete rules to config)
+        self.rule_draft_host = QWidget()
+        self.rule_draft_host.setVisible(False)
+        self.rule_draft_layout = QVBoxLayout(self.rule_draft_host)
+        self.rule_draft_layout.setContentsMargins(0, 0, 0, 0)
+        self.rule_draft_layout.setSpacing(0)
+        cl.addWidget(self.rule_draft_host)
+
         self.rules_host = QWidget()
         self.rules_layout = QVBoxLayout(self.rules_host)
         self.rules_layout.setContentsMargins(0, 0, 0, 0)
@@ -1017,6 +1862,7 @@ class SpinePanel(QScrollArea):
 
         self.btn_empty_folder_cta = QPushButton("")
         self.btn_empty_folder_cta.setVisible(False)
+        self.btn_empty_folder_cta.setToolTip("Create a custom sorting rule that routes matching files into this folder")
         self.btn_empty_folder_cta.setStyleSheet(
             "padding: 7px 12px; border: 1px dashed #3A3A3E; border-radius: 9px; "
             "color: #0A84FF; background: transparent; font-weight: 600;"
@@ -1055,6 +1901,7 @@ class SpinePanel(QScrollArea):
         lbl_ai = QLabel("Smart fallback (100% offline AI) · classifies unknown files")
         lbl_ai.setStyleSheet("color: #F5F5F7; font-size: 12px; border: none;")
         self.btn_ai_insights = QPushButton("Insights...")
+        self.btn_ai_insights.setToolTip("Inspect local on-device AI predictions and learned patterns")
         self.btn_ai_insights.setStyleSheet(
             "border: none; background: transparent; color: #0A84FF; font-size: 12px; font-weight: 600;"
         )
@@ -1072,6 +1919,8 @@ class SpinePanel(QScrollArea):
         lbl_fb = QLabel("If still unrecognized")
         lbl_fb.setStyleSheet("color: #8E8E93; font-size: 12px; border: none;")
         self.cmb_fallback = QComboBox()
+        self.cmb_fallback.setToolTip("Choose how unrecognized file extensions are handled")
+        self.cmb_fallback.setAccessibleName("Unrecognized file handling")
         self.cmb_fallback.addItem("Move to Downloads › Other", "other")
         self.cmb_fallback.addItem("Leave in Downloads", "leave")
         self.cmb_fallback.currentIndexChanged.connect(self._on_step3_toggled)
@@ -1081,16 +1930,143 @@ class SpinePanel(QScrollArea):
 
         cl.addWidget(footer)
 
+    # ------------------------------------------------------------------
+    # Rule Draft & Active Editor Helpers
+    # ------------------------------------------------------------------
     def expanded_rule_id(self) -> str | None:
         return self._expanded_rule_id
 
-    def set_expanded_rule_dest(self, folder_path: str) -> bool:
-        if not self._expanded_rule_id or self._config is None:
+    def has_rule_draft(self) -> bool:
+        return self._rule_draft is not None
+
+    def start_rule_draft(
+        self,
+        destination: str = "Documents",
+        *,
+        name: str = "",
+        extensions: list[str] | None = None,
+        keywords: list[str] | None = None,
+        domains: list[str] | None = None,
+    ) -> None:
+        """Open a clean inline Guided Rule Composer draft without mutating ``config.rules``."""
+        self.clear_teach_draft()
+        self._expanded_rule_id = None
+        norm_dest = destination.replace("/", "\\").strip("\\") or "Documents"
+        self._rule_draft = {
+            "name": name,
+            "destination": norm_dest,
+            "extensions": list(extensions or []),
+            "keywords": list(keywords or []),
+            "domains": list(domains or []),
+            "exclude_keywords": [],
+            "content_keywords": [],
+            "rename_template": "",
+            "auto_unzip": False,
+        }
+        self._mount_rule_draft_widget()
+
+    def clear_rule_draft(self) -> None:
+        self._rule_draft = None
+        self._draft_composer = None
+        self._rule_draft_port = None
+        while self.rule_draft_layout.count():
+            item = self.rule_draft_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.rule_draft_host.setVisible(False)
+
+    def draft_target_folder(self) -> str | None:
+        if self._teach_draft is not None:
+            return str(self._teach_draft.get("target_folder") or "")
+        if self._rule_draft is not None:
+            return str(self._rule_draft.get("destination") or "")
+        return None
+
+    def set_active_rule_destination(self, folder_path: str, folder_choices: list[str] | None = None) -> bool:
+        """Set destination on the open New Rule draft or expanded rule row."""
+        norm = folder_path.replace("/", "\\").strip("\\")
+        if not norm:
             return False
-        self._update_rule_fields(self._expanded_rule_id, {"destination": folder_path})
-        return True
+        if folder_choices is not None:
+            self._last_folder_choices = list(folder_choices)
+        if self._rule_draft is not None and self._draft_composer is not None:
+            self._rule_draft["destination"] = norm
+            self._draft_composer.set_destination(norm, self._last_folder_choices or None)
+            self.draft_target_changed.emit(norm)
+            return True
+        if self._expanded_rule_id and self._config is not None:
+            self._update_rule_fields(self._expanded_rule_id, {"destination": norm})
+            return True
+        return False
+
+    def set_expanded_rule_dest(self, folder_path: str) -> bool:
+        return self.set_active_rule_destination(folder_path)
+
+    def _mount_rule_draft_widget(self) -> None:
+        while self.rule_draft_layout.count():
+            item = self.rule_draft_layout.takeAt(0)
+            w = item.widget() if item is not None else None
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        self._draft_composer = None
+        self._rule_draft_port = None
+        if self._rule_draft is None:
+            self.rule_draft_host.setVisible(False)
+            return
+
+        draft_rule = Rule(
+            id="",
+            name=str(self._rule_draft.get("name") or ""),
+            destination=str(self._rule_draft.get("destination") or "Documents"),
+            extensions=list(self._rule_draft.get("extensions") or []),
+            keywords=list(self._rule_draft.get("keywords") or []),
+            domains=list(self._rule_draft.get("domains") or []),
+            exclude_keywords=list(self._rule_draft.get("exclude_keywords") or []),
+            content_keywords=list(self._rule_draft.get("content_keywords") or []),
+            rename_template=str(self._rule_draft.get("rename_template") or ""),
+            auto_unzip=bool(self._rule_draft.get("auto_unzip")),
+            enabled=True,
+        )
+        comp = _GuidedRuleComposerWidget(
+            draft_rule,
+            is_draft=True,
+            folder_choices=self._last_folder_choices,
+            parent=self.rule_draft_host,
+        )
+        comp.draft_updated.connect(self._on_draft_composer_updated)
+        comp.draft_saved.connect(self._on_draft_composer_saved)
+        comp.draft_cancelled.connect(self._on_draft_composer_cancelled)
+        comp.new_folder_requested.connect(lambda hint: self.action_requested.emit("new_folder_for_rule", hint))
+        self._draft_composer = comp
+        self._rule_draft_port = comp.port_badge
+        self.rule_draft_layout.addWidget(comp)
+        self.rule_draft_host.setVisible(True)
+
+    def _on_draft_composer_updated(self, fields: dict) -> None:
+        if self._rule_draft is None:
+            return
+        prev_dest = self._rule_draft.get("destination")
+        self._rule_draft.update(fields)
+        new_dest = fields.get("destination")
+        if new_dest and new_dest != prev_dest:
+            self.draft_target_changed.emit(str(new_dest))
+
+    def _on_draft_composer_saved(self, new_rule: Rule) -> None:
+        if self._config is None:
+            return
+        cfg = copy.deepcopy(self._config)
+        cfg.rules.insert(0, new_rule)
+        self.clear_rule_draft()
+        self.config_mutated.emit(cfg)
+
+    def _on_draft_composer_cancelled(self) -> None:
+        self.clear_rule_draft()
+        self.action_requested.emit("refresh_flow", "")
 
     def start_teach_draft(self, path: Path, target_folder: str, source_url: str) -> None:
+        self.clear_rule_draft()
         self._expanded_rule_id = None
         cues = infer_teach_cues(path.name, source_url)
         items: list[tuple[str, str, bool]] = []
@@ -1130,6 +2106,8 @@ class SpinePanel(QScrollArea):
     def port_for_trace(self, trace: PipelineTrace) -> tuple[QWidget | None, str]:
         if self._teach_draft is not None and self._teach_port is not None:
             return self._teach_port, "#0A84FF"
+        if self._rule_draft is not None and self._rule_draft_port is not None:
+            return self._rule_draft_port, "#0A84FF"
         if trace.hold_id and self._hold_port is not None:
             return self._hold_port, "#818CF8"
         if trace.matched_rule_id and trace.matched_rule_id in self._rule_ports:
@@ -1163,8 +2141,20 @@ class SpinePanel(QScrollArea):
         disk_state: dict | None = None,
     ) -> None:
         self._config = config
+        self._last_folder_choices = list(folder_choices or [])
         self._rule_ports.clear()
         self._type_ports.clear()
+
+        if self._rule_draft is not None:
+            if self._draft_composer is None:
+                self._mount_rule_draft_widget()
+            else:
+                self._draft_composer._populate_dest_combo(
+                    self._last_folder_choices,
+                    str(self._rule_draft.get("destination") or "Documents"),
+                )
+        else:
+            self.rule_draft_host.setVisible(False)
 
         # Sync static controls without triggering save loops
         for w in (self.sw_hold_3mf, self.spin_hold_days, self.sw_subfolders, self.sw_ai_fallback, self.cmb_fallback):
@@ -1181,11 +2171,13 @@ class SpinePanel(QScrollArea):
         for w in (self.sw_hold_3mf, self.spin_hold_days, self.sw_subfolders, self.sw_ai_fallback, self.cmb_fallback):
             w.blockSignals(False)
 
+        has_any_draft = self._teach_draft is not None or self._rule_draft is not None
+
         # Opt-in Hold & Group step visibility + dynamic 2-step vs 3-step numbering
         show_3mf = bool(config.hold_3mf_enabled or trace.outcome == "hold")
         show_group = bool(config.project_grouping_enabled)
         show_step1 = show_3mf or show_group
-        self.step1_row.setVisible(show_step1)
+        self.step1_row.setVisible(show_3mf or show_group)
         self.hold_3mf_frame.setVisible(show_3mf)
         self.proj_row_frame.setVisible(show_group)
         self.optin_row.setVisible(not show_step1)
@@ -1193,20 +2185,20 @@ class SpinePanel(QScrollArea):
             self.badge_1.setText("1")
             self.badge_2.setText("2")
             self.badge_3.setText("3")
-            disp_active = 2 if self._teach_draft is not None else trace.winning_step
+            disp_active = 2 if has_any_draft else trace.winning_step
         else:
             self.badge_2.setText("1")
             self.badge_3.setText("2")
-            raw_step = 2 if self._teach_draft is not None else trace.winning_step
+            raw_step = 2 if has_any_draft else trace.winning_step
             disp_active = max(1, raw_step - 1) if raw_step > 0 else 0
 
         # 3-State Spine Grammar
-        active_step = 2 if self._teach_draft is not None else trace.winning_step
+        active_step = 2 if has_any_draft else trace.winning_step
         self.body.active_step = disp_active
         self.body.focused = bool(focused_folder)
         self._apply_step_styles(active_step, trace.outcome, focused=bool(focused_folder))
 
-        is_hold_hit = (not focused_folder and self._teach_draft is None and trace.outcome == "hold")
+        is_hold_hit = (not focused_folder and not has_any_draft and trace.outcome == "hold")
         self.hold_port_badge.setStyleSheet(
             f"QFrame {{ background-color: #161618; border: 1px solid {'#818CF8' if is_hold_hit else '#2C2C2E'}; border-radius: 7px; }}"
         )
@@ -1218,8 +2210,11 @@ class SpinePanel(QScrollArea):
         # Step 2 Rules
         while self.rules_layout.count():
             item = self.rules_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            w = item.widget() if item is not None else None
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
 
         norm_focus = focused_folder.replace("/", "\\").strip("\\") if focused_folder else None
         feed_count = 0
@@ -1231,7 +2226,7 @@ class SpinePanel(QScrollArea):
             row = _RuleRowWidget(
                 rule,
                 is_expanded=(self._expanded_rule_id == rule.id),
-                is_winner=(not focused_folder and self._teach_draft is None and trace.matched_rule_id == rule.id),
+                is_winner=(not focused_folder and not has_any_draft and trace.matched_rule_id == rule.id),
                 is_shadowed=(rule.id in trace.shadowed_rule_ids),
                 blocked_word=trace.blocked_rules.get(rule.id, ""),
                 is_focus_feeder=is_feeder,
@@ -1247,35 +2242,66 @@ class SpinePanel(QScrollArea):
             row.flow_drag_started.connect(self.flow_drag_started.emit)
             row.flow_drag_finished.connect(self.flow_drag_finished.emit)
             row.rule_updated.connect(self._update_rule_fields)
+            row.rule_inline_edited.connect(self._update_rule_fields_inline)
+            row.collapse_with_updates.connect(self._on_rule_collapse_with_updates)
             row.rule_deleted.connect(self._on_rule_deleted)
             row.open_full_editor.connect(lambda rid: self.action_requested.emit("open_full_rule_editor", rid))
+            row.new_folder_requested.connect(lambda hint: self.action_requested.emit("new_folder_for_rule", hint))
             self._rule_ports[rule.id] = row.port_badge
             self.rules_layout.addWidget(row)
 
-        if not config.rules and self._teach_draft is None:
+        if not config.rules and not has_any_draft:
             empty_card = QFrame()
+            empty_card.setObjectName("EmptyRulesCard")
             empty_card.setStyleSheet(
-                "QFrame { background-color: rgba(255, 255, 255, 0.03); "
-                "border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 9px; }"
+                "QFrame#EmptyRulesCard { background-color: rgba(255, 255, 255, 0.03); "
+                "border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; }"
             )
-            el = QHBoxLayout(empty_card)
-            el.setContentsMargins(12, 9, 12, 9)
+            el = QVBoxLayout(empty_card)
+            el.setContentsMargins(12, 10, 12, 10)
             el.setSpacing(8)
             lbl_es = QLabel(
-                "No custom rules yet — files skip straight to automatic file-type sorting below. "
-                "Drop any file onto a folder on the right to teach a rule."
+                "No custom rules yet — files sort automatically by file type below. "
+                "Create a rule for specific websites or filenames, or drop any file onto a folder on the right."
             )
             lbl_es.setWordWrap(True)
             lbl_es.setMinimumWidth(0)
             lbl_es.setStyleSheet("color: #98989D; font-size: 12px; border: none; background: transparent;")
-            el.addWidget(lbl_es, 1)
+            el.addWidget(lbl_es)
+
+            cta_row = QHBoxLayout()
+            cta_row.setSpacing(8)
+            btn_empty_create = InteractiveRibbonBtn("+ Create a Rule")
+            btn_empty_create.setObjectName("PrimaryButton")
+            btn_empty_create.setToolTip("Open the guided rule composer to build your first rule")
+            btn_empty_create.setStyleSheet("padding: 4px 10px; font-size: 11.5px;")
+            btn_empty_create.clicked.connect(self._on_add_blank_rule)
+
+            btn_empty_packs = InteractiveRibbonBtn("Starter Rule Packs ▾")
+            btn_empty_packs.setObjectName("GhostButton")
+            btn_empty_packs.setToolTip("Add ready-made rules for Receipts, School, Career, or 3D Printing")
+            btn_empty_packs.setStyleSheet(
+                "QPushButton { padding: 4px 10px; font-size: 11.5px; border: 1px solid #2C2C2E; "
+                "border-radius: 7px; color: #D1D1D6; }"
+                "QPushButton:hover { border-color: #48484A; color: #F5F5F7; }"
+            )
+            btn_empty_packs.clicked.connect(
+                lambda b=btn_empty_packs: self.menu_packs.exec(b.mapToGlobal(b.rect().bottomLeft()))
+            )
+            cta_row.addWidget(btn_empty_create)
+            cta_row.addWidget(btn_empty_packs)
+            cta_row.addStretch(1)
+            el.addLayout(cta_row)
             self.rules_layout.addWidget(empty_card)
 
         # Step 3 File Types
         while self.types_layout.count():
             item = self.types_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            w = item.widget() if item is not None else None
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
 
         existing_folders: dict[str, int] = dict((disk_state or {}).get("existing_folders") or {})
         has_3d_activity = (
@@ -1294,7 +2320,7 @@ class SpinePanel(QScrollArea):
             if bucket.id == "t-3d" and not has_3d_activity:
                 continue
             targets = bucket_target_folders(bucket, config)
-            is_winner = (not focused_folder and self._teach_draft is None and trace.matched_bucket_id == bucket.id)
+            is_winner = (not focused_folder and not has_any_draft and trace.matched_bucket_id == bucket.id)
             is_feeder = bool(norm_focus and norm_focus in targets)
             if is_feeder:
                 type_feed_count += 1
@@ -1323,7 +2349,7 @@ class SpinePanel(QScrollArea):
             self._type_ports[bucket.id] = t_row.port_badge
             self.types_layout.addWidget(t_row)
 
-        if norm_focus and feed_count == 0 and type_feed_count == 0:
+        if norm_focus and feed_count == 0 and type_feed_count == 0 and self._rule_draft is None:
             self.btn_empty_folder_cta.setText(f"+ Create a rule routing into {norm_focus.replace(chr(92), ' › ')}")
             self.btn_empty_folder_cta.setVisible(True)
         else:
@@ -1334,13 +2360,19 @@ class SpinePanel(QScrollArea):
     def _rebuild_teach_card(self) -> None:
         while self.teach_layout.count():
             item = self.teach_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-            elif item.layout():
+            if item is not None and item.widget():
+                w = item.widget()
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+            elif item is not None and item.layout():
                 while item.layout().count():
                     sub = item.layout().takeAt(0)
-                    if sub.widget():
-                        sub.widget().deleteLater()
+                    if sub is not None and sub.widget():
+                        sw = sub.widget()
+                        sw.hide()
+                        sw.setParent(None)
+                        sw.deleteLater()
 
         if self._teach_draft is None:
             self._teach_port = None
@@ -1395,15 +2427,22 @@ class SpinePanel(QScrollArea):
         cues_row.addStretch(1)
         self.teach_layout.addLayout(cues_row)
 
+        any_checked = any(checked for _k, _v, checked in self._teach_cue_checks)
         btns = QHBoxLayout()
         btns.setSpacing(8)
+        if not any_checked:
+            lbl_guard = QLabel("Pick at least one cue above")
+            lbl_guard.setStyleSheet("color: #FFD60A; font-size: 11px; border: none; background: transparent;")
+            btns.addWidget(lbl_guard)
         btns.addStretch(1)
         b_cancel = QPushButton("Cancel")
         b_cancel.clicked.connect(self._cancel_teach)
         b_save_move = QPushButton("Save & Move File")
+        b_save_move.setEnabled(any_checked)
         b_save_move.clicked.connect(lambda: self._commit_teach(True))
         b_save = QPushButton("Save Rule")
         b_save.setObjectName("PrimaryButton")
+        b_save.setEnabled(any_checked)
         b_save.clicked.connect(lambda: self._commit_teach(False))
         btns.addWidget(b_cancel)
         btns.addWidget(b_save_move)
@@ -1425,6 +2464,8 @@ class SpinePanel(QScrollArea):
         words = [v for k, v, c in self._teach_cue_checks if c and k == "word"]
         exts = [v for k, v, c in self._teach_cue_checks if c and k == "ext"]
         sites = [v for k, v, c in self._teach_cue_checks if c and k == "site"]
+        if not (words or exts or sites):
+            return
         rule = build_rule_from_cues(
             title=self._teach_draft["title"],
             destination=self._teach_draft["target_folder"],
@@ -1440,6 +2481,7 @@ class SpinePanel(QScrollArea):
         badges = (self.badge_1, self.badge_2, self.badge_3)
         states = (self.lbl_state_1, self.lbl_state_2, self.lbl_state_3)
         cards = (self.card_1, self.card_2, self.card_3)
+        has_any_draft = self._teach_draft is not None or self._rule_draft is not None
 
         for idx, (badge, lbl_s, card) in enumerate(zip(badges, states, cards), start=1):
             if focused or active_step == 0:
@@ -1457,7 +2499,7 @@ class SpinePanel(QScrollArea):
                     f"background-color: {col}; border: 1px solid {col}; border-radius: 13px; "
                     "color: #FFFFFF; font-size: 12px; font-weight: 700;"
                 )
-                lbl_s.setText("· Drafting rule" if self._teach_draft else ("· Held" if outcome == "hold" else "· Matched"))
+                lbl_s.setText("· Drafting rule" if has_any_draft else ("· Held" if outcome == "hold" else "· Matched"))
                 lbl_s.setStyleSheet(f"color: {col}; font-size: 11.5px; font-weight: 600;")
             elif idx < active_step:
                 badge.setStyleSheet(
@@ -1503,25 +2545,66 @@ class SpinePanel(QScrollArea):
     def _on_add_blank_rule(self) -> None:
         if self._config is None:
             return
-        cfg = copy.deepcopy(self._config)
-        new_id = f"rule_{len(cfg.rules) + 1}_{abs(hash(len(cfg.rules))) % 10000}"
-        new_rule = Rule(
-            id=new_id,
-            name="New Rule",
-            destination="Documents",
-            keywords=["example"],
-            enabled=True,
-        )
-        cfg.rules.insert(0, new_rule)
-        self._expanded_rule_id = new_id
-        self.config_mutated.emit(cfg)
+        if self._rule_draft is not None and self._draft_composer is not None:
+            self._draft_composer.edit_words.setFocus()
+            return
+        default_dest = "Documents"
+        if self._last_folder_choices:
+            default_dest = self._last_folder_choices[0]
+        self.start_rule_draft(destination=default_dest)
+        self.action_requested.emit("refresh_flow", "")
 
     def _on_rule_toggled(self, rule_id: str, enabled: bool) -> None:
         self._update_rule_fields(rule_id, {"enabled": enabled})
 
     def _on_rule_expand_requested(self, rule_id: str) -> None:
+        if self._rule_draft is not None:
+            self.clear_rule_draft()
+        if self._expanded_rule_id and self._expanded_rule_id != rule_id:
+            self._flush_expanded_row_into_config()
         self._expanded_rule_id = None if self._expanded_rule_id == rule_id else rule_id
         self.action_requested.emit("refresh_flow", "")
+
+    def _flush_expanded_row_into_config(self) -> bool:
+        if not self._expanded_rule_id or self._config is None:
+            return False
+        for i in range(self.rules_layout.count()):
+            w = self.rules_layout.itemAt(i).widget()
+            if isinstance(w, _RuleRowWidget) and w.rule.id == self._expanded_rule_id:
+                updates = w.collect_pending_updates()
+                if updates:
+                    for r in self._config.rules:
+                        if r.id == self._expanded_rule_id:
+                            for k, v in updates.items():
+                                setattr(r, k, v)
+                            return True
+        return False
+
+    def _on_rule_collapse_with_updates(self, rule_id: str, updates: dict) -> None:
+        self._expanded_rule_id = None
+        if self._config is not None and updates:
+            cfg = copy.deepcopy(self._config)
+            for r in cfg.rules:
+                if r.id == rule_id:
+                    for k, v in updates.items():
+                        setattr(r, k, v)
+                    break
+            self.config_mutated.emit(cfg)
+            return
+        self.action_requested.emit("refresh_flow", "")
+
+    def _update_rule_fields_inline(self, rule_id: str, updates: dict) -> None:
+        """Persist inline field edits while keeping the expanded row alive for smooth focus/Done clicks."""
+        if self._config is None or not updates:
+            return
+        cfg = copy.deepcopy(self._config)
+        for r in cfg.rules:
+            if r.id == rule_id:
+                for k, v in updates.items():
+                    setattr(r, k, v)
+                break
+        self._config = cfg
+        self.config_mutated_inline.emit(cfg)
 
     def _on_rule_reordered(self, dragged_id: str, target_id: str, insert_after: bool = False) -> None:
         if self._config is None:

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -84,11 +85,13 @@ class FolderRowWidget(QFrame):
         exists_on_disk: bool = True,
         disk_file_count: int = 0,
         is_custom_disk: bool = False,
+        is_manual: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.folder_path = folder_path
         self.display_name = display_name
+        self.is_manual = is_manual
         self._drag_start: QPoint | None = None
         self._double_clicked = False
         self.setMinimumHeight(scaled_px(50) if (is_hit and land_label) else scaled_px(32))
@@ -96,12 +99,14 @@ class FolderRowWidget(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
-        if not exists_on_disk:
+        if is_manual:
+            self.setToolTip("Manual folder in Downloads — drag files here yourself · Right-click to edit folder & rules")
+        elif not exists_on_disk:
             self.setToolTip("Created automatically when a matching file arrives · Drag rules, file types, or folders here")
         elif is_custom_disk:
             self.setToolTip("Your own folder in Downloads — drag rules or file types here to route into it")
         else:
-            self.setToolTip("Click to inspect · Double-click to open · Drag rules, file types, files, or folders here")
+            self.setToolTip("Click to inspect · Double-click to open · Right-click to edit folder & rules")
 
         if is_hit or is_focused or is_draft_target:
             self._base_qss = (
@@ -126,6 +131,7 @@ class FolderRowWidget(QFrame):
             self.btn_expand = QPushButton("▾" if expanded else "▸")
             self.btn_expand.setFixedSize(scaled_px(18), scaled_px(18))
             self.btn_expand.setAccessibleName(f"Toggle {display_name} subfolders")
+            self.btn_expand.setToolTip(f"Show or hide subfolders inside {display_name}")
             self.btn_expand.setStyleSheet(
                 "QPushButton { border: none; background: transparent; color: #8E8E93; "
                 "padding: 0px; min-width: 0px; min-height: 0px; font-size: 11px; }"
@@ -179,6 +185,14 @@ class FolderRowWidget(QFrame):
             tag = QLabel(f"{rule_count} rule{'s' if rule_count != 1 else ''}")
             tag.setStyleSheet("color: #71717A; font-size: 11px;")
             row.addWidget(tag)
+        elif is_manual:
+            tag = QLabel("Manual")
+            tag.setStyleSheet(
+                "color: #64D2FF; background-color: rgba(100, 210, 255, 0.10); "
+                "border: 1px solid rgba(100, 210, 255, 0.28); border-radius: 5px; "
+                "padding: 0px 5px; font-size: 10.5px; font-weight: 600;"
+            )
+            row.addWidget(tag)
         elif not exists_on_disk:
             tag = QLabel("Auto")
             tag.setStyleSheet("color: #52525A; font-size: 10.5px; font-style: italic;")
@@ -194,7 +208,7 @@ class FolderRowWidget(QFrame):
         self.btn_add = QPushButton("+")
         self.btn_add.setFixedSize(scaled_px(22), scaled_px(22))
         self.btn_add.setAccessibleName(f"Add subfolder inside {display_name}")
-        self.btn_add.setToolTip(f"Create subfolder inside {display_name}")
+        self.btn_add.setToolTip(f"Create a guided subfolder inside {display_name}")
         self.btn_add.setStyleSheet(
             "QPushButton { border: none; background: transparent; color: #8E8E93; "
             "border-radius: 5px; font-weight: 600; padding: 0px; min-width: 0px; min-height: 0px; }"
@@ -209,8 +223,8 @@ class FolderRowWidget(QFrame):
             preview_row = QHBoxLayout()
             preview_row.setContentsMargins(scaled_px(22), 0, 0, 0)
             preview_row.setSpacing(5)
-            lbl_arrow = QLabel("↳")
-            lbl_arrow.setStyleSheet("color: #0A84FF; font-size: 11.5px;")
+            lbl_arrow = QLabel("→")
+            lbl_arrow.setStyleSheet("color: #0A84FF; font-size: 11.5px; font-weight: 600;")
             lbl_file = QLabel(land_label)
             lbl_file.setStyleSheet("color: #F5F5F7; font-size: 11.5px; font-family: 'Cascadia Mono', Consolas, monospace;")
             preview_row.addWidget(lbl_arrow)
@@ -285,7 +299,6 @@ class FolderRowWidget(QFrame):
             cur = self.folder_path.replace("/", "\\").strip("\\")
             if not src or src.lower() == cur.lower() or cur.lower().startswith(src.lower() + "\\"):
                 return False
-            # Already direct parent -> no-op
             src_parent = src.rsplit("\\", 1)[0] if "\\" in src else ""
             if src_parent.lower() == cur.lower():
                 return False
@@ -356,14 +369,18 @@ class FolderRowWidget(QFrame):
 
     def _show_context_menu(self, pos) -> None:
         menu = QMenu(self)
+        act_edit = menu.addAction("Edit Folder & Rules...")
         act_new = menu.addAction("New Subfolder...")
+        menu.addSeparator()
         act_rename = menu.addAction("Rename...")
         act_merge = menu.addAction("Merge Into...")
         act_open = menu.addAction("Open in Explorer")
         menu.addSeparator()
         act_del = menu.addAction("Delete Folder...")
         chosen = menu.exec(self.mapToGlobal(pos))
-        if chosen == act_new:
+        if chosen == act_edit:
+            self.context_action.emit("edit_folder", self.folder_path)
+        elif chosen == act_new:
             self.add_subfolder_requested.emit(self.folder_path)
         elif chosen == act_rename:
             self.context_action.emit("rename", self.folder_path)
@@ -437,7 +454,7 @@ class FolderTreePanel(QFrame):
     drag_hover_folder = Signal(object, object)  # (FolderRowWidget, global_pos)
     drag_hover_left = Signal()
     context_action = Signal(str, str)  # (action_name, folder_path)
-    tool_action = Signal(str)  # scan_folders | sort_lower_tiers | snapshots | open_canvas | defaults | apply_shift | discard_shift
+    tool_action = Signal(str)  # new_folder | setup_studio | scan_folders | sort_lower_tiers | snapshots | open_canvas | defaults | apply_shift | discard_shift
     clear_focus_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -447,39 +464,58 @@ class FolderTreePanel(QFrame):
         self._expanded_parents: set[str] = {"Documents"}
         self._inline_parent: str | None = None
         self._pending_changes = 0
+        self._setup_callout_dismissed = False
+        self._retarget_active = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(10)
+        root.setSpacing(8)
 
         # Header (also accepts subfolder drops to promote to top-level Downloads)
         self.hdr_drop = _RootDropHeader(self)
         self.hdr_drop.folder_promoted.connect(lambda src: self.folder_dropped_on_folder.emit(src, ""))
         hdr = QHBoxLayout(self.hdr_drop)
         hdr.setContentsMargins(2, 2, 2, 2)
-        hdr.setSpacing(6)
+        hdr.setSpacing(5)
         lbl_ic = QLabel()
         lbl_ic.setPixmap(make_vector_icon("folder", "#0A84FF", 15).pixmap(15, 15))
         self.lbl_root_title = QLabel("Downloads")
         self.lbl_root_title.setObjectName("CardTitle")
-        self.lbl_retarget_hint = QLabel("· Click folder to set")
-        self.lbl_retarget_hint.setStyleSheet("color: #0A84FF; font-size: 11.5px; font-weight: 600;")
+        self.lbl_retarget_hint = QLabel("· Click folder")
+        self.lbl_retarget_hint.setStyleSheet("color: #0A84FF; font-size: 11px; font-weight: 600;")
         self.lbl_retarget_hint.setVisible(False)
 
-        self.btn_add_sub = InteractiveRibbonBtn("+ Subfolder")
-        self.btn_add_sub.setObjectName("GhostButton")
-        self.btn_add_sub.clicked.connect(lambda: self.start_inline_subfolder("Documents"))
+        self.btn_new_folder = InteractiveRibbonBtn("+ Folder")
+        self.btn_new_folder.setAccessibleName("Create New Folder")
+        self.btn_new_folder.setToolTip("Create a custom folder or subfolder with guided sorting rules")
+        self.btn_new_folder.setStyleSheet(
+            "QPushButton { background-color: rgba(10, 132, 255, 0.16); border: 1px solid rgba(10, 132, 255, 0.45); "
+            "color: #64D2FF; font-weight: 600; font-size: 12px; border-radius: 8px; padding: 4px 9px; }"
+            "QPushButton:hover { background-color: #0A84FF; border-color: #0A84FF; color: #FFFFFF; }"
+        )
+        self.btn_new_folder.clicked.connect(lambda: self.tool_action.emit("new_folder"))
+        # Alias preserved for backwards compatibility
+        self.btn_add_sub = self.btn_new_folder
 
-        self.btn_more = InteractiveRibbonBtn("⋯")
+        self.btn_setup_folders = InteractiveRibbonBtn("Setup")
+        self.btn_setup_folders.setObjectName("GhostButton")
+        self.btn_setup_folders.setAccessibleName("Folder Setup")
+        self.btn_setup_folders.setToolTip("Walk through setting up or matching your Downloads folders")
+        self.btn_setup_folders.setStyleSheet("padding: 4px 8px; font-size: 12px;")
+        self.btn_setup_folders.clicked.connect(lambda: self.tool_action.emit("setup_studio"))
+
+        self.btn_more = InteractiveRibbonBtn("•••")
         self.btn_more.setObjectName("GhostButton")
-        self.btn_more.setToolTip("Folder tools: Scan Folders, Snapshots, Sort Lower Tiers...")
+        self.btn_more.setAccessibleName("More folder tools")
+        self.btn_more.setStyleSheet("padding: 4px 7px; font-size: 10px; min-width: 0px;")
+        self.btn_more.setToolTip("Power folder tools: Match Existing Folders, Sort Lower Tiers, Snapshots, Node Canvas...")
         self.menu_tools = QMenu(self.btn_more)
-        self.menu_tools.addAction("Scan Existing Folders...", lambda: self.tool_action.emit("scan_folders"))
+        self.menu_tools.addAction("Match Existing Folders...", lambda: self.tool_action.emit("scan_folders"))
         self.menu_tools.addAction("Sort Lower Tiers", lambda: self.tool_action.emit("sort_lower_tiers"))
         self.menu_tools.addAction("Snapshots...", lambda: self.tool_action.emit("snapshots"))
         self.menu_tools.addSeparator()
-        self.menu_tools.addAction("Open Node Canvas...", lambda: self.tool_action.emit("open_canvas"))
-        self.menu_tools.addAction("Return to Defaults...", lambda: self.tool_action.emit("defaults"))
+        self.menu_tools.addAction("Advanced Node Canvas...", lambda: self.tool_action.emit("open_canvas"))
+        self.menu_tools.addAction("Reset to Defaults...", lambda: self.tool_action.emit("defaults"))
         self.btn_more.clicked.connect(
             lambda: self.menu_tools.exec(
                 self.btn_more.mapToGlobal(self.btn_more.rect().bottomRight())
@@ -490,7 +526,8 @@ class FolderTreePanel(QFrame):
         hdr.addWidget(self.lbl_root_title)
         hdr.addWidget(self.lbl_retarget_hint)
         hdr.addStretch(1)
-        hdr.addWidget(self.btn_add_sub)
+        hdr.addWidget(self.btn_new_folder)
+        hdr.addWidget(self.btn_setup_folders)
         hdr.addWidget(self.btn_more)
         root.addWidget(self.hdr_drop)
 
@@ -519,6 +556,48 @@ class FolderTreePanel(QFrame):
         sb_l.addWidget(self.btn_align_now)
         root.addWidget(self.sync_bar)
 
+        # Calm, dismissible Guided Setup Callout strip (shown when not config.architecture)
+        self.setup_callout = QFrame()
+        self.setup_callout.setObjectName("GuidedSetupCallout")
+        self.setup_callout.setVisible(False)
+        self.setup_callout.setStyleSheet(
+            "QFrame#GuidedSetupCallout { background-color: rgba(10, 132, 255, 0.08); "
+            "border: 1px solid rgba(10, 132, 255, 0.28); border-radius: 9px; }"
+        )
+        sc_l = QHBoxLayout(self.setup_callout)
+        sc_l.setContentsMargins(9, 6, 6, 6)
+        sc_l.setSpacing(6)
+        self.lbl_setup_callout = QLabel("Want to match your existing folders or set up custom folders?")
+        self.lbl_setup_callout.setWordWrap(True)
+        self.lbl_setup_callout.setMinimumWidth(0)
+        self.lbl_setup_callout.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.lbl_setup_callout.setStyleSheet("color: #D1D1D6; font-size: 11.5px; border: none; background: transparent;")
+        self.btn_callout_setup = QPushButton("Set Up Folders")
+        self.btn_callout_setup.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_callout_setup.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.btn_callout_setup.setToolTip("Open Folder Setup Studio to match existing folders or choose a custom layout")
+        self.btn_callout_setup.setStyleSheet(
+            "QPushButton { background-color: rgba(10, 132, 255, 0.18); border: 1px solid rgba(10, 132, 255, 0.45); "
+            "color: #64D2FF; font-weight: 600; font-size: 11px; border-radius: 6px; padding: 3px 8px; }"
+            "QPushButton:hover { background-color: #0A84FF; border-color: #0A84FF; color: #FFFFFF; }"
+        )
+        self.btn_callout_setup.clicked.connect(lambda: self.tool_action.emit("setup_studio"))
+        self.btn_callout_dismiss = QPushButton("×")
+        self.btn_callout_dismiss.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_callout_dismiss.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.btn_callout_dismiss.setToolTip("Dismiss folder setup suggestion")
+        self.btn_callout_dismiss.setAccessibleName("Dismiss folder setup suggestion")
+        self.btn_callout_dismiss.setStyleSheet(
+            "QPushButton { border: none; background: transparent; color: #8E8E93; "
+            "font-size: 13px; font-weight: 600; padding: 1px 5px; min-width: 0px; }"
+            "QPushButton:hover { color: #F5F5F7; }"
+        )
+        self.btn_callout_dismiss.clicked.connect(self.dismiss_setup_callout)
+        sc_l.addWidget(self.lbl_setup_callout, 1)
+        sc_l.addWidget(self.btn_callout_setup)
+        sc_l.addWidget(self.btn_callout_dismiss)
+        root.addWidget(self.setup_callout)
+
         # Scrollable Tree
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -545,8 +624,10 @@ class FolderTreePanel(QFrame):
         fh.setContentsMargins(0, 4, 0, 0)
         self.lbl_footer_hint = QLabel("Click folder to inspect · Drop file to teach")
         self.lbl_footer_hint.setObjectName("MutedText")
+        self.lbl_footer_hint.setMinimumWidth(0)
         self.btn_reset_focus = QPushButton("Reset view")
         self.btn_reset_focus.setVisible(False)
+        self.btn_reset_focus.setToolTip("Return to live file trace view")
         self.btn_reset_focus.setStyleSheet(
             "border: none; background: transparent; color: #0A84FF; font-size: 12px; font-weight: 600;"
         )
@@ -566,10 +647,12 @@ class FolderTreePanel(QFrame):
         self.lbl_pending = QLabel("Folder changes pending")
         self.lbl_pending.setStyleSheet("color: #F5F5F7; font-size: 12px; border: none; background: transparent;")
         btn_discard = QPushButton("Discard")
+        btn_discard.setToolTip("Discard pending folder move")
         btn_discard.setStyleSheet("padding: 3px 8px; font-size: 11.5px;")
         btn_discard.clicked.connect(lambda: self.tool_action.emit("discard_shift"))
         btn_apply = QPushButton("Apply & Shift Files")
         btn_apply.setObjectName("PrimaryButton")
+        btn_apply.setToolTip("Apply folder structure change and shift existing files cleanly")
         btn_apply.setStyleSheet("padding: 4px 10px; font-size: 11.5px;")
         btn_apply.clicked.connect(lambda: self.tool_action.emit("apply_shift"))
         ab.addWidget(self.lbl_pending, 1)
@@ -577,11 +660,26 @@ class FolderTreePanel(QFrame):
         ab.addWidget(btn_apply)
         root.addWidget(self.apply_bar)
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_header_labels()
+
+    def _sync_header_labels(self) -> None:
+        roomy = self.width() >= scaled_px(405) and not self._retarget_active
+        self.btn_new_folder.setText("+ New Folder" if roomy else "+ Folder")
+        self.btn_setup_folders.setText("Folder Setup" if roomy else "Setup")
+
+    def dismiss_setup_callout(self) -> None:
+        self._setup_callout_dismissed = True
+        self.setup_callout.setVisible(False)
+
     def set_root_label(self, label: str) -> None:
         self.lbl_root_title.setText(label)
 
     def set_retarget_mode(self, active: bool) -> None:
+        self._retarget_active = active
         self.lbl_retarget_hint.setVisible(active)
+        self._sync_header_labels()
 
     def set_pending_changes(self, count: int, label: str = "") -> None:
         self._pending_changes = count
@@ -602,7 +700,7 @@ class FolderTreePanel(QFrame):
         row.clicked.connect(self.folder_clicked.emit)
         row.hover_entered.connect(self.folder_hovered.emit)
         row.hover_left.connect(self.folder_hover_left.emit)
-        row.add_subfolder_requested.connect(self.start_inline_subfolder)
+        row.add_subfolder_requested.connect(lambda fp: self.context_action.emit("guided_subfolder", fp))
         row.file_dropped.connect(self.file_dropped_on_folder.emit)
         row.rule_dropped.connect(self.rule_dropped_on_folder.emit)
         row.bucket_dropped.connect(self.bucket_dropped_on_folder.emit)
@@ -624,10 +722,23 @@ class FolderTreePanel(QFrame):
         self._row_widgets.clear()
         while self.tree_layout.count() > 1:
             item = self.tree_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            w = item.widget() if item is not None else None
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+
+        show_callout = (not bool(config.architecture)) and (override_arch is None) and (not self._setup_callout_dismissed)
+        self.setup_callout.setVisible(show_callout)
 
         arch = override_arch.clone() if override_arch is not None else architecture_from_config(config)
+        manual_paths: set[str] = set()
+        for n in arch.nodes:
+            if getattr(n, "premade_key", "") == "__manual__":
+                rel_m = arch.node_relative_path(n.id).replace("/", "\\").strip("\\")
+                if rel_m:
+                    manual_paths.add(rel_m.lower())
+
         # Build ordered folder tree from architecture + any custom rule/map destinations
         tree: dict[str, list[str]] = {}
         for node in arch.nodes_in_tier(1):
@@ -741,6 +852,7 @@ class FolderTreePanel(QFrame):
                 land_label=land_label if is_parent_hit else "",
                 exists_on_disk=p_exists,
                 disk_file_count=p_count,
+                is_manual=(parent_name.lower() in manual_paths),
             )
             self._wire_row(p_row)
             self._row_widgets[parent_name] = p_row
@@ -765,6 +877,7 @@ class FolderTreePanel(QFrame):
                         land_label=land_label if is_child_hit else "",
                         exists_on_disk=c_exists,
                         disk_file_count=c_count,
+                        is_manual=(child_path.lower() in manual_paths),
                     )
                     self._wire_row(c_row)
                     self._row_widgets[child_path] = c_row

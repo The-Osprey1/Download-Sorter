@@ -102,6 +102,7 @@ class SortingFlowTab(QWidget):
 
         self.spine = SpinePanel(self.workspace)
         self.spine.config_mutated.connect(self._on_config_mutated)
+        self.spine.config_mutated_inline.connect(self._on_config_mutated_inline)
         self.spine.rule_port_hovered.connect(self._on_spine_port_hovered)
         self.spine.port_hover_left.connect(self._on_hover_left)
         self.spine.flow_drag_started.connect(self._on_flow_drag_started)
@@ -110,6 +111,7 @@ class SortingFlowTab(QWidget):
         self.spine.bucket_reset.connect(self.reset_bucket_route)
         self.spine.teach_committed.connect(self._on_teach_committed)
         self.spine.teach_cancelled.connect(self.refresh)
+        self.spine.draft_target_changed.connect(self._on_draft_target_changed)
         self.spine.action_requested.connect(self._on_spine_action)
         self._ws_layout.addWidget(self.spine, 7)
 
@@ -266,15 +268,27 @@ class SortingFlowTab(QWidget):
     def trace_from_activity(self, filename: str, source_url: str = "") -> None:
         self._focused_folder = None
         self.spine.clear_teach_draft()
+        self.spine.clear_rule_draft()
         self.tester_bar.set_test_file(filename, source_url)
 
     def clear_folder_focus(self) -> None:
         self._focused_folder = None
         self.refresh()
 
+    def apply_new_folder_to_active_rule(self, folder_path: str) -> None:
+        """Select a newly created GuidedFolderDialog path inside the open rule composer."""
+        cfg = self._pending_cfg if self._pending_cfg is not None else self.service.config
+        choices = self._all_folder_choices(cfg)
+        if self.spine.set_active_rule_destination(folder_path, choices):
+            self.refresh()
+
     def _on_escape(self) -> None:
         if self.spine.has_teach_draft():
             self.spine.clear_teach_draft()
+            self.refresh()
+        elif self.spine.has_rule_draft():
+            self.spine.clear_rule_draft()
+            self.tree.set_retarget_mode(False)
             self.refresh()
         elif self._focused_folder is not None:
             self.clear_folder_focus()
@@ -311,6 +325,21 @@ class SortingFlowTab(QWidget):
         tc = sum(1 for b in TYPE_BUCKETS if norm in bucket_target_folders(b, config))
         return rc, tc
 
+    def _on_draft_target_changed(self, target_folder: str) -> None:
+        """Update tree target highlight and Bezier wire live when draft destination changes."""
+        self._peek_wires = []
+        self.overlay.clear_wires()
+        cfg = self._pending_cfg if self._pending_cfg is not None else self.service.config
+        self.tree.rebuild(
+            cfg,
+            self._last_trace,
+            focused_folder=self._focused_folder,
+            draft_target=target_folder,
+            disk_state=self._disk_state,
+            override_arch=self._pending_arch,
+        )
+        QTimer.singleShot(0, lambda: self._redraw_wires(animate=True))
+
     def refresh(self) -> None:
         # Always drop transient hover wires BEFORE rebuilding widgets via deleteLater()
         self._peek_wires = []
@@ -328,7 +357,9 @@ class SortingFlowTab(QWidget):
         self._last_trace = trace
 
         choices = self._all_folder_choices(cfg)
-        self.tree.set_retarget_mode(self.spine.expanded_rule_id() is not None)
+        self.tree.set_retarget_mode(
+            self.spine.expanded_rule_id() is not None or self.spine.has_rule_draft()
+        )
 
         show_step1 = bool(cfg.hold_3mf_enabled or cfg.project_grouping_enabled or trace.outcome == "hold")
         if self._focused_folder is not None:
@@ -337,14 +368,23 @@ class SortingFlowTab(QWidget):
         else:
             self.tester_bar.show_trace(trace, total_steps=3 if show_step1 else 2)
 
-        self.spine.rebuild(
-            cfg,
-            trace,
-            focused_folder=self._focused_folder,
-            folder_choices=choices,
-            disk_state=self._disk_state,
+        from PySide6.QtWidgets import QApplication, QLineEdit
+
+        fw = QApplication.focusWidget()
+        focused_in_expanded_edit = bool(
+            self.spine.expanded_rule_id() is not None
+            and isinstance(fw, QLineEdit)
+            and self.spine.isAncestorOf(fw)
         )
-        draft_target = self.spine._teach_draft["target_folder"] if self.spine._teach_draft else None
+        if not getattr(self, "_in_inline_edit", False) and not focused_in_expanded_edit:
+            self.spine.rebuild(
+                cfg,
+                trace,
+                focused_folder=self._focused_folder,
+                folder_choices=choices,
+                disk_state=self._disk_state,
+            )
+        draft_target = self.spine.draft_target_folder()
         self.tree.rebuild(
             cfg,
             trace,
@@ -368,6 +408,7 @@ class SortingFlowTab(QWidget):
         cfg = self._pending_cfg if self._pending_cfg is not None else self.service.config
         wires: list[BridgeWire] = []
         ghost_factor = 0.25 if self._peek_wires else 1.0
+        has_draft = self.spine.has_teach_draft() or self.spine.has_rule_draft()
 
         if self._focused_folder is not None:
             target = self.tree.folder_widget(self._focused_folder)
@@ -376,8 +417,8 @@ class SortingFlowTab(QWidget):
                     wires.append(BridgeWire(source=port, target=target, color="#0A84FF", opacity=0.82))
         elif self._last_trace is not None:
             src_port, color = self.spine.port_for_trace(self._last_trace)
-            if self.spine.has_teach_draft():
-                tgt_key = self.spine._teach_draft["target_folder"]  # type: ignore[index]
+            if has_draft:
+                tgt_key = self.spine.draft_target_folder() or ""
             else:
                 tgt_key = self._last_trace.dest_folder
             tgt_widget = self.tree.folder_widget(tgt_key) if tgt_key else None
@@ -387,7 +428,7 @@ class SortingFlowTab(QWidget):
                         source=src_port,
                         target=tgt_widget,
                         color=color,
-                        dashed=self.spine.has_teach_draft(),
+                        dashed=has_draft,
                         opacity=0.90 * ghost_factor,
                         animate_pulse=animate and not self._peek_wires,
                     )
@@ -631,34 +672,30 @@ class SortingFlowTab(QWidget):
         self.config_committed.emit(new_cfg)
         self.refresh()
 
+    def _on_config_mutated_inline(self, new_cfg: Config) -> None:
+        """Persist inline expanded-rule edits without destroying the focused _RuleRowWidget."""
+        self._in_inline_edit = True
+        try:
+            self.config_committed.emit(new_cfg)
+        finally:
+            self._in_inline_edit = False
+
     def _on_spine_action(self, action: str, arg: str) -> None:
         if action == "refresh_flow":
             self.refresh()
             return
         if action == "create_rule_for_focus" and self._focused_folder:
-            cfg = copy.deepcopy(self.service.config)
-            leaf = self._focused_folder.split("\\")[-1]
-            new_id = f"rule_{len(cfg.rules) + 1}_{abs(hash(leaf)) % 10000}"
-            cfg.rules.insert(
-                0,
-                Rule(
-                    id=new_id,
-                    name=f"{leaf} files",
-                    destination=self._focused_folder,
-                    keywords=[leaf.lower()],
-                    enabled=True,
-                ),
-            )
+            target = self._focused_folder
             self._focused_folder = None
-            self.spine._expanded_rule_id = new_id
-            self.config_committed.emit(cfg)
+            self.spine.start_rule_draft(destination=target)
             self.refresh()
             return
         self.action_requested.emit(action, arg)
 
     def _on_folder_clicked(self, folder_path: str) -> None:
-        if self.spine.expanded_rule_id() is not None:
-            self.spine.set_expanded_rule_dest(folder_path)
+        if self.spine.has_rule_draft() or self.spine.expanded_rule_id() is not None:
+            cfg = self._pending_cfg if self._pending_cfg is not None else self.service.config
+            self.spine.set_active_rule_destination(folder_path, self._all_folder_choices(cfg))
             return
         self._focused_folder = None if self._focused_folder == folder_path else folder_path
         self.refresh()

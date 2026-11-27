@@ -311,36 +311,183 @@ from download_sorter.windows_integration import (
 
 
 class RuleEditorDialog(QDialog):
-    """Modal dialog for adding or editing a single custom sorting rule."""
+    """Guided modal composer for adding or editing a single custom sorting rule."""
 
-    def __init__(self, rule: Rule | None = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        rule: Rule | None = None,
+        parent: QWidget | None = None,
+        *,
+        folder_choices: list[str] | None = None,
+    ) -> None:
         super().__init__(parent)
+        from download_sorter.ui.emblems import TokenChipBar
+        from download_sorter.ui.flow.spine_panel import (
+            NEW_FOLDER_SENTINEL,
+            QUICK_FILE_TYPE_CHIPS,
+            describe_rule_plain_english,
+            normalize_domain_tokens,
+            normalize_ext_tokens,
+            normalize_word_tokens,
+            rule_has_any_cue,
+            suggest_rule_name,
+        )
+
+        self._norm_exts = normalize_ext_tokens
+        self._norm_domains = normalize_domain_tokens
+        self._norm_words = normalize_word_tokens
+        self._has_any_cue = rule_has_any_cue
+        self._suggest_name = suggest_rule_name
+        self._describe_plain = describe_rule_plain_english
+        self._new_folder_sentinel = NEW_FOLDER_SENTINEL
+        self._quick_chips = QUICK_FILE_TYPE_CHIPS
+        self._suppress_sync = False
+
         self.setWindowTitle("Edit Custom Rule" if rule else "Create New Custom Rule")
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(520)
         self._base_id = rule.id if rule else ""
 
+        if folder_choices is None and parent is not None and hasattr(parent, "flow_tab"):
+            try:
+                folder_choices = parent.flow_tab._all_folder_choices(parent.service.config)
+            except Exception:
+                folder_choices = None
+        if not folder_choices:
+            folder_choices = ["Documents", r"Documents\PDF", "Images", "Archives", "Installers", "Videos", "Code"]
+
         layout = QVBoxLayout(self)
-        intro = QLabel(
-            "Tell Download Sorter which files belong together and which folder inside Downloads to move them into.",
-            self,
-        )
-        intro.setVisible(False)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
         self.setToolTip(
             "Define matching filenames, websites, extensions, and the target folder inside Downloads."
         )
 
-        form = QFormLayout()
-
+        # Header + Optional Name
+        hdr_row = QHBoxLayout()
+        hdr_row.setSpacing(8)
+        lbl_name_tag = QLabel("Rule Name:")
+        lbl_name_tag.setStyleSheet("color: #AEAEB2; font-size: 12px; font-weight: 600;")
         self.edit_name = QLineEdit(rule.name if rule else "")
-        self.edit_name.setPlaceholderText("e.g. Tax Receipts, Client PDFs, Class Notes")
-        self.edit_dest = QLineEdit(rule.destination if rule else r"Documents\Custom")
-        self.edit_dest.setPlaceholderText(r"e.g. Documents\Taxes\{year} or Web\{host}")
+        self.edit_name.setPlaceholderText("e.g. Stripe Invoices (optional — auto-named from cues)")
+        self.edit_name.setToolTip("Rule title shown in Sorting Flow (auto-generated if left blank)")
+        self.chk_enabled = QCheckBox("Active")
+        self.chk_enabled.setChecked(rule.enabled if rule else True)
+        self.chk_enabled.setToolTip("Turn this sorting rule on or off")
+        hdr_row.addWidget(lbl_name_tag)
+        hdr_row.addWidget(self.edit_name, 1)
+        hdr_row.addWidget(self.chk_enabled)
+        layout.addLayout(hdr_row)
+
+        # ------------------------------------------------------------------
+        # 1. What files should this rule catch?
+        # ------------------------------------------------------------------
+        sec1 = QFrame()
+        sec1.setObjectName("SurfaceCard")
+        s1_l = QVBoxLayout(sec1)
+        s1_l.setContentsMargins(12, 10, 12, 10)
+        s1_l.setSpacing(8)
+
+        lbl_s1 = QLabel("1. What files should this rule catch?")
+        lbl_s1.setStyleSheet("color: #F5F5F7; font-weight: 600; font-size: 12.5px; border: none;")
+        s1_l.addWidget(lbl_s1)
+
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(5)
+        self._chip_buttons: list[tuple[QPushButton, tuple[str, ...]]] = []
+        init_exts = self._norm_exts(rule.extensions) if rule else []
+        for chip_label, chip_exts in self._quick_chips:
+            btn = QPushButton(chip_label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(f"Toggle matching {chip_label} files")
+            btn.setAccessibleName(f"File type {chip_label}")
+            is_on = all(e in init_exts for e in chip_exts)
+            btn.setChecked(is_on)
+            btn.clicked.connect(lambda checked=False, exts=chip_exts: self._on_dlg_chip_clicked(exts, checked))
+            self._chip_buttons.append((btn, chip_exts))
+            chips_row.addWidget(btn)
+        chips_row.addStretch(1)
+        s1_l.addLayout(chips_row)
+
+        form1 = QFormLayout()
+        form1.setContentsMargins(0, 2, 0, 0)
+        form1.setSpacing(7)
         self.edit_keywords = QLineEdit(", ".join(rule.keywords) if rule else "")
-        self.edit_keywords.setPlaceholderText("e.g. syllabus, lab_report, invoice (comma-separated)")
+        self.edit_keywords.setPlaceholderText("e.g. invoice, receipt, syllabus (comma-separated)")
+        self.edit_keywords.setToolTip("Match files whose filename contains any of these words")
         self.edit_domains = QLineEdit(", ".join(rule.domains) if rule else "")
-        self.edit_domains.setPlaceholderText("Optional website, e.g. canvas.edu, makerworld.com")
-        self.edit_exts = QLineEdit(", ".join(rule.extensions) if rule else "")
+        self.edit_domains.setPlaceholderText("e.g. stripe.com or paste a full URL")
+        self.edit_domains.setToolTip("Match files downloaded from these websites (full URLs normalize automatically)")
+        self.edit_exts = QLineEdit(", ".join(init_exts))
         self.edit_exts.setPlaceholderText("Optional file types, e.g. .pdf, .docx (blank = any)")
+        self.edit_exts.setToolTip("File extensions to match (leading dot added automatically)")
+
+        form1.addRow("Filename words:", self.edit_keywords)
+        form1.addRow("Website domain:", self.edit_domains)
+        form1.addRow("File types:", self.edit_exts)
+        s1_l.addLayout(form1)
+        layout.addWidget(sec1)
+
+        # ------------------------------------------------------------------
+        # 2. Where should they go?
+        # ------------------------------------------------------------------
+        sec2 = QFrame()
+        sec2.setObjectName("SurfaceCard")
+        s2_l = QVBoxLayout(sec2)
+        s2_l.setContentsMargins(12, 10, 12, 10)
+        s2_l.setSpacing(6)
+        lbl_s2 = QLabel("2. Where should they go?")
+        lbl_s2.setStyleSheet("color: #F5F5F7; font-weight: 600; font-size: 12.5px; border: none;")
+        s2_l.addWidget(lbl_s2)
+
+        dest_row = QHBoxLayout()
+        dest_row.setSpacing(6)
+        self.cmb_dest = QComboBox()
+        self.cmb_dest.setEditable(True)
+        self.cmb_dest.setToolTip("Select an existing folder inside Downloads or type a path / token")
+        self.cmb_dest.setAccessibleName("Move Into Folder")
+        init_dest = (rule.destination if rule else "Documents").replace("/", "\\").strip("\\") or "Documents"
+        seen_choices: list[str] = []
+        for ch in folder_choices:
+            norm_ch = ch.replace("/", "\\").strip("\\")
+            if norm_ch and norm_ch not in seen_choices:
+                seen_choices.append(norm_ch)
+        if init_dest not in seen_choices:
+            seen_choices.insert(0, init_dest)
+        for ch in seen_choices:
+            self.cmb_dest.addItem(ch, ch)
+        self.cmb_dest.addItem("+ New Folder...", self._new_folder_sentinel)
+        idx_dest = self.cmb_dest.findData(init_dest)
+        if idx_dest >= 0:
+            self.cmb_dest.setCurrentIndex(idx_dest)
+        self._last_valid_dest = init_dest
+
+        self.edit_dest = self.cmb_dest.lineEdit()
+        assert self.edit_dest is not None
+        self.edit_dest.setPlaceholderText(r"e.g. Documents\Bills & Receipts or Documents\Taxes\{year}")
+        self.edit_dest.setText(init_dest)
+        self.cmb_dest.currentIndexChanged.connect(self._on_dlg_dest_index_changed)
+        self.edit_dest.textChanged.connect(self._on_dlg_live_changed)
+
+        self.btn_new_dest_folder = QPushButton("+ New Folder...")
+        self.btn_new_dest_folder.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_new_dest_folder.setToolTip("Open Guided Folder Builder to create a new custom folder")
+        self.btn_new_dest_folder.setStyleSheet(
+            "QPushButton { padding: 5px 10px; font-size: 12px; border-radius: 7px; "
+            "background-color: rgba(10, 132, 255, 0.16); border: 1px solid rgba(10, 132, 255, 0.45); "
+            "color: #64D2FF; font-weight: 600; }"
+            "QPushButton:hover { background-color: #0A84FF; color: #FFFFFF; }"
+        )
+        self.btn_new_dest_folder.clicked.connect(self._open_new_folder_from_dialog)
+
+        dest_row.addWidget(self.cmb_dest, 1)
+        dest_row.addWidget(self.btn_new_dest_folder)
+        s2_l.addLayout(dest_row)
+        layout.addWidget(sec2)
+
+        # ------------------------------------------------------------------
+        # Advanced Conditions (Progressive Disclosure)
+        # ------------------------------------------------------------------
         self.edit_content_keywords = QLineEdit(", ".join(rule.content_keywords) if rule else "")
         self.edit_content_keywords.setPlaceholderText("Optional PDF text, e.g. Invoice, Packing Slip")
         self.edit_exclude_keywords = QLineEdit(", ".join(rule.exclude_keywords) if rule else "")
@@ -348,8 +495,9 @@ class RuleEditorDialog(QDialog):
         self.edit_regex = QLineEdit(rule.regex_pattern if rule else "")
         self.edit_regex.setPlaceholderText(r"Optional regex, e.g. ^INV-\d{4} or (?P<client>\w+)_")
         self.combo_match_mode = QComboBox()
-        self.combo_match_mode.addItem("Match ANY condition (OR)", "any")
-        self.combo_match_mode.addItem("Match ALL conditions (AND)", "all")
+        self.combo_match_mode.setToolTip("Choose whether ANY or ALL positive keyword/website conditions must match")
+        self.combo_match_mode.addItem("Match ANY keyword / website (OR)", "any")
+        self.combo_match_mode.addItem("Match ALL keywords & websites (AND)", "all")
         if rule and rule.match_mode == "all":
             self.combo_match_mode.setCurrentIndex(1)
 
@@ -359,15 +507,18 @@ class RuleEditorDialog(QDialog):
         self.spin_min_mb.setRange(0.0, 100000.0)
         self.spin_min_mb.setDecimals(1)
         self.spin_min_mb.setSuffix(" MB min")
+        self.spin_min_mb.setToolTip("Minimum file size in MB (0 = off)")
         self.spin_min_mb.setValue(rule.min_size_mb if rule else 0.0)
         self.spin_max_mb = QDoubleSpinBox()
         self.spin_max_mb.setRange(0.0, 100000.0)
         self.spin_max_mb.setDecimals(1)
         self.spin_max_mb.setSuffix(" MB max")
+        self.spin_max_mb.setToolTip("Maximum file size in MB (0 = off)")
         self.spin_max_mb.setValue(rule.max_size_mb if rule else 0.0)
         self.spin_min_age = QSpinBox()
         self.spin_min_age.setRange(0, 3650)
         self.spin_min_age.setSuffix(" d old")
+        self.spin_min_age.setToolTip("Minimum file age in days (0 = off)")
         self.spin_min_age.setValue(rule.min_age_days if rule else 0)
         bounds_row.addWidget(self.spin_min_mb)
         bounds_row.addWidget(self.spin_max_mb)
@@ -377,18 +528,6 @@ class RuleEditorDialog(QDialog):
         self.edit_rename.setPlaceholderText("Optional rename, e.g. {year}-{month}_{stem_slug}.{ext}")
         self.chk_auto_unzip = QCheckBox("Automatically extract .zip archives matched by this rule")
         self.chk_auto_unzip.setChecked(rule.auto_unzip if rule else False)
-        self.chk_enabled = QCheckBox("Rule is active")
-        self.chk_enabled.setChecked(rule.enabled if rule else True)
-
-        form.addRow("Rule Name:", self.edit_name)
-        form.addRow("Move Into Folder:", self.edit_dest)
-        form.addRow("Matches Words in Filename:", self.edit_keywords)
-        form.addRow("Matches Website:", self.edit_domains)
-        form.addRow("Only These File Types:", self.edit_exts)
-        form.addRow("", self.chk_enabled)
-        layout.addLayout(form)
-
-        from download_sorter.ui.emblems import TokenChipBar
 
         has_advanced = bool(
             rule
@@ -444,12 +583,29 @@ class RuleEditorDialog(QDialog):
 
         btn_adv.clicked.connect(_toggle_adv)
 
+        # ------------------------------------------------------------------
+        # 3. Plain-English Live Preview & Completeness Guard
+        # ------------------------------------------------------------------
+        self.preview_card = QFrame()
+        self.preview_card.setObjectName("DlgRulePreviewCard")
+        pv_row = QHBoxLayout(self.preview_card)
+        pv_row.setContentsMargins(12, 8, 12, 8)
+        pv_row.setSpacing(8)
+        self.lbl_preview_dot = QLabel("●")
+        self.lbl_live_preview = QLabel("")
+        self.lbl_live_preview.setWordWrap(True)
+        pv_row.addWidget(self.lbl_preview_dot, 0, Qt.AlignmentFlag.AlignTop)
+        pv_row.addWidget(self.lbl_live_preview, 1)
+        layout.addWidget(self.preview_card)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
-        if ok_btn is not None:
-            ok_btn.setToolTip("Save this custom sorting rule")
+        self._ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        if self._ok_btn is not None:
+            self._ok_btn.setObjectName("PrimaryButton")
+            self._ok_btn.setAccessibleName("Save Rule")
+            self._ok_btn.setToolTip("Save this custom sorting rule")
         cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         if cancel_btn is not None:
             cancel_btn.setToolTip("Discard changes to this rule")
@@ -457,26 +613,250 @@ class RuleEditorDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def _validate_accept(self) -> None:
-        if not self.edit_name.text().strip():
-            QMessageBox.warning(self, "Missing Name", "Please give this rule a name.")
+        # Wire live normalization & preview updates
+        self.edit_keywords.textChanged.connect(self._on_dlg_live_changed)
+        self.edit_keywords.editingFinished.connect(self._normalize_dlg_keywords)
+        self.edit_domains.textChanged.connect(self._on_dlg_live_changed)
+        self.edit_domains.editingFinished.connect(self._normalize_dlg_domains)
+        self.edit_exts.textChanged.connect(self._on_dlg_exts_edited)
+        self.edit_exts.editingFinished.connect(self._normalize_dlg_exts)
+        self.edit_content_keywords.textChanged.connect(self._on_dlg_live_changed)
+        self.edit_exclude_keywords.textChanged.connect(self._on_dlg_live_changed)
+        self.edit_regex.textChanged.connect(self._on_dlg_live_changed)
+        self.combo_match_mode.currentIndexChanged.connect(self._on_dlg_live_changed)
+        self.spin_min_mb.valueChanged.connect(self._on_dlg_live_changed)
+        self.spin_max_mb.valueChanged.connect(self._on_dlg_live_changed)
+        self.spin_min_age.valueChanged.connect(self._on_dlg_live_changed)
+
+        self._refresh_dlg_chip_styles()
+        self._sync_dlg_preview()
+
+    def _refresh_dlg_chip_styles(self) -> None:
+        cur_exts = set(self._norm_exts(self.edit_exts.text()))
+        for btn, chip_exts in self._chip_buttons:
+            active = all(e in cur_exts for e in chip_exts)
+            btn.blockSignals(True)
+            btn.setChecked(active)
+            btn.blockSignals(False)
+            if active:
+                btn.setStyleSheet(
+                    "QPushButton { padding: 3px 8px; font-size: 11px; border-radius: 6px; font-weight: 600; "
+                    "background-color: rgba(10, 132, 255, 0.22); border: 1px solid #0A84FF; color: #FFFFFF; }"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { padding: 3px 8px; font-size: 11px; border-radius: 6px; font-weight: 500; "
+                    "background-color: #141416; border: 1px solid #2C2C2E; color: #AEAEB2; }"
+                    "QPushButton:hover { border-color: #48484A; color: #F5F5F7; }"
+                )
+
+    def _on_dlg_chip_clicked(self, chip_exts: tuple[str, ...], checked: bool) -> None:
+        cur = self._norm_exts(self.edit_exts.text())
+        if checked:
+            for e in chip_exts:
+                if e not in cur:
+                    cur.append(e)
+        else:
+            cur = [e for e in cur if e not in chip_exts]
+        self._suppress_sync = True
+        try:
+            self.edit_exts.setText(", ".join(cur))
+        finally:
+            self._suppress_sync = False
+        self._refresh_dlg_chip_styles()
+        self._sync_dlg_preview()
+
+    def _on_dlg_exts_edited(self) -> None:
+        if self._suppress_sync:
             return
-        if not self.edit_dest.text().strip():
-            QMessageBox.warning(self, "Missing Folder", "Please enter a destination folder name.")
+        self._refresh_dlg_chip_styles()
+        self._sync_dlg_preview()
+
+    def _normalize_dlg_exts(self) -> None:
+        norm = self._norm_exts(self.edit_exts.text())
+        self._suppress_sync = True
+        try:
+            self.edit_exts.setText(", ".join(norm))
+        finally:
+            self._suppress_sync = False
+        self._refresh_dlg_chip_styles()
+        self._sync_dlg_preview()
+
+    def _normalize_dlg_domains(self) -> None:
+        norm = self._norm_domains(self.edit_domains.text())
+        self._suppress_sync = True
+        try:
+            self.edit_domains.setText(", ".join(norm))
+        finally:
+            self._suppress_sync = False
+        self._sync_dlg_preview()
+
+    def _normalize_dlg_keywords(self) -> None:
+        norm = self._norm_words(self.edit_keywords.text())
+        self._suppress_sync = True
+        try:
+            self.edit_keywords.setText(", ".join(norm))
+        finally:
+            self._suppress_sync = False
+        self._sync_dlg_preview()
+
+    def _on_dlg_dest_index_changed(self, idx: int) -> None:
+        if self._suppress_sync:
+            return
+        data = str(self.cmb_dest.itemData(idx) or "")
+        if data == self._new_folder_sentinel:
+            self._suppress_sync = True
+            try:
+                prev_idx = self.cmb_dest.findData(self._last_valid_dest)
+                if prev_idx >= 0:
+                    self.cmb_dest.setCurrentIndex(prev_idx)
+                elif self.edit_dest is not None:
+                    self.edit_dest.setText(self._last_valid_dest)
+            finally:
+                self._suppress_sync = False
+            self._open_new_folder_from_dialog()
+            return
+        if data:
+            self._last_valid_dest = data
+        self._sync_dlg_preview()
+
+    def _open_new_folder_from_dialog(self) -> None:
+        win = self.parentWidget()
+        while win is not None and not hasattr(win, "open_guided_folder_dialog"):
+            win = win.parentWidget()
+        if win is None:
+            return
+        parent_hint = self._last_valid_dest.split("\\")[0] if self._last_valid_dest else ""
+        created = win.open_guided_folder_dialog(default_parent_path=parent_hint, parent_widget=self)
+        if created:
+            self._suppress_sync = True
+            try:
+                existing_idx = self.cmb_dest.findData(created)
+                if existing_idx < 0:
+                    insert_at = max(0, self.cmb_dest.count() - 1)
+                    self.cmb_dest.insertItem(insert_at, created, created)
+                    existing_idx = insert_at
+                self.cmb_dest.setCurrentIndex(existing_idx)
+                if self.edit_dest is not None:
+                    self.edit_dest.setText(created)
+                self._last_valid_dest = created
+            finally:
+                self._suppress_sync = False
+            self._sync_dlg_preview()
+
+    def _on_dlg_live_changed(self, *_args: Any) -> None:
+        if self._suppress_sync:
+            return
+        if self.edit_dest is not None:
+            typed_dest = self.edit_dest.text().strip()
+            if typed_dest and typed_dest != "+ New Folder...":
+                self._last_valid_dest = typed_dest
+        self._sync_dlg_preview()
+
+    def _sync_dlg_preview(self) -> None:
+        exts = self._norm_exts(self.edit_exts.text())
+        words = self._norm_words(self.edit_keywords.text())
+        doms = self._norm_domains(self.edit_domains.text())
+        ckws = self._norm_words(self.edit_content_keywords.text())
+        excl = self._norm_words(self.edit_exclude_keywords.text())
+        rx = self.edit_regex.text().strip()
+        dest = (self.edit_dest.text().strip() if self.edit_dest is not None else "") or self._last_valid_dest or "Documents"
+        mode = str(self.combo_match_mode.currentData() or "any")
+        min_mb = float(self.spin_min_mb.value())
+        max_mb = float(self.spin_max_mb.value())
+        min_age = int(self.spin_min_age.value())
+
+        has_cue = self._has_any_cue(
+            extensions=exts,
+            keywords=words,
+            domains=doms,
+            content_keywords=ckws,
+            regex_pattern=rx,
+            min_size_mb=min_mb,
+            max_size_mb=max_mb,
+            min_age_days=min_age,
+        )
+        sentence = self._describe_plain(
+            extensions=exts,
+            keywords=words,
+            domains=doms,
+            destination=dest,
+            match_mode=mode,
+            exclude_keywords=excl,
+            content_keywords=ckws,
+            regex_pattern=rx,
+            min_size_mb=min_mb,
+            max_size_mb=max_mb,
+            min_age_days=min_age,
+        )
+        self.lbl_live_preview.setText(sentence)
+        if has_cue:
+            self.preview_card.setStyleSheet(
+                "QFrame#DlgRulePreviewCard { background-color: rgba(10, 132, 255, 0.10); "
+                "border: 1px solid rgba(10, 132, 255, 0.35); border-radius: 9px; }"
+            )
+            self.lbl_preview_dot.setStyleSheet("color: #3B82F6; font-size: 10px; border: none;")
+            self.lbl_live_preview.setStyleSheet("color: #F5F5F7; font-size: 12px; border: none;")
+        else:
+            self.preview_card.setStyleSheet(
+                "QFrame#DlgRulePreviewCard { background-color: rgba(255, 159, 10, 0.10); "
+                "border: 1px solid rgba(255, 159, 10, 0.34); border-radius: 9px; }"
+            )
+            self.lbl_preview_dot.setStyleSheet("color: #FF9F0A; font-size: 10px; border: none;")
+            self.lbl_live_preview.setStyleSheet("color: #FFD60A; font-size: 12px; border: none;")
+
+        if self._ok_btn is not None:
+            self._ok_btn.setEnabled(has_cue)
+            if has_cue:
+                leaf = dest.replace("/", "\\").strip("\\").split("\\")[-1] or "Downloads"
+                short_leaf = (leaf[:20] + "…") if len(leaf) > 21 else leaf
+                self._ok_btn.setText(f"Save Rule → {short_leaf}")
+            else:
+                self._ok_btn.setText("Pick a file type, word, or website")
+
+    def _validate_accept(self) -> None:
+        dest = (self.edit_dest.text().strip() if self.edit_dest is not None else "") or self._last_valid_dest
+        if not dest or dest == "+ New Folder...":
+            QMessageBox.warning(self, "Missing Folder", "Please select or enter a destination folder.")
+            return
+        built = self.build_rule()
+        if not self._has_any_cue(
+            extensions=built.extensions,
+            keywords=built.keywords,
+            domains=built.domains,
+            content_keywords=built.content_keywords,
+            regex_pattern=built.regex_pattern,
+            min_size_mb=built.min_size_mb,
+            max_size_mb=built.max_size_mb,
+            min_age_days=built.min_age_days,
+        ):
+            QMessageBox.warning(
+                self,
+                "Incomplete Rule",
+                "Add at least one file type, filename word, or website so Download Sorter knows which files to catch.",
+            )
             return
         self.accept()
 
     def build_rule(self) -> Rule:
-        split_csv = lambda s: [x.strip() for x in s.split(",") if x.strip()]
+        exts = self._norm_exts(self.edit_exts.text())
+        words = self._norm_words(self.edit_keywords.text())
+        doms = self._norm_domains(self.edit_domains.text())
+        ckws = self._norm_words(self.edit_content_keywords.text())
+        excl = self._norm_words(self.edit_exclude_keywords.text())
+        dest = (self.edit_dest.text().strip() if self.edit_dest is not None else "") or self._last_valid_dest or "Documents"
+        if dest == "+ New Folder...":
+            dest = self._last_valid_dest or "Documents"
+        name = self.edit_name.text().strip() or self._suggest_name(exts, words, doms, dest)
         return Rule(
             id=self._base_id,
-            name=self.edit_name.text().strip(),
-            destination=self.edit_dest.text().strip(),
-            keywords=split_csv(self.edit_keywords.text()),
-            domains=split_csv(self.edit_domains.text()),
-            extensions=split_csv(self.edit_exts.text()),
-            content_keywords=split_csv(self.edit_content_keywords.text()),
-            exclude_keywords=split_csv(self.edit_exclude_keywords.text()),
+            name=name,
+            destination=dest,
+            keywords=words,
+            domains=doms,
+            extensions=exts,
+            content_keywords=ckws,
+            exclude_keywords=excl,
             regex_pattern=self.edit_regex.text().strip(),
             match_mode=str(self.combo_match_mode.currentData() or "any"),
             min_size_mb=float(self.spin_min_mb.value()),
@@ -4386,6 +4766,17 @@ class MainWindow(QMainWindow):
                         cfg.rules[idx] = dlg.build_rule()
                         self._commit_config(cfg)
                     break
+        elif action == "new_folder_for_rule":
+            created = self.open_guided_folder_dialog(default_parent_path=arg)
+            if created:
+                self.flow_tab.apply_new_folder_to_active_rule(created)
+        elif action == "tree_tool:new_folder":
+            parent_hint = ""
+            if self.flow_tab._focused_folder:
+                parent_hint = self.flow_tab._focused_folder.split("\\")[0]
+            self.open_guided_folder_dialog(default_parent_path=parent_hint)
+        elif action == "tree_tool:setup_studio":
+            self.open_folder_setup_studio(initial_mode="auto")
         elif action == "tree_tool:align_downloads":
             self._open_align_preview_dialog()
         elif action == "tree_tool:apply_shift":
@@ -4398,7 +4789,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "select_preferences_section"):
                 self.select_preferences_section(arg or "sorting")
         elif action == "tree_tool:scan_folders":
-            self._open_legacy_arch_dialog("scan_folders")
+            self.open_folder_setup_studio(initial_mode="scan")
         elif action == "tree_tool:sort_lower_tiers":
             self._on_sort_tiers_now()
         elif action == "tree_tool:snapshots":
@@ -4408,12 +4799,256 @@ class MainWindow(QMainWindow):
         elif action == "tree_tool:defaults":
             self.arch_tab.sync_from_service(force=True)
             self.arch_tab._on_return_to_defaults()
+        elif action == "tree:guided_subfolder":
+            self.open_guided_folder_dialog(default_parent_path=arg)
+        elif action == "tree:edit_folder" and arg:
+            self.open_guided_folder_dialog(folder_path=arg, edit_existing=True)
         elif action == "tree:open_explorer" and arg:
             target = self.service.watch_root / arg.replace("/", "\\").strip("\\")
             if target.exists() and sys.platform == "win32" and hasattr(os, "startfile"):
                 os.startfile(str(target))
         elif action in ("tree:rename", "tree:merge", "tree:delete") and arg:
             self._open_legacy_arch_dialog(action, folder_path=arg)
+
+    def _ensure_manual_folders_on_disk(self, rel_paths: list[str]) -> None:
+        """Safely create manual-only directories inside ``service.watch_root`` and refresh disk scan."""
+        from download_sorter.dest import is_under_watch_root, to_relative_dest
+
+        watch_root = self.service.watch_root.resolve()
+        if not watch_root.is_dir():
+            return
+        created_any = False
+        for raw_rel in rel_paths:
+            clean_rel = to_relative_dest(raw_rel, watch_root=watch_root, fallback="")
+            if not clean_rel:
+                continue
+            target_dir = (watch_root / clean_rel).resolve()
+            if target_dir != watch_root and is_under_watch_root(target_dir, watch_root):
+                try:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    created_any = True
+                except OSError:
+                    pass
+        if created_any and hasattr(self, "flow_tab"):
+            self.flow_tab._trigger_disk_scan()
+
+    def open_guided_folder_dialog(
+        self,
+        *,
+        default_parent_path: str = "",
+        folder_path: str = "",
+        edit_existing: bool = False,
+        parent_widget: QWidget | None = None,
+    ) -> str | None:
+        """Open GuidedFolderDialog to create or edit a custom folder and optionally align matching loose files."""
+        import uuid
+
+        from download_sorter.architecture import architecture_from_config
+        from download_sorter.ui.flow.folder_builder import GuidedFolderDialog
+
+        base_cfg = copy.deepcopy(self.service.config)
+        arch = architecture_from_config(base_cfg)
+        target_node = None
+        if edit_existing and folder_path:
+            norm_fp = folder_path.replace("/", "\\").strip("\\")
+            for n in arch.nodes:
+                if arch.node_relative_path(n.id).replace("/", "\\").strip("\\").lower() == norm_fp.lower():
+                    target_node = n
+                    break
+            if target_node is None and norm_fp:
+                target_node = arch.ensure_path_chain(norm_fp, is_custom=True)
+
+        dlg = GuidedFolderDialog(
+            arch,
+            config=base_cfg,
+            watch_root=self.service.watch_root,
+            node=target_node,
+            default_parent_path=default_parent_path.replace("/", "\\").strip("\\"),
+            parent=parent_widget or self,
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        res_data = dlg.result_data()
+        _new_arch, new_cfg, rel_path = dlg.apply_to_architecture(arch, base_cfg)
+        norm_rel = rel_path.replace("/", "\\").strip("\\")
+        if "\\" in norm_rel and hasattr(self, "flow_tab"):
+            self.flow_tab.tree._expanded_parents.add(norm_rel.split("\\", 1)[0])
+
+        prev_cfg = copy.deepcopy(self.service.config)
+        if bool(res_data.get("align_now")):
+            self._apply_guided_folder_with_align(prev_cfg, new_cfg, norm_rel)
+        else:
+            self.service._config_undo_stack.append((f"folder-{uuid.uuid4().hex[:8]}", prev_cfg))
+            self._commit_config(new_cfg)
+            if bool(res_data.get("manual_only")):
+                self._ensure_manual_folders_on_disk([norm_rel])
+            if hasattr(self, "arch_tab"):
+                self.arch_tab._dirty = False
+                self.arch_tab.sync_from_service(force=True)
+            crumb = norm_rel.replace("\\", " › ")
+            msg = f"Saved folder 'Downloads › {crumb}'."
+            self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
+            self.lbl_footer.setText(msg)
+        return norm_rel
+
+    def _apply_guided_folder_with_align(self, prev_cfg: Config, new_cfg: Config, norm_rel: str) -> None:
+        """Persist ``new_cfg`` and move matching loose top-level files into ``norm_rel`` with full Undo."""
+        import uuid
+
+        from download_sorter.fs_ops import execute_move
+
+        batch_id = f"folder-align-{uuid.uuid4().hex[:8]}"
+        self.service._config_undo_stack.append((batch_id, prev_cfg))
+        self.service.update_config(new_cfg)
+        watch_root = self.service.watch_root
+        target_low = norm_rel.lower()
+
+        def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
+            moved: list[dict[str, Any]] = []
+            if not watch_root.is_dir():
+                return {"batch_id": "", "moved": moved}
+            ignored_exts = {".crdownload", ".part", ".tmp", ".download", ".opdownload", ".filepart", ".!qb"}
+            top_files = [
+                p
+                for p in sorted(watch_root.iterdir(), key=lambda x: x.name.lower())
+                if p.is_file() and not p.name.startswith(".") and p.suffix.lower() not in ignored_exts
+            ]
+            matching: list[tuple[Path, Any, str]] = []
+            for fp in top_files:
+                cand = candidate_from_path(fp)
+                dec = evaluate(cand, new_cfg)
+                if dec.action != "move" or dec.relative_dest is None:
+                    continue
+                dest_parent = str(dec.relative_dest.parent).replace("/", "\\").strip("\\").lower()
+                if dest_parent == target_low or dest_parent.startswith(target_low + "\\"):
+                    matching.append((fp, dec, cand.source_url))
+
+            total = len(matching)
+            for idx, (fp, dec, src_url) in enumerate(matching, start=1):
+                report(idx - 1, max(1, total), fp.name)
+                try:
+                    rec = execute_move(
+                        fp,
+                        dec,
+                        batch_id=batch_id,
+                        db=self.service.db,
+                        watch_root=watch_root,
+                        settle_seconds=0.0,
+                        source_url=src_url,
+                    )
+                    if rec is not None:
+                        moved.append(rec)
+                except OSError:
+                    continue
+            if total > 0:
+                report(total, total, "Complete")
+            if moved:
+                self.service.db.checkpoint()
+            return {"batch_id": batch_id if moved else "", "moved": moved}
+
+        def _done(res: dict[str, Any]) -> None:
+            if hasattr(self, "arch_tab"):
+                self.arch_tab._dirty = False
+                self.arch_tab.sync_from_service(force=True)
+            moved_n = len(res.get("moved", []))
+            crumb = norm_rel.replace("\\", " › ")
+            if moved_n:
+                self.header_mascot.celebrate()
+                msg = f"Created 'Downloads › {crumb}' and moved {moved_n} matching file(s)."
+            else:
+                msg = f"Saved folder 'Downloads › {crumb}'."
+            self.refresh_all(
+                then=lambda: self.banner.show_message(
+                    msg,
+                    kind="success",
+                    action_text="Undo",
+                    action=self._on_undo_last,
+                )
+            )
+            self.lbl_footer.setText(msg)
+
+        self._run_service_action(
+            _work,
+            _done,
+            busy_text=f"Aligning matching files into {norm_rel.split(chr(92))[-1]}...",
+            pass_progress=True,
+            finish_text="Folder Saved & Aligned",
+        )
+
+    def open_folder_setup_studio(self, *, initial_mode: str = "auto") -> bool:
+        """Open the 3-step Folder Setup Studio and apply target_config() with optional file shift & Undo."""
+        import uuid
+
+        from download_sorter.ui.flow.setup_studio import FolderSetupStudioDialog
+
+        dlg = FolderSetupStudioDialog(self.service, initial_mode=initial_mode, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return False
+
+        studio_arch = dlg.target_architecture()
+        manual_rels = [
+            p
+            for p in (
+                studio_arch.node_relative_path(n.id).replace("/", "\\").strip("\\")
+                for n in studio_arch.nodes
+                if getattr(n, "premade_key", "") == "__manual__"
+            )
+            if p
+        ]
+        target_cfg = dlg.target_config()
+        shift_now = bool(dlg.should_shift_files())
+        summary = str(dlg.summary_text() or "").strip()
+        if hasattr(self, "flow_tab"):
+            self.flow_tab.discard_pending_folder_shift()
+
+        if shift_now:
+            def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
+                return self.service.apply_architecture_and_shift(
+                    target_cfg,
+                    shift_files=True,
+                    create_empty_folders=False,
+                    batch_prefix="studio",
+                    on_progress=report,
+                )
+
+            def _announce(res: dict[str, Any]) -> None:
+                shifted = int(res.get("shifted_count", 0))
+                base_msg = summary or "Applied custom folder setup"
+                msg = f"{base_msg} · Organized {shifted} file(s)." if shifted else f"{base_msg}."
+                self.header_mascot.celebrate()
+                self.progress_hud.finish("Folder Setup Complete", detail=msg, kind="success")
+                self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
+                self.lbl_footer.setText(msg)
+
+            def _done(res: dict[str, Any]) -> None:
+                if manual_rels:
+                    self._ensure_manual_folders_on_disk(manual_rels)
+                if hasattr(self, "arch_tab"):
+                    self.arch_tab._dirty = False
+                    self.arch_tab.sync_from_service(force=True)
+                self.refresh_all(then=lambda: _announce(res))
+
+            self._run_service_action(
+                _work,
+                _done,
+                busy_text="Applying folder setup & organizing files...",
+                pass_progress=True,
+                finish_text="Folder Setup Complete",
+            )
+        else:
+            prev_cfg = copy.deepcopy(self.service.config)
+            self.service._config_undo_stack.append((f"studio-{uuid.uuid4().hex[:8]}", prev_cfg))
+            self._commit_config(target_cfg)
+            if manual_rels:
+                self._ensure_manual_folders_on_disk(manual_rels)
+            if hasattr(self, "arch_tab"):
+                self.arch_tab._dirty = False
+                self.arch_tab.sync_from_service(force=True)
+            msg = summary or "Folder setup saved."
+            self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
+            self.lbl_footer.setText(msg)
+        return True
 
     def _apply_flow_pending_folder_shift(self) -> None:
         """Apply pending drag-and-drop folder moves from Sorting Flow with full Undo support."""

@@ -555,3 +555,375 @@ def test_sorting_flow_drag_and_drop_adjustments(
         win.close()
         svc.stop()
 
+
+def test_guided_rule_composer_draft_completeness_normalization_and_dialog(
+    v3_qapp,
+    app_paths: AppPaths,
+) -> None:
+    from PySide6.QtWidgets import QPushButton
+
+    from download_sorter.router import FileCandidate, evaluate
+    from download_sorter.ui.flow.spine_panel import (
+        describe_rule_plain_english,
+        normalize_domain_tokens,
+        normalize_ext_tokens,
+    )
+    from download_sorter.ui.main_window import MainWindow, RuleEditorDialog
+
+    # 1. Normalization helpers and AND/OR plain-English truth
+    assert normalize_ext_tokens("pdf, .DOCX, *.csv") == [".pdf", ".docx", ".csv"]
+    assert normalize_domain_tokens("https://stripe.com/pay, www.makerworld.com/en/models") == [
+        "stripe.com",
+        "makerworld.com",
+    ]
+    assert (
+        describe_rule_plain_english(
+            extensions=[".pdf"],
+            keywords=["invoice"],
+            domains=["stripe.com"],
+            destination=r"Documents\Bills & Receipts",
+        )
+        == "Moves .pdf files containing 'invoice' or from stripe.com → Documents › Bills & Receipts"
+    )
+    assert (
+        describe_rule_plain_english(destination="Documents")
+        == "Add at least one file type, filename word, or website above"
+    )
+
+    cfg_empty = Config.new_install()
+    cfg_empty.rules = []
+    save_config(cfg_empty, app_paths)
+    svc = SorterService(app_paths)
+    win = MainWindow(svc)
+    try:
+        win.show()
+        v3_qapp.processEvents()
+        flow = win.flow_tab
+        spine = flow.spine
+
+        # 2. Empty state offers clear 1-click actions (+ Create a Rule, Starter Rule Packs ▾)
+        empty_card = spine.rules_layout.itemAt(0).widget()
+        assert empty_card is not None
+        empty_btn_texts = {b.text() for b in empty_card.findChildren(QPushButton)}
+        assert "+ Create a Rule" in empty_btn_texts
+        assert "Starter Rule Packs ▾" in empty_btn_texts
+
+        # 3. Clicking + New rule opens Guided Rule Composer draft WITHOUT saving dummy "example" rule!
+        spine.btn_new_rule.click()
+        v3_qapp.processEvents()
+        assert svc.config.rules == []
+        assert spine.has_rule_draft() is True
+        comp = spine._draft_composer
+        assert comp is not None
+        assert comp.btn_save_draft.isEnabled() is False
+        assert comp.btn_save_draft.text() == "Pick a file type, word, or website"
+        assert "Add at least one file type, filename word, or website above" in comp.lbl_preview_sentence.text()
+
+        # Retarget destination by clicking a folder on the right
+        flow._on_folder_clicked("Documents\\PDF")
+        v3_qapp.processEvents()
+        assert comp._last_valid_dest == "Documents\\PDF"
+
+        # Pick .pdf chip + enter keyword + paste full URL -> auto-normalizes & enables narrating Save CTA
+        comp._chip_buttons[".pdf"].click()
+        comp.edit_words.setText("invoice")
+        comp._on_words_finished()
+        comp.edit_domains.setText("https://stripe.com/pay?id=99")
+        comp._on_domains_finished()
+        v3_qapp.processEvents()
+
+        assert comp.edit_domains.text() == "stripe.com"
+        assert comp.btn_save_draft.isEnabled() is True
+        assert comp.btn_save_draft.text() == "Save Rule → PDF"
+        assert (
+            comp.lbl_preview_sentence.text()
+            == "Moves .pdf files containing 'invoice' or from stripe.com → Documents › PDF"
+        )
+
+        # Save draft rule -> persisted to config.rules and routes matching files
+        comp.btn_save_draft.click()
+        v3_qapp.processEvents()
+        assert spine.has_rule_draft() is False
+        assert len(svc.config.rules) == 1
+        saved = svc.config.rules[0]
+        assert saved.keywords == ["invoice"]
+        assert saved.domains == ["stripe.com"]
+        assert saved.extensions == [".pdf"]
+        assert saved.destination == "Documents\\PDF"
+        assert "example" not in saved.keywords
+
+        dec = evaluate(FileCandidate("2026_invoice.pdf"), svc.config)
+        assert dec.match_type == "rule"
+        assert str(dec.relative_dest.parent).replace("/", "\\") == "Documents\\PDF"
+
+        # 4. RuleEditorDialog enforces completeness guard, normalizes URL/ext, and updates narrating button
+        dlg = RuleEditorDialog(parent=win)
+        try:
+            assert dlg._ok_btn is not None
+            assert dlg._ok_btn.isEnabled() is False
+            assert dlg._ok_btn.text() == "Pick a file type, word, or website"
+            dlg.edit_domains.setText("https://dashboard.stripe.com/billing")
+            dlg._normalize_dlg_domains()
+            dlg.edit_exts.setText("pdf")
+            dlg._normalize_dlg_exts()
+            assert dlg.edit_domains.text() == "dashboard.stripe.com"
+            assert dlg.edit_exts.text() == ".pdf"
+            assert dlg._ok_btn.isEnabled() is True
+            assert dlg._ok_btn.text().startswith("Save Rule → ")
+            built = dlg.build_rule()
+            assert built.domains == ["dashboard.stripe.com"]
+            assert built.extensions == [".pdf"]
+        finally:
+            dlg.close()
+    finally:
+        win.close()
+        svc.stop()
+
+
+def test_folder_tree_setup_callout_actions_and_guided_align_undo(
+    v3_qapp,
+    app_paths: AppPaths,
+    monkeypatch,
+) -> None:
+    from download_sorter.architecture import apply_architecture_to_config, architecture_from_config
+    from download_sorter.ui.main_window import MainWindow
+
+    dl = app_paths.downloads_dir
+    assert dl is not None
+    loose_bill = dl / "march_invoice_stripe.pdf"
+    loose_bill.write_bytes(b"%PDF-1.4")
+    loose_photo = dl / "vacation.png"
+    loose_photo.write_bytes(b"PNG")
+
+    cfg_empty = Config.new_install()
+    cfg_empty.rules = []
+    save_config(cfg_empty, app_paths)
+    svc = SorterService(app_paths)
+    win = MainWindow(svc)
+    try:
+        win.resize(1100, 760)
+        win.show()
+        v3_qapp.processEvents()
+        tree = win.flow_tab.tree
+
+        # 1. Guided Setup Callout strip is shown when config.architecture is empty, and dismisses cleanly
+        assert tree.setup_callout.isHidden() is False
+        assert "+ New Folder" in tree.btn_new_folder.text() or "+ Folder" in tree.btn_new_folder.text()
+        assert "Setup" in tree.btn_setup_folders.text()
+
+        menu_labels = [a.text() for a in tree.menu_tools.actions() if not a.isSeparator()]
+        assert "Match Existing Folders..." in menu_labels
+        assert "Sort Lower Tiers" in menu_labels
+        assert "Snapshots..." in menu_labels
+        assert "Advanced Node Canvas..." in menu_labels
+        assert "Reset to Defaults..." in menu_labels
+
+        tree.btn_callout_dismiss.click()
+        v3_qapp.processEvents()
+        assert tree.setup_callout.isHidden() is True
+
+        # 2. Clicking + on a FolderRowWidget routes to open_guided_folder_dialog(default_parent_path=...)
+        captured_calls: list[dict] = []
+
+        def _spy_guided(**kwargs):
+            captured_calls.append(kwargs)
+            return r"Documents\Bills & Receipts"
+
+        monkeypatch.setattr(win, "open_guided_folder_dialog", _spy_guided)
+        doc_row = tree.folder_widget("Documents")
+        assert doc_row is not None
+        doc_row.btn_add.click()
+        v3_qapp.processEvents()
+        assert captured_calls and captured_calls[-1]["default_parent_path"] == "Documents"
+
+        # 3. _apply_guided_folder_with_align moves matching loose top-level files AND supports 1-click Undo!
+        prev_cfg = svc.config
+        arch = architecture_from_config(prev_cfg)
+        docs_node = next(n for n in arch.nodes_in_tier(1) if n.name == "Documents")
+        arch.add_custom_node(
+            name="Bills & Receipts",
+            tier=2,
+            parent_id=docs_node.id,
+            extensions=[".pdf"],
+            keywords=["invoice"],
+        )
+        new_cfg = apply_architecture_to_config(arch, prev_cfg)
+        win._apply_guided_folder_with_align(prev_cfg, new_cfg, r"Documents\Bills & Receipts")
+        v3_qapp.processEvents()
+
+        moved_bill = dl / "Documents" / "Bills & Receipts" / "march_invoice_stripe.pdf"
+        assert moved_bill.is_file()
+        assert not loose_bill.exists()
+        # Non-matching loose photo stays untouched!
+        assert loose_photo.is_file()
+
+        # Undo restores both the moved file AND the previous config!
+        win._on_undo_last()
+        v3_qapp.processEvents()
+        assert loose_bill.is_file()
+        assert not moved_bill.exists()
+        assert not svc.config.architecture
+    finally:
+        win.close()
+        svc.stop()
+
+
+def test_main_window_guided_folder_and_setup_studio_integration(
+    v3_qapp,
+    app_paths: AppPaths,
+    monkeypatch,
+) -> None:
+    from PySide6.QtWidgets import QDialog
+
+    from download_sorter.ui.flow.folder_builder import GuidedFolderDialog
+    from download_sorter.ui.flow.setup_studio import FolderSetupStudioDialog
+    from download_sorter.ui.main_window import MainWindow
+
+    dl = app_paths.downloads_dir
+    assert dl is not None
+    sample_inv = dl / "Stripe_Invoice_May.pdf"
+    sample_inv.write_bytes(b"%PDF-1.4")
+
+    save_config(Config.new_install(), app_paths)
+    svc = SorterService(app_paths)
+    win = MainWindow(svc)
+    try:
+        win.show()
+        v3_qapp.processEvents()
+
+        # 1. GuidedFolderDialog via MainWindow.open_guided_folder_dialog (with align_now=True)
+        def _auto_accept_folder(dlg_self: GuidedFolderDialog) -> int:
+            dlg_self.edit_name.setText("Invoices & Taxes")
+            dlg_self._extensions = [".pdf"]
+            dlg_self._keywords = ["invoice"]
+            dlg_self._refresh_preview_and_cta()
+            dlg_self.chk_align_now.setChecked(True)
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(GuidedFolderDialog, "exec", _auto_accept_folder)
+        created_rel = win.open_guided_folder_dialog(default_parent_path="Documents")
+        v3_qapp.processEvents()
+        assert created_rel == r"Documents\Invoices & Taxes"
+        assert (dl / "Documents" / "Invoices & Taxes" / "Stripe_Invoice_May.pdf").is_file()
+        assert win.flow_tab.tree.setup_callout.isHidden() is True
+
+        # Undo restores file & config cleanly
+        win._on_undo_last()
+        v3_qapp.processEvents()
+        assert sample_inv.is_file()
+
+        # 2. FolderSetupStudioDialog via MainWindow.open_folder_setup_studio (shift_files=False then True)
+        def _auto_accept_studio_no_shift(dlg_self: FolderSetupStudioDialog) -> int:
+            dlg_self._go_to_step(2)
+            dlg_self.chk_shift_files.setChecked(False)
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(FolderSetupStudioDialog, "exec", _auto_accept_studio_no_shift)
+        assert win.open_folder_setup_studio(initial_mode="preset") is True
+        v3_qapp.processEvents()
+        assert bool(svc.config.architecture) is True
+        assert sample_inv.is_file()  # not shifted when should_shift_files() is False
+    finally:
+        win.close()
+        svc.stop()
+
+
+def test_expanded_rule_done_flushes_edits_and_manual_folders_exist_on_disk(
+    v3_qapp,
+    app_paths: AppPaths,
+    monkeypatch,
+) -> None:
+    from PySide6.QtWidgets import QDialog, QLabel, QPushButton
+
+    from download_sorter.ui.flow.folder_builder import GuidedFolderDialog
+    from download_sorter.ui.flow.setup_studio import FolderSetupStudioDialog
+    from download_sorter.ui.main_window import MainWindow
+
+    dl = app_paths.downloads_dir
+    assert dl is not None
+
+    cfg = Config.new_install()
+    cfg.rules = [
+        Rule(
+            id="r_edit_me",
+            name="Initial Rule",
+            destination="Documents",
+            keywords=["oldword"],
+            enabled=True,
+        )
+    ]
+    save_config(cfg, app_paths)
+
+    svc = SorterService(app_paths)
+    win = MainWindow(svc)
+    try:
+        win.show()
+        v3_qapp.processEvents()
+        spine = win.flow_tab.spine
+
+        # 1. Expand existing rule, type edits WITHOUT firing editingFinished, and click Done -> all flushed!
+        spine._on_rule_expand_requested("r_edit_me")
+        v3_qapp.processEvents()
+        assert spine.expanded_rule_id() == "r_edit_me"
+
+        expanded_row = spine.rules_layout.itemAt(0).widget()
+        assert expanded_row is not None and expanded_row.composer is not None
+        expanded_row.edit_title.setText("PayPal CSV Statements")
+        expanded_row.composer.edit_words.setText("statement, payout")
+        expanded_row.composer.edit_domains.setText("https://www.paypal.com/reports")
+        expanded_row.composer.edit_custom_ext.setText("csv")
+
+        done_btn = next(b for b in expanded_row.composer.findChildren(QPushButton) if b.text() == "Done")
+        done_btn.click()
+        v3_qapp.processEvents()
+
+        assert spine.expanded_rule_id() is None
+        updated_rule = svc.config.rules[0]
+        assert updated_rule.name == "PayPal CSV Statements"
+        assert updated_rule.keywords == ["statement", "payout"]
+        assert updated_rule.domains == ["paypal.com"]
+        assert ".csv" in updated_rule.extensions
+
+        # 2. Creating a Manual folder via GuidedFolderDialog shows "Manual" badge (not "Auto") and creates dir on disk
+        def _accept_manual_folder(dlg_self: GuidedFolderDialog) -> int:
+            dlg_self.edit_name.setText("Reference Vault")
+            dlg_self._set_manual_only(True)
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(GuidedFolderDialog, "exec", _accept_manual_folder)
+        rel_manual = win.open_guided_folder_dialog(default_parent_path="Documents")
+        v3_qapp.processEvents()
+        assert rel_manual == r"Documents\Reference Vault"
+        assert (dl / "Documents" / "Reference Vault").is_dir()
+
+        row_manual = win.flow_tab.tree.folder_widget(r"Documents\Reference Vault")
+        assert row_manual is not None
+        labels = [lbl.text() for lbl in row_manual.findChildren(QLabel)]
+        assert "Manual" in labels
+        assert "Auto" not in labels
+        assert "Manual folder" in row_manual.toolTip()
+
+        # 3. Creating a Manual folder via FolderSetupStudioDialog also creates it on disk and renders "Manual" badge
+        def _accept_studio_manual(dlg_self: FolderSetupStudioDialog) -> int:
+            new_n = dlg_self._arch.add_custom_node(name="Drop Zone", tier=1, parent_id=None)
+            new_n.premade_key = "__manual__"
+            dlg_self._manual_node_ids.add(new_n.id)
+            dlg_self._go_to_step(2)
+            dlg_self.chk_shift_files.setChecked(False)
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(FolderSetupStudioDialog, "exec", _accept_studio_manual)
+        assert win.open_folder_setup_studio(initial_mode="customize") is True
+        v3_qapp.processEvents()
+        assert (dl / "Drop Zone").is_dir()
+        drop_row = win.flow_tab.tree.folder_widget("Drop Zone")
+        assert drop_row is not None
+        drop_labels = [lbl.text() for lbl in drop_row.findChildren(QLabel)]
+        assert "Manual" in drop_labels
+    finally:
+        win.close()
+        svc.stop()
+
+
+
+
