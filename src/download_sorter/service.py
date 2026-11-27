@@ -661,13 +661,40 @@ class SorterService:
         }
     )
 
+    _BUNDLE_COMPANION_EXTS: frozenset[str] = frozenset(
+        {".dll", ".pak", ".xp3", ".pck", ".asar", ".unity3d", ".rpa", ".rgss3a", ".winmd", ".sig"}
+    )
+    _BUNDLE_COMPANION_DIRS: frozenset[str] = frozenset(
+        {"data", "savedata", "save", "saves", "locales", "resources", "www", "mono", "assets"}
+    )
+
     @classmethod
     def _is_project_or_bundle_dir(cls, dir_path: Path) -> bool:
         try:
+            folder_stem = dir_path.name.lower()
+            parent_name = dir_path.parent.name.lower() if dir_path.parent else ""
+            if parent_name in ("games", "portable apps", "extracted"):
+                return True
+            has_exe = False
+            has_bundle_companion = False
             with os.scandir(dir_path) as it:
                 for entry in it:
-                    if entry.name.lower() in cls._PROJECT_MARKER_NAMES:
+                    ename = entry.name.lower()
+                    if ename in cls._PROJECT_MARKER_NAMES:
                         return True
+                    if entry.is_file(follow_symlinks=False):
+                        # Arduino sketch folder requires <Folder>/<Folder>.ino to stay together
+                        if ename == f"{folder_stem}.ino":
+                            return True
+                        ext = Path(ename).suffix.lower()
+                        if ext in (".exe", ".app"):
+                            has_exe = True
+                        elif ext in cls._BUNDLE_COMPANION_EXTS or ename in ("readme.txt", "config.ini", "settings.ini"):
+                            has_bundle_companion = True
+                    elif entry.is_dir(follow_symlinks=False) and ename in cls._BUNDLE_COMPANION_DIRS:
+                        has_bundle_companion = True
+            if has_exe and has_bundle_companion:
+                return True
         except OSError:
             return False
         return False
@@ -761,6 +788,10 @@ class SorterService:
 
         arch = architecture_from_config(target_config)
         all_folders = arch.all_target_folders()
+        surviving_arch_lower = {f.replace("/", "\\").strip("\\").lower() for f in all_folders}
+        format_sub_names_lower = {sub.lower() for sub in DEFAULT_TYPE_SUBFOLDERS.values()} | {
+            sub.lower() for sub in target_config.type_subfolders.values()
+        }
         planned: list[dict[str, Any]] = []
         folders_needed: list[str] = []
 
@@ -815,24 +846,41 @@ class SorterService:
                 continue
             seen_paths.add(key_path)
 
-            cand = candidate_from_path(fpath, lazy_zone=True)
-            dec = evaluate(cand, target_config, include_trace=False)
-            if dec.action != "move" or dec.relative_dest is None:
-                continue
-            if is_top_level and self._is_3mf_held(fpath, target_config):
-                continue
+            try:
+                cand = candidate_from_path(fpath, lazy_zone=True)
+                dec = evaluate(cand, target_config, include_trace=False)
+                if dec.action != "move" or dec.relative_dest is None:
+                    continue
+                if is_top_level and self._is_3mf_held(fpath, target_config):
+                    continue
 
-            dest_candidate = watch_dir / dec.relative_dest
-            if os.path.normcase(str(dest_candidate)) == key_path:
-                continue
+                dest_candidate = watch_dir / dec.relative_dest
+                if os.path.normcase(str(dest_candidate)) == key_path:
+                    continue
 
-            resolved = fpath.resolve()
-            dest_full = dest_candidate.resolve()
-            if dest_full == resolved:
-                continue
+                resolved = fpath.resolve()
+                dest_full = dest_candidate.resolve()
+                if dest_full == resolved:
+                    continue
 
-            src_rel = str(resolved.relative_to(watch_dir))
-            dest_rel = str(dec.relative_dest)
+                src_rel = str(resolved.relative_to(watch_dir))
+                dest_rel = str(dec.relative_dest)
+
+                # Protect files already inside a surviving curated topic/project subfolder
+                # (e.g. "Documents\School & Coursework" or "Documents\Bills & Receipts")
+                # from being demoted back into a generic extension bucket ("Documents\PDF").
+                if not is_top_level and dec.match_type != "rule":
+                    cur_rel_dir = str(Path(src_rel).parent).replace("/", "\\").strip("\\")
+                    cur_parts = [p for p in cur_rel_dir.split("\\") if p and p != "."]
+                    if (
+                        len(cur_parts) >= 2
+                        and cur_rel_dir.lower() in surviving_arch_lower
+                        and cur_parts[-1].lower() not in format_sub_names_lower
+                    ):
+                        continue
+            except (OSError, ValueError) as exc:
+                logging.warning("Architecture preview skipped %s: %s", fpath, exc)
+                continue
             rel_parent = str(dec.relative_dest.parent)
             if rel_parent and rel_parent != "." and rel_parent not in folders_needed:
                 folders_needed.append(rel_parent)
@@ -923,11 +971,11 @@ class SorterService:
                 for sub_root in list(watch_dir.iterdir()):
                     if not sub_root.is_dir() or sub_root.name.lower() not in managed_before:
                         continue
-                    for dirpath in sorted(
-                        [p for p in sub_root.rglob("*") if p.is_dir()] + [sub_root],
-                        key=lambda p: len(p.parts),
-                        reverse=True,
-                    ):
+                    try:
+                        subdirs = [p for p in sub_root.rglob("*") if p.is_dir()] + [sub_root]
+                    except OSError:
+                        continue
+                    for dirpath in sorted(subdirs, key=lambda p: len(p.parts), reverse=True):
                         try:
                             if not any(dirpath.iterdir()):
                                 dirpath.rmdir()

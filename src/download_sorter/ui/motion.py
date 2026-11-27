@@ -1325,7 +1325,7 @@ class ConfettiOverlayWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self._pieces: list[dict[str, Any]] = []
         self._elapsed_ms = 0
         self._duration_ms = 2600

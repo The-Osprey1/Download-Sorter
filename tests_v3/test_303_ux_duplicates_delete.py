@@ -195,6 +195,8 @@ def test_select_and_delete_files_in_preview_table(v3_qapp, app_paths: AppPaths, 
     win = _make_window(v3_qapp, app_paths)
     try:
         win.show()
+        win.tabs.setCurrentWidget(win._home_tab)
+        v3_qapp.processEvents()
         assert win.tbl_sim.rowCount() == 3
         assert not win.btn_delete_selected.isVisible()
 

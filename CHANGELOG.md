@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0-beta.1] - 2026-11-25
+
+### Added
+- **Sorting Flow (v4.0):** Unified 3-tab interface (`Sorting Flow`, `Activity`, `Preferences`) with a live 3-step decision spine (`Hold & group first` → `Your rules` → `Sort the rest by file type`), transparent Bezier wire bridge to the live destination folder tree, inline rule composer, Folder Focus mode, and Teach-by-Example drag-and-drop onto folders.
+- **Unified Pipeline (`download_sorter.pipeline`):** Single source of truth for `trace_file()`, `infer_teach_cues()`, and `build_rule_from_cues()` powering the live tester bar, `Activity` row double-click (`Trace in Flow`), and rule authoring.
+- **Header Watch Switcher (`Switch ▾`):** Quick-switch between watched folders and add extra folders directly from the header while keeping all v3.6.1 features intact.
+
 ## [3.6.1] - 2026-11-23
 
 ### Added
