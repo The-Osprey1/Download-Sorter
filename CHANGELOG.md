@@ -9,12 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Rule collision note in New Folder (`ui/flow/folder_builder.py`).** When an existing rule already catches some of the loose files a new folder would match, step 3 shows an amber note naming that rule and where those files go today. Extension-only folders get a **Put this folder ahead of those rules** option; folders with words or websites already go first, and the note says so.
+
+### Changed
+- **First run opens Folder Setup (`ui/main_window.py`).** New installs go straight into the interactive 3-step Folder Setup Studio instead of the v3 slideshow. Closing it still counts as seen, so automatic sorting is not held back, and the **Guide** button still opens the tour.
+- **Taller folder dialogs on roomy screens (`ui/flow/folder_builder.py`, `ui/flow/setup_studio.py`).** New Folder opens at 840px and Folder Setup at 880px when the screen has room, so the website chip row in step 2 no longer needs a scroll. Smaller screens are capped to the usable height.
+
 ## [4.0.0-beta.1] - 2026-11-25
 
 ### Added
 - **Sorting Flow (v4.0):** Unified 3-tab interface (`Sorting Flow`, `Activity`, `Preferences`) with a live 3-step decision spine (`Hold & group first` → `Your rules` → `Sort the rest by file type`), transparent Bezier wire bridge to the live destination folder tree, inline rule composer, Folder Focus mode, and Teach-by-Example drag-and-drop onto folders.
 - **Unified Pipeline (`download_sorter.pipeline`):** Single source of truth for `trace_file()`, `infer_teach_cues()`, and `build_rule_from_cues()` powering the live tester bar, `Activity` row double-click (`Trace in Flow`), and rule authoring.
 - **Header Watch Switcher (`Switch ▾`):** Quick-switch between watched folders and add extra folders directly from the header while keeping all v3.6.1 features intact.
+- **Guided New Folder dialog (`ui/flow/folder_builder.py`).** A 3-section folder composer: name and location with one-click presets and name checks, clickable file-type, word and website chips (with sample-file drop to fill them in), a **Sort automatically** / **Manual folder** switch, and a plain-English summary with a live preview of matching loose files and an undoable **move them now** option.
+- **Folder Setup Studio (`ui/flow/setup_studio.py`).** A 3-step guided setup: start from a scan of your Downloads (games, extracted apps, `_Duplicates` and bundles stay untouched), a blueprint, or your current folders; fix each folder from a checklist with a live filename tester; then review a dry run and apply with Undo.
+- **Guided rule composer in Sorting Flow (`ui/flow/spine_panel.py`).** Inline rule editing with format chips, URL and extension clean-up, `+ Folder...` creation, a live plain-English preview and a completeness check.
+- **Drag-and-drop flow editing (`ui/flow/`).** Drag rules to reorder or re-route them, drag file-type groups onto folders, and drag folders to nest or promote them, with a live wire preview.
+- **Live Downloads alignment (`ui/flow/align_dialog.py`).** A dry-run preview to tidy selected loose files into the current folder layout, with Undo.
+
+### Changed
+- **Holding and grouping are opt-in (`config.py`).** New installs no longer hold `.3mf` files, group projects or align existing files until you turn those on.
+- **Apple / Windows 11 style redesign and 2-pane Preferences (`ui/main_window.py`, `ui/settings_widgets.py`).**
+- **Real-world Downloads hardening (`architecture.py`, `service.py`).** Folder scans follow each folder's dominant file types, protect game, extracted-app and Arduino bundles and curated subfolders, and filter extension IDs and download-server hosts.
+
+### Fixed
+- **Crashes in `Qt6Gui.dll` (`0xc0000005`) during painting and drag-and-drop (`ui/flow/bridge_overlay.py`, `spine_panel.py`, `folder_tree_panel.py`).** Painting now checks every widget is still alive and always ends the painter, and drops defer rebuilds until the drag has finished.
+- **Toggles showed the wrong state when set quietly (`ui/settings_widgets.py`).**
 
 ## [3.6.1] - 2026-11-23
 
