@@ -116,11 +116,11 @@ def test_sorting_flow_tab_live_trace_focus_teach_and_activity_trace(
         win.show()
         v3_qapp.processEvents()
 
-        # 3-tab structure with Sorting Flow first
+        # 3-tab structure with the Folders designer first
         assert win.tabs.count() == 3
-        assert win.tabs.tabText(0) == "Sorting Flow"
+        assert win.tabs.tabText(0) == "Folders"
         assert win.tabs.tabText(1) == "Activity"
-        assert win.tabs.tabText(2) == "Preferences"
+        assert win.tabs.tabText(2) == "Settings"
         assert hasattr(win, "btn_watch_switcher")
 
         # Live trace updates
@@ -278,7 +278,7 @@ def test_v4_preferences_sidebar_disk_sync_and_align_dialog(v3_qapp, app_paths: A
         v3_qapp.processEvents()
         win._on_sim_trace_row(win.tbl_sim.model().index(0, 0))
         v3_qapp.processEvents()
-        assert win.tabs.currentWidget() is win.flow_tab
+        assert win.tabs.currentWidget() is win.folders_tab
 
         # Every Sorting Flow -> MainWindow / ArchitectureTab action target exists and is callable
         for attr in (
@@ -459,6 +459,10 @@ def test_sorting_flow_drag_and_drop_adjustments(
         win.show()
         v3_qapp.processEvents()
         flow = win.flow_tab
+        # The Sorting Flow view is hidden behind the Folders screen; show it so its rows get real sizes.
+        flow.resize(win.size())
+        flow.show()
+        v3_qapp.processEvents()
 
         # 1. Reorder rule via QDropEvent (drop r_b onto upper half of r_a -> r_b moves first)
         row_a = flow.spine.rules_layout.itemAt(0).widget()
@@ -927,3 +931,35 @@ def test_expanded_rule_done_flushes_edits_and_manual_folders_exist_on_disk(
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# First run opens the guided Folder Setup Studio (not the v3 slideshow)
+# ---------------------------------------------------------------------------
+
+
+def test_first_run_opens_folder_setup_studio_and_marks_seen(service_instance, v3_qapp, monkeypatch) -> None:  # noqa: ANN001
+    from download_sorter.ui import main_window as mw
+    from download_sorter.ui.flow import setup_studio
+
+    seen: list[str] = []
+
+    def fake_studio_exec(dialog) -> int:  # noqa: ANN001
+        seen.append("studio")
+        return 0  # user closes the studio without applying
+
+    def fail_walkthrough_exec(dialog) -> int:  # noqa: ANN001
+        raise AssertionError("first run must not open the old slideshow")
+
+    monkeypatch.setattr(setup_studio.FolderSetupStudioDialog, "exec", fake_studio_exec)
+    monkeypatch.setattr(mw.WalkthroughDialog, "exec", fail_walkthrough_exec)
+
+    assert service_instance.config.tutorial_completed is False
+    win = mw.MainWindow(service_instance)
+    try:
+        assert win.open_first_run_setup() is False
+        assert seen == ["studio"]
+        # Skipping still counts as seen so automatic sorting is not held back
+        assert service_instance.config.tutorial_completed is True
+    finally:
+        win.close()

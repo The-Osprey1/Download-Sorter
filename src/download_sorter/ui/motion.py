@@ -282,7 +282,7 @@ class AnimatedBanner(QFrame):
             f"QFrame#animatedBanner {{ background-color: {bg}; border: 1px solid {border}; border-radius: 8px; }}"
             "QFrame#animatedBanner QLabel { color: #EFF3FA; }"
             f"QFrame#animatedBanner QPushButton {{ background: transparent; color: {accent}; border: 1px solid {border}; "
-            "border-radius: 6px; padding: 3px 10px; font-weight: 600; }}"
+            "border-radius: 6px; padding: 3px 10px; font-weight: 600; }"
             "QFrame#animatedBanner QPushButton:hover { background-color: rgba(255,255,255,0.08); }"
             "QFrame#animatedBanner QPushButton#bannerCloseBtn { border: none; color: #B4C0D4; padding: 0; font-size: 13px; font-weight: 700; }"
             "QFrame#animatedBanner QPushButton#bannerCloseBtn:hover { background-color: rgba(255,255,255,0.14); color: #FFFFFF; }"

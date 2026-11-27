@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import uuid
 import sys
 from collections.abc import Callable
 import logging
@@ -83,6 +84,7 @@ from download_sorter import update_check, updater
 from download_sorter.ui.accessibility import name_controls_for_screen_readers
 from download_sorter.ui.architecture_canvas import ArchitectureTab
 from download_sorter.ui.flow import SortingFlowTab
+from download_sorter.ui.folders import FoldersTab
 from download_sorter.ui.text_scale import scaled_px
 from download_sorter.ui.chrome_walkthrough import ChromeExtensionWalkthroughDialog
 from download_sorter.ui.motion import (
@@ -2043,9 +2045,21 @@ class MainWindow(QMainWindow):
         self.progress_hud = SortingProgressHUD(self)
         root_layout.addWidget(self.progress_hud)
 
-        self._tab_icon_names = ["rules", "home", "settings"]
+        self._tab_icon_names = ["folder", "home", "settings"]
         self.tabs = QTabWidget()
+        # The one-screen Folders designer is the main view. The older Sorting Flow
+        # view is kept, hidden, for the actions and dialogs that still use it.
+        self.folders_tab = FoldersTab(self.service, self, run_service_action=self._run_service_action)
+        self.folders_tab.config_committed.connect(self._on_flow_config_committed)
+        self.folders_tab.action_requested.connect(self._on_flow_action)
+        self.folders_tab.teach_move_requested.connect(self._on_flow_teach_move)
+        self.folders_tab.disk_change_requested.connect(self._run_folder_disk_change)
+        self.folders_tab.notice.connect(self._on_folders_notice)
+        self.folders_tab.tidy_requested.connect(self._on_sort_now)
+        self._folder_disk_batches: list[str] = []
+
         self.flow_tab = SortingFlowTab(self.service, self)
+        self.flow_tab.hide()
         self.flow_tab.config_committed.connect(self._on_flow_config_committed)
         self.flow_tab.action_requested.connect(self._on_flow_action)
         self.flow_tab.teach_move_requested.connect(self._on_flow_teach_move)
@@ -2064,9 +2078,9 @@ class MainWindow(QMainWindow):
         self._rules_tab.hide()
         self._settings_tab = self._build_settings_tab()
 
-        self.tabs.addTab(self.flow_tab, make_vector_icon("rules", "#F5F5F7", 15), "Sorting Flow")
+        self.tabs.addTab(self.folders_tab, make_vector_icon("folder", "#F5F5F7", 15), "Folders")
         self.tabs.addTab(self._home_tab, make_vector_icon("home", "#8E8E93", 15), "Activity")
-        self.tabs.addTab(self._settings_tab, make_vector_icon("settings", "#8E8E93", 15), "Preferences")
+        self.tabs.addTab(self._settings_tab, make_vector_icon("settings", "#8E8E93", 15), "Settings")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root_layout.addWidget(self.tabs, 1)
 
@@ -3330,6 +3344,9 @@ class MainWindow(QMainWindow):
             self.flow_tab.set_watch_label(Path(str(snap["watch_dir"])).name or "Downloads")
             self.flow_tab._trigger_disk_scan()
             self.flow_tab.refresh()
+        if hasattr(self, "folders_tab"):
+            self.folders_tab.refresh()
+            self.folders_tab.scan_disk()
 
         # A message a handler wrote to the footer while the data was being collected
         # is newer than this snapshot; do not paint the totals over it.
@@ -3597,6 +3614,8 @@ class MainWindow(QMainWindow):
             self.btn_rule_suggestion_compact.setToolTip(text)
         if hasattr(self, "flow_tab"):
             self.flow_tab.set_suggestion(self._current_suggestion)
+        if hasattr(self, "folders_tab"):
+            self.folders_tab.set_suggestion(self._current_suggestion)
         self._place_rule_suggestion()
 
     def _place_rule_suggestion(self) -> None:
@@ -4601,12 +4620,31 @@ class MainWindow(QMainWindow):
         # Automatic sorting waits for this, so it must not stay pending forever.
         self.complete_walkthrough()
 
+    def open_first_run_setup(self) -> bool:
+        """First launch: go straight into the guided Folder Setup Studio instead of a slideshow.
+
+        Finishing, skipping or closing all count as the first run being seen, because
+        automatic sorting waits for ``tutorial_completed``. Returns True when a setup was applied.
+        """
+        applied = False
+        try:
+            applied = bool(self.open_folder_setup_studio(initial_mode="auto"))
+        finally:
+            self.complete_walkthrough()
+        if not applied and hasattr(self, "banner"):
+            self.banner.show_message(
+                "No changes made. Set up your folders anytime with Folder Setup in Sorting Flow, "
+                "or reopen the Guide from the toolbar.",
+                kind="info",
+            )
+        return applied
+
     def _maybe_show_first_run_walkthrough(self) -> None:
         if self._first_run_prompted or os.environ.get("PYTEST_CURRENT_TEST"):
             return
         self._first_run_prompted = True
         if not self.service.config.tutorial_completed and self.isVisible():
-            self.open_walkthrough()
+            self.open_first_run_setup()
 
     def showEvent(self, event) -> None:
         was_spontaneous = event.spontaneous() if event is not None else False
@@ -4695,7 +4733,8 @@ class MainWindow(QMainWindow):
         if 0 <= row < len(moves):
             rec = moves[row]
             self.flow_tab.trace_from_activity(str(rec["filename"]), str(rec.get("source_url") or ""))
-            self.tabs.setCurrentWidget(self.flow_tab)
+            self.folders_tab.trace_from_activity(str(rec["filename"]), str(rec.get("source_url") or ""))
+            self.tabs.setCurrentWidget(self.folders_tab)
 
     def _on_sim_trace_row(self, index) -> None:  # noqa: ANN001
         row = index.row()
@@ -4709,10 +4748,12 @@ class MainWindow(QMainWindow):
                 from download_sorter.router import read_zone_url
 
                 self.flow_tab.tester_bar.set_test_file(p.name, read_zone_url(p), path=p)
-                self.tabs.setCurrentWidget(self.flow_tab)
+                self.folders_tab.trace_from_activity(p.name, read_zone_url(p))
+                self.tabs.setCurrentWidget(self.folders_tab)
                 return
         self.flow_tab.trace_from_activity(item.text(), "")
-        self.tabs.setCurrentWidget(self.flow_tab)
+        self.folders_tab.trace_from_activity(item.text(), "")
+        self.tabs.setCurrentWidget(self.folders_tab)
 
     def _on_flow_config_committed(self, cfg: Config) -> None:
         self._commit_config(cfg)
@@ -4742,8 +4783,83 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Move Failed", str(exc))
 
+    def _on_folders_notice(self, text: str, undo: object) -> None:
+        if callable(undo):
+            self.banner.show_message(text, kind="success", action_text="Undo", action=undo, timeout_ms=7000)
+        else:
+            self.banner.show_message(text, kind="info", timeout_ms=4200)
+        self.lbl_footer.setText(text)
+
+    def _run_folder_disk_change(self, change: object) -> None:
+        """Move files on disk after a folder was renamed, moved, combined or removed.
+
+        Files are moved, never deleted, and every move is recorded so Undo can put
+        it back. The work runs off the GUI thread.
+        """
+        moves = list(getattr(change, "disk_moves", []) or [])
+        removals = list(getattr(change, "disk_removals", []) or [])
+        root = self.service.watch_root
+        if not any((root / old).is_dir() for old, _new in moves) and not any(
+            (root / old).is_dir() for old, _t in removals
+        ):
+            return
+        svc = self.service
+
+        def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
+            batches: list[str] = []
+            moved = 0
+            for old, new in moves:
+                if not (root / old).is_dir():
+                    continue
+                res = svc.merge_folders_on_disk(old, new, on_progress=report)
+                moved += int(res.get("moved_count", 0))
+                if res.get("batch_id"):
+                    batches.append(str(res["batch_id"]))
+            for old, target in removals:
+                res = svc.evacuate_or_remove_folder_on_disk(old, target if target else "", on_progress=report)
+                moved += int(res.get("moved_count", 0))
+                if res.get("batch_id"):
+                    batches.append(str(res["batch_id"]))
+            return {"batches": batches, "moved": moved}
+
+        def _done(res: dict[str, Any]) -> None:
+            self._folder_disk_batches = list(res.get("batches", []))
+            self.refresh_all()
+
+        self._run_service_action(_work, _done, busy_text="Moving files…", pass_progress=True, finish_text="Files moved")
+
+    def _undo_folder_disk_change(self) -> None:
+        from download_sorter.fs_ops import undo_batch
+
+        batches = list(reversed(self._folder_disk_batches))
+        self._folder_disk_batches = []
+        if not batches:
+            return
+        db = self.service.db
+
+        def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
+            restored = 0
+            for bid in batches:
+                res = undo_batch(db, bid, on_progress=report)
+                restored += int(res.get("restored", 0) or 0)
+            return {"restored": restored}
+
+        self._run_service_action(_work, lambda _r: self.refresh_all(), busy_text="Putting files back…", pass_progress=True, finish_text="Undone")
+
+    def _open_new_advanced_rule(self, folder_path: str) -> None:
+        rule = Rule(id=f"rule_{uuid.uuid4().hex[:8]}", name=folder_path.split("\\")[-1] or "New rule", destination=folder_path)
+        dlg = RuleEditorDialog(rule, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            cfg = copy.deepcopy(self.service.config)
+            cfg.rules.insert(0, dlg.build_rule())
+            self._commit_config(cfg)
+
     def _on_flow_action(self, action: str, arg: str) -> None:
-        if action == "apply_pack" and arg:
+        if action == "folders:undo_disk":
+            self._undo_folder_disk_change()
+        elif action == "folders:new_advanced_rule" and arg:
+            self._open_new_advanced_rule(arg)
+        elif action == "apply_pack" and arg:
             self._apply_template(arg)
         elif action == "smart_order":
             self._sort_rules_by_specificity()
