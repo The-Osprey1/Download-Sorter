@@ -4601,12 +4601,31 @@ class MainWindow(QMainWindow):
         # Automatic sorting waits for this, so it must not stay pending forever.
         self.complete_walkthrough()
 
+    def open_first_run_setup(self) -> bool:
+        """First launch: go straight into the guided Folder Setup Studio instead of a slideshow.
+
+        Finishing, skipping or closing all count as the first run being seen, because
+        automatic sorting waits for ``tutorial_completed``. Returns True when a setup was applied.
+        """
+        applied = False
+        try:
+            applied = bool(self.open_folder_setup_studio(initial_mode="auto"))
+        finally:
+            self.complete_walkthrough()
+        if not applied and hasattr(self, "banner"):
+            self.banner.show_message(
+                "No changes made. Set up your folders anytime with Folder Setup in Sorting Flow, "
+                "or reopen the Guide from the toolbar.",
+                kind="info",
+            )
+        return applied
+
     def _maybe_show_first_run_walkthrough(self) -> None:
         if self._first_run_prompted or os.environ.get("PYTEST_CURRENT_TEST"):
             return
         self._first_run_prompted = True
         if not self.service.config.tutorial_completed and self.isVisible():
-            self.open_walkthrough()
+            self.open_first_run_setup()
 
     def showEvent(self, event) -> None:
         was_spontaneous = event.spontaneous() if event is not None else False

@@ -927,3 +927,35 @@ def test_expanded_rule_done_flushes_edits_and_manual_folders_exist_on_disk(
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# First run opens the guided Folder Setup Studio (not the v3 slideshow)
+# ---------------------------------------------------------------------------
+
+
+def test_first_run_opens_folder_setup_studio_and_marks_seen(service_instance, v3_qapp, monkeypatch) -> None:  # noqa: ANN001
+    from download_sorter.ui import main_window as mw
+    from download_sorter.ui.flow import setup_studio
+
+    seen: list[str] = []
+
+    def fake_studio_exec(dialog) -> int:  # noqa: ANN001
+        seen.append("studio")
+        return 0  # user closes the studio without applying
+
+    def fail_walkthrough_exec(dialog) -> int:  # noqa: ANN001
+        raise AssertionError("first run must not open the old slideshow")
+
+    monkeypatch.setattr(setup_studio.FolderSetupStudioDialog, "exec", fake_studio_exec)
+    monkeypatch.setattr(mw.WalkthroughDialog, "exec", fail_walkthrough_exec)
+
+    assert service_instance.config.tutorial_completed is False
+    win = mw.MainWindow(service_instance)
+    try:
+        assert win.open_first_run_setup() is False
+        assert seen == ["studio"]
+        # Skipping still counts as seen so automatic sorting is not held back
+        assert service_instance.config.tutorial_completed is True
+    finally:
+        win.close()
