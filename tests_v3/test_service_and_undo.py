@@ -178,3 +178,56 @@ def test_old_underscore_duplicates_folder_is_renamed_and_history_follows(app_pat
     # Running again is harmless
     assert migrate_duplicates_folder(dl, db) == 0
     db.close()
+
+
+def test_new_file_in_a_subfolder_is_rerouted_but_hand_moves_and_own_folders_stay(app_paths) -> None:  # noqa: ANN001
+    from types import SimpleNamespace
+
+    from download_sorter.config import Config, save_config
+    from download_sorter.service import SorterService, _TopLevelEventHandler
+
+    cfg = Config.with_starter_defaults()
+    cfg.settle_seconds = 0.0
+    save_config(cfg, app_paths)
+    svc = SorterService(app_paths)
+    dl = app_paths.downloads_dir
+    (dl / "Images").mkdir()
+    stray = dl / "Images" / "bracket.step"
+    stray.write_bytes(b"ISO-10303-21;")
+    (dl / "My Project").mkdir()
+    mine = dl / "My Project" / "bolt.step"
+    mine.write_bytes(b"ISO-10303-21;")
+    (dl / "Documents" / "Career").mkdir(parents=True)
+    chosen = dl / "Documents" / "Career" / "cover_letter.pdf"
+    chosen.write_bytes(b"%PDF-1.4")
+
+    res = svc._process_paths([stray, mine, chosen], settle_seconds=0.0)
+    assert len(res["moved"]) == 1
+    assert not stray.exists()
+    assert mine.exists()  # a folder of your own: left alone
+    assert chosen.exists()  # same kind of folder: you put it there on purpose
+    dest = Path(res["moved"][0]["dest_path"].replace("\\", "/"))
+    assert dest.name == "bracket.step" and "Images" not in dest.parts
+
+    # Turned off: nothing in subfolders moves.
+    off = Config.with_starter_defaults()
+    off.sort_new_files_in_subfolders = False
+    svc.update_config(off)
+    again = dl / "Images" / "again.step"
+    again.write_bytes(b"ISO-10303-21;")
+    assert svc._process_paths([again], settle_seconds=0.0)["moved"] == []
+
+    # The watcher queues files created or renamed in place, never files moved between folders.
+    top, nested = [], []
+    handler = _TopLevelEventHandler(dl, top.append, nested.append)
+    handler.on_created(SimpleNamespace(is_directory=False, src_path=str(dl / "Images" / "new.step")))
+    handler.on_moved(
+        SimpleNamespace(
+            is_directory=False, src_path=str(dl / "Images" / "a.crdownload"), dest_path=str(dl / "Images" / "a.step")
+        )
+    )
+    handler.on_moved(
+        SimpleNamespace(is_directory=False, src_path=str(dl / "x.step"), dest_path=str(dl / "Images" / "x.step"))
+    )
+    assert [p.name for p in nested] == ["new.step", "a.step"]
+    assert top == []

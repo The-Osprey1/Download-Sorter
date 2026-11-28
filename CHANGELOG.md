@@ -35,6 +35,9 @@ A simpler, single-screen way to design your folders, built from feedback that 4.
   - Renaming or moving a folder updates the rules that point at it.
   - Removing a folder moves its files to the parent folder; nothing is deleted.
 - **Rule collision note in New Folder (`ui/flow/folder_builder.py`).** When an existing rule already catches some of the loose files a new folder would match, step 3 shows an amber note naming that rule and where those files go today. Extension-only folders get a **Put this folder ahead of those rules** option; folders with words or websites already go first, and the note says so.
+- **New files that land in a folder inside Downloads are sorted too (`service.py`).** The watcher now sees whole Downloads. A new file saved straight into one of your folders (such as a STEP file from Fusion saved into Images) moves to the folder it belongs in, with Undo. Files you move by hand, files in your own folders, files in project or bundle folders, and files that already sit in the right top-level folder stay where they are. Settings › **Sort New Files in Folders Inside Downloads** turns it off.
+- **"Move them in" for folders that are missing on disk (`ui/folders/folders_tab.py`).** If a saved folder does not exist yet, or files that belong in it sit loose in its parent folder, the folder page says so and offers **Move them in** (or **Create it now**). The moves are one Undo batch.
+- **Ready to insert heads-up (`ui/toasts.py`).** When a CAD, CNC or 3D print file is sorted, the side notice says **Ready to insert**: the next file dialog you open offers it in the inserter.
 
 ### Changed
 - **The `_Duplicates` folder is now `Duplicates`.** On start, an existing `_Duplicates` folder is renamed (or its files are moved across without overwriting anything), and the history follows, so Undo still works.
@@ -48,8 +51,12 @@ A simpler, single-screen way to design your folders, built from feedback that 4.
 - **First run opens Folder Setup (`ui/main_window.py`).** New installs go straight into the interactive 3-step Folder Setup Studio instead of the v3 slideshow. Closing it still counts as seen, so automatic sorting is not held back, and the **Guide** button still opens the tour.
 - **Taller folder dialogs on roomy screens (`ui/flow/folder_builder.py`, `ui/flow/setup_studio.py`).** New Folder opens at 860px and Folder Setup at 880px when the screen has room, so the website chip row in step 2 no longer needs a scroll. Smaller screens are capped to the usable height.
 
+- **The side notice and the inserter match v4.** Both use the graphite and blue colours, rounder corners and a spring animation; the side notice shows a small Sorty, and "Jump to File" is now "Show in Folder".
+- **"Sort Lower Tiers" is now "Tidy Files Inside Folders".**
+
 ### Fixed
 - Notification bars with a button (such as Undo) no longer log a style sheet error.
+- A new folder is no longer left uncreated when another job is running at the same moment; the app waits and tries again, and writes each folder fill to the log.
 
 ## [4.0.0-beta.1] - 2026-11-25
 

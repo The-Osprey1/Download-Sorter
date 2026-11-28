@@ -54,35 +54,61 @@ from download_sorter.router import FileCandidate, RouteDecision, RouteStep, cand
 
 
 class _TopLevelEventHandler(FileSystemEventHandler):
-    """Queue only immediate child file events inside ``watch_root``."""
+    """Queue new files in ``watch_root``.
 
-    def __init__(self, watch_root: Path, on_candidate: Callable[[Path], None]) -> None:
+    Files directly in the folder are always queued. With ``on_nested`` set, a file
+    that is *new* inside a subfolder is queued too: one that was created there, or
+    renamed in place (a browser finishing a download). A file moved from one folder
+    to another is someone tidying by hand, so it is left alone.
+    """
+
+    def __init__(
+        self,
+        watch_root: Path,
+        on_candidate: Callable[[Path], None],
+        on_nested: Callable[[Path], None] | None = None,
+    ) -> None:
         self.watch_root = watch_root.resolve()
         self.on_candidate = on_candidate
+        self.on_nested = on_nested
 
-    def _enqueue_if_top_level(self, raw_path: str | bytes) -> None:
+    @staticmethod
+    def _path(raw_path: str | bytes) -> Path | None:
         if not raw_path:
-            return
+            return None
         text = raw_path.decode("utf-8", errors="ignore") if isinstance(raw_path, bytes) else raw_path
-        path = Path(text)
+        return Path(text)
+
+    def _parent(self, path: Path) -> Path:
         try:
-            parent = path.resolve().parent
+            return path.resolve().parent
         except OSError:
-            parent = path.parent
+            return path.parent
+
+    def _enqueue_if_top_level(self, raw_path: str | bytes, *, new_file: bool = False) -> None:
+        path = self._path(raw_path)
+        if path is None:
+            return
+        parent = self._parent(path)
         if parent == self.watch_root:
             self.on_candidate(path)
+        elif new_file and self.on_nested is not None and self.watch_root in parent.parents:
+            self.on_nested(path)
 
     def on_created(self, event) -> None:  # type: ignore[no-untyped-def]
         if not event.is_directory:
-            self._enqueue_if_top_level(event.src_path)
+            self._enqueue_if_top_level(event.src_path, new_file=True)
 
     def on_modified(self, event) -> None:  # type: ignore[no-untyped-def]
         if not event.is_directory:
             self._enqueue_if_top_level(event.src_path)
 
     def on_moved(self, event) -> None:  # type: ignore[no-untyped-def]
-        if not event.is_directory:
-            self._enqueue_if_top_level(event.dest_path)
+        if event.is_directory:
+            return
+        src, dest = self._path(event.src_path), self._path(event.dest_path)
+        renamed_in_place = src is not None and dest is not None and self._parent(src) == self._parent(dest)
+        self._enqueue_if_top_level(event.dest_path, new_file=renamed_in_place)
 
 
 def _overlaps(a: Path, b: Path) -> bool:
@@ -1133,7 +1159,8 @@ class SorterService:
         clean = to_relative_dest(folder_rel, fallback="")
         if not clean or not watch_dir.is_dir():
             return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
-        folder_dir = (watch_dir / clean).resolve()
+        rel_parts = [p for p in str(clean).replace("\\", "/").split("/") if p]
+        folder_dir = watch_dir.joinpath(*rel_parts).resolve()
         if folder_dir == watch_dir or not is_under_watch_root(folder_dir, watch_dir):
             return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
         created = not folder_dir.exists()
@@ -1143,7 +1170,7 @@ class SorterService:
             logging.warning("Could not create folder %s: %s", folder_dir, exc)
             return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
 
-        want = Path(clean).as_posix().lower().strip("/")
+        want = "/".join(rel_parts).lower()
         look_in = [watch_dir]
         parent_dir = folder_dir.parent
         if parent_dir != watch_dir and is_under_watch_root(parent_dir, watch_dir):
@@ -1165,7 +1192,7 @@ class SorterService:
                 decision = evaluate(cand, cfg, include_trace=False)
                 if decision.action != "move" or decision.relative_dest is None:
                     continue
-                dest_folder = Path(decision.relative_dest).parent.as_posix().lower().strip("/")
+                dest_folder = str(Path(decision.relative_dest).parent).replace("\\", "/").lower().strip("/")
                 if dest_folder != want and not dest_folder.startswith(want + "/"):
                     continue
                 if self._is_3mf_held(entry, cfg):
@@ -1195,6 +1222,13 @@ class SorterService:
                 moved.append(rec)
         if on_progress is not None and total > 0:
             on_progress(total, total, "Complete")
+        logging.info(
+            "Folder fill %s: %s, %d of %d matching files moved",
+            clean,
+            "created" if created else "already there",
+            len(moved),
+            total,
+        )
         if moved:
             self.db.checkpoint()
             if self.on_moves_completed is not None:
@@ -1461,6 +1495,50 @@ class SorterService:
                 pass
             self.quick_switcher_monitor = None
 
+    _NESTED_SKIP_PARTS = frozenset({".staging", "duplicates", "_duplicates", "$recycle.bin"})
+
+    def _enqueue_nested(self, path: Path) -> None:
+        """A new file inside a subfolder: queue it only when that is switched on."""
+        if not self.config.sort_new_files_in_subfolders:
+            return
+        if any(part.lower() in self._NESTED_SKIP_PARTS or part.startswith(".") for part in path.parts[-6:-1]):
+            return
+        self._enqueue(path)
+
+    def _nested_decision(self, path: Path, root: Path, cfg: Config) -> RouteDecision | None:
+        """Where a new file inside a subfolder of ``root`` should go, or None to leave it.
+
+        It moves only when it landed in one of your designed folders for a different
+        kind of file (a STEP file saved into Images). Folders of your own, project
+        folders, and any folder of the same kind (a PDF saved into Documents\\Career)
+        are left alone.
+        """
+        try:
+            rel_parent = path.resolve().parent.relative_to(root)
+        except (OSError, ValueError):
+            return None
+        parts = rel_parent.parts
+        if not parts or any(p.startswith((".", "_")) or p.lower() in self._NESTED_SKIP_PARTS for p in parts):
+            return None
+        rel_key = "\\".join(parts).lower()
+        designed = {f.replace("/", "\\").strip("\\").lower() for f in self._managed_relative_folders(cfg)}
+        if rel_key not in designed:
+            return None  # a folder of your own, such as a project or an unzipped archive
+        cur = root
+        for part in parts:
+            cur = cur / part
+            if self._is_project_or_bundle_dir(cur):
+                return None
+        decision = evaluate(candidate_from_path(path), cfg, include_trace=False)
+        if decision.action != "move" or decision.relative_dest is None or decision.match_type == "fallback":
+            return None
+        dest_key = str(decision.relative_dest.parent).replace("/", "\\").strip("\\").lower()
+        if not dest_key or dest_key == rel_key or rel_key.startswith(dest_key + "\\"):
+            return None  # already in the right folder, or a more specific one inside it
+        if dest_key.split("\\")[0] == rel_key.split("\\")[0]:
+            return None  # same kind of folder (a PDF saved into Documents\\Career stays there)
+        return decision
+
     def _enqueue(self, path: Path) -> None:
         with self._lock:
             self._pending.add(path)
@@ -1535,7 +1613,9 @@ class SorterService:
             return
         observer = Observer()
         for root in roots:
-            observer.schedule(_TopLevelEventHandler(root, self._enqueue), str(root), recursive=False)
+            observer.schedule(
+                _TopLevelEventHandler(root, self._enqueue, self._enqueue_nested), str(root), recursive=True
+            )
         observer.start()
         with self._lock:
             displaced = self._observer
@@ -1627,12 +1707,26 @@ class SorterService:
             except OSError:
                 self._clear_busy(path)
                 continue
+            nested = False
             if root not in roots:
-                self._clear_busy(path)
-                continue
+                base = next((r for r in roots if r in root.parents), None)
+                nested_decision = (
+                    self._nested_decision(path, base, cfg if base == primary else extra_cfg)
+                    if base is not None and cfg.sort_new_files_in_subfolders
+                    else None
+                )
+                if nested_decision is None:
+                    self._clear_busy(path)
+                    continue
+                nested = True
+                root = base
 
             cand = candidate_from_path(path)
-            decision = evaluate(cand, cfg if root == primary else extra_cfg, include_trace=False)
+            decision = (
+                nested_decision
+                if nested
+                else evaluate(cand, cfg if root == primary else extra_cfg, include_trace=False)
+            )
             if decision.match_type == "fallback" and root == primary and cfg.ai_auto_route_fallback:
                 if ai_learner is None:
                     ai_learner = self.get_route_learner()

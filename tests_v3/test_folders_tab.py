@@ -250,3 +250,42 @@ def test_type_pill_label_stays_short() -> None:
     assert _short_type_label(["Documents"], [".odt", ".xlsm", ".ods"]) == "Documents + 3 more"
     assert _short_type_label([], [".a", ".b", ".c", ".d"]) == ".a .b .c + 1 more"
     assert _short_type_label([], []) == "any kind of file"
+
+
+def test_saved_folder_missing_on_disk_offers_to_move_its_files_in(app_paths: AppPaths, v3_qapp) -> None:  # noqa: ANN001
+    import os
+    import time
+
+    win, svc = _window(app_paths, v3_qapp)
+    tab = win.folders_tab
+    try:
+        # Saved by an older build: the setting exists but nothing was made on disk.
+        cfg = fd.add_folder(svc.config, "CNC Files", "3D Models").config
+        cfg = fd.set_cues(cfg, "3D Models\\CNC Files", fd.FolderCues(extensions=[".nc"])).config
+        svc.update_config(cfg)
+        models = app_paths.downloads_dir / "3D Models"
+        models.mkdir()
+        old = time.time() - 120
+        for name in ("Wolf.nc", "TopClamp.nc"):
+            (models / name).write_bytes(b"G0 X0")
+            os.utime(models / name, (old, old))
+        tab.scan_disk()
+        v3_qapp.processEvents()
+        tab.select_path("3D Models\\CNC Files")
+        v3_qapp.processEvents()
+        page = tab.page_folder
+        assert not page.stray.isHidden()
+        assert "2 files" in page.stray_text.text()
+        page.stray_btn.click()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and (models / "TopClamp.nc").exists():
+            v3_qapp.processEvents()
+            time.sleep(0.02)
+        assert not (models / "Wolf.nc").exists()
+        assert not (models / "TopClamp.nc").exists()
+        if os.name == "nt":  # off Windows the router's "\\" destinations are literal names
+            assert (models / "CNC Files" / "Wolf.nc").exists()
+            assert (models / "CNC Files" / "TopClamp.nc").exists()
+    finally:
+        win.close()
+        svc.stop(timeout=1.0)
