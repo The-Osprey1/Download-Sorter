@@ -61,5 +61,5 @@ def test_main_window_sort_lower_tiers_button(v3_qapp, app_paths: AppPaths) -> No
 
     assert (dl / "Documents" / "PDF" / "manual.pdf").exists()
     assert not misplaced.exists()
-    assert "Sorted lower tiers: moved 1 file(s)" in win.banner._text.text()
+    assert "Tidied files inside folders: moved 1 file(s)" in win.banner._text.text()
     win.close()
