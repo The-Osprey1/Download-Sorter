@@ -71,6 +71,13 @@ class Change:
     selected_path: str = ""
     # A folder to create on disk and fill with the loose files that now belong in it.
     fill_path: str = ""
+    # More folders to create and fill the same way (for example new project folders).
+    fill_paths: list[str] = field(default_factory=list)
+
+    def all_fill_paths(self) -> list[str]:
+        out = [self.fill_path] if self.fill_path else []
+        out += [p for p in self.fill_paths if p and p not in out]
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +556,59 @@ def remove_folder(cfg: Config, path: str) -> Change:
     )
 
 
+def add_project_folders(cfg: Config, parent_path: str, projects: list[tuple[str, list[str], list[str]]]) -> Change:
+    """Add one folder per found project inside ``parent_path`` and fill each with its files.
+
+    ``projects`` holds ``(name, keywords, extensions)``. A name already used is skipped.
+    """
+    added: list[str] = []
+    for name, keywords, extensions in projects:
+        try:
+            step = add_folder(cfg, name, parent_path, FolderCues(extensions=list(extensions), keywords=list(keywords)))
+        except DesignerError:
+            continue
+        cfg = step.config
+        added.append(step.selected_path)
+    if not added:
+        return Change(cfg, "No change")
+    leaf = norm_path(parent_path).split("\\")[-1] or "Downloads"
+    noun = "folder" if len(added) == 1 else "folders"
+    return Change(cfg, f"Added {len(added)} project {noun} in “{leaf}”", selected_path=parent_path, fill_paths=added)
+
+
+def new_folders_in(cfg: Config, scanned: FolderArchitecture) -> list[str]:
+    """Paths in ``scanned`` (folders found on disk) that the settings do not list yet."""
+    have = {path_of(a, n).lower() for a in [working_architecture(cfg)] for n in a.nodes}
+    out: list[str] = []
+    for node in sorted(scanned.nodes, key=lambda n: (n.tier, scanned.node_relative_path(n.id).lower())):
+        path = norm_path(scanned.node_relative_path(node.id))
+        if path and path.lower() not in have:
+            out.append(path)
+    return out
+
+
+def adopt_existing_folders(cfg: Config, scanned: FolderArchitecture, chosen: list[str]) -> Change:
+    """Add the chosen folders found on disk (and the folders above them) to the settings."""
+    from download_sorter.architecture import merge_architectures
+
+    wanted = {norm_path(p).lower() for p in chosen if p}
+    keep: set[str] = set()
+    for node in scanned.nodes:
+        path = norm_path(scanned.node_relative_path(node.id)).lower()
+        if any(path == w or w.startswith(path + "\\") for w in wanted):
+            keep.add(node.id)
+    picked = scanned.clone()
+    picked.nodes = [n for n in picked.nodes if n.id in keep]
+    if not picked.nodes:
+        return Change(cfg, "No change")
+    count = len(new_folders_in(cfg, picked))
+    if not count:
+        return Change(cfg, "No change")
+    merged = merge_architectures(working_architecture(cfg), picked)
+    noun = "folder" if count == 1 else "folders"
+    return Change(_compile(merged, cfg), f"Added {count} {noun} from your Downloads")
+
+
 def _retarget(cfg: Config, old_path: str, new_path: str) -> Config:
     out = copy.deepcopy(cfg)
     for rule in out.rules:
@@ -569,6 +629,9 @@ __all__ = [
     "MANUAL_KEY",
     "TYPE_CHOICES",
     "add_folder",
+    "add_project_folders",
+    "adopt_existing_folders",
+    "new_folders_in",
     "advanced_rules_for",
     "extra_rules_for",
     "remove_rule",

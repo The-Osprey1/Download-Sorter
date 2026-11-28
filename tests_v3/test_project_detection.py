@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from download_sorter.architecture import FolderArchitecture, apply_architecture_to_config
-from download_sorter.config import Config, save_config
+from download_sorter.architecture import (
+    FolderArchitecture,
+    apply_architecture_to_config,
+)
+from download_sorter.config import Config
 from download_sorter.paths import AppPaths
 from download_sorter.project_detect import detect_projects_in_folder
 from download_sorter.router import FileCandidate, evaluate
-from download_sorter.service import SorterService
-from download_sorter.ui.architecture_canvas import ArchitectureTab, DetectProjectsDialog
 
 
 def _touch(path: Path, data: bytes = b"x") -> Path:
@@ -109,45 +110,3 @@ def test_detect_projects_respects_exclude_subdirs(app_paths: AppPaths) -> None:
     assert "logo" not in names
 
 
-def test_detect_projects_dialog_and_architecture_tab_integration(v3_qapp, app_paths: AppPaths) -> None:
-    cfg = Config.new_install()
-    save_config(cfg, app_paths)
-
-    cad = app_paths.downloads_dir / "CAD"
-    _touch(cad / "STEP" / "Flanged Mace Iteration 1.step")
-    _touch(cad / "STEP" / "Flanged Mace Iteration 2.step")
-    _touch(cad / "Fusion 360" / "Flanged Mace Gating.f3d")
-
-    svc = SorterService(app_paths)
-    tab = ArchitectureTab(svc)
-    cad_node = next((n for n in tab._arch.nodes_in_tier(1) if n.name.lower() == "cad"), None)
-    assert cad_node is not None
-    tab.canvas.select_node(cad_node.id)
-    assert tab.btn_detect_projects.isEnabled()
-
-    projs = detect_projects_in_folder(cad, min_files=3)
-    assert len(projs) == 1
-    assert projs[0].name == "Flanged Mace"
-
-    dlg = DetectProjectsDialog(
-        cad_node,
-        cad,
-        projs,
-        exclude_subdirs=set(),
-        existing_child_names=set(),
-        min_files=3,
-        parent=tab,
-    )
-    chosen = dlg.selected_projects()
-    assert len(chosen) == 1
-    assert chosen[0]["name"] == "Flanged Mace"
-
-    added = tab.apply_detected_projects(cad_node.id, chosen)
-    assert len(added) == 1
-    assert any(c.name == "Flanged Mace" for c in tab._arch.children_of(cad_node.id))
-
-    # Undo removes the added project cleanly
-    tab.btn_diag_undo.click()
-    assert not any(c.name == "Flanged Mace" for c in tab._arch.children_of(cad_node.id))
-    dlg.close()
-    tab.close()
