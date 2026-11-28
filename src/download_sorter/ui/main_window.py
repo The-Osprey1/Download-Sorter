@@ -2353,11 +2353,11 @@ class MainWindow(QMainWindow):
         self.btn_refresh_preview.setToolTip("Refresh Preview")
         self.btn_refresh_preview.clicked.connect(self._on_refresh_preview_clicked)
         self.btn_sort_tiers = InteractiveRibbonBtn(
-            "Sort Lower Tiers",
+            "Tidy Files Inside Folders",
             make_vector_icon("layers", "#F5F5F7", 14),
         )
         self.btn_sort_tiers.setToolTip(
-            "Re-sort files already inside Tier 1 & Tier 2 folders into their proper subfolders."
+            "Move files already inside your folders into the more specific folder each one belongs in"
         )
         self.btn_sort_tiers.clicked.connect(self._on_sort_tiers_now)
 
@@ -2706,6 +2706,16 @@ class MainWindow(QMainWindow):
                 "Keep Existing Loose Files Aligned",
                 "Automatically organize existing loose files in Downloads whenever your rules change.",
                 controls=self.chk_auto_align_existing,
+            )
+        )
+        self.chk_sort_subfolders = MacToggle()
+        self.chk_sort_subfolders.setAccessibleName("Sort new files in folders inside Downloads")
+        card_watch.add_row(
+            SettingRow(
+                "Sort New Files in Folders Inside Downloads",
+                "When an app saves a new file into the wrong folder inside Downloads, move it to the right one. "
+                "Files you move yourself, and folders of your own, are left alone.",
+                controls=self.chk_sort_subfolders,
             )
         )
 
@@ -3064,7 +3074,7 @@ class MainWindow(QMainWindow):
         card_adv.add_row(
             SettingRow(
                 "Show Advanced Tools",
-                "Show 'Sort Lower Tiers' and extra canvas utilities for custom multi-tier layouts.",
+                "Show 'Tidy Files Inside Folders' and extra canvas utilities for custom multi-tier layouts.",
                 controls=self.chk_show_advanced,
             )
         )
@@ -3129,6 +3139,7 @@ class MainWindow(QMainWindow):
         for sw in (
             self.chk_auto_sort,
             self.chk_auto_align_existing,
+            self.chk_sort_subfolders,
             self.chk_type_subfolders,
             self.chk_project_grouping,
             self.chk_hold_3mf,
@@ -3165,7 +3176,7 @@ class MainWindow(QMainWindow):
     # Refresh & Actions
     # ------------------------------------------------------------------
     def _apply_advanced_tools_visibility(self, show: bool) -> None:
-        """Keep Sort Lower Tiers aligned with the advanced tools toggle."""
+        """Keep Tidy Files Inside Folders aligned with the advanced tools toggle."""
         self.btn_sort_tiers.setVisible(show)
 
     def _on_tab_changed(self, index: int) -> None:
@@ -3715,6 +3726,7 @@ class MainWindow(QMainWindow):
         cfg = self.service.config
         self.chk_auto_sort.setChecked(not cfg.paused)
         self.chk_auto_align_existing.setChecked(bool(cfg.auto_align_existing))
+        self.chk_sort_subfolders.setChecked(bool(getattr(cfg, "sort_new_files_in_subfolders", True)))
         self.edit_watch_folder.setText(display_watch_folder(cfg.watch_folder))
         self.edit_watch_folder.setCursorPosition(0)
         self.list_extra_folders.clear()
@@ -4376,6 +4388,7 @@ class MainWindow(QMainWindow):
         cfg = copy.deepcopy(self.service.config)
         cfg.paused = not self.chk_auto_sort.isChecked()
         cfg.auto_align_existing = self.chk_auto_align_existing.isChecked()
+        cfg.sort_new_files_in_subfolders = self.chk_sort_subfolders.isChecked()
         typed = self.edit_watch_folder.text().strip()
         cfg.watch_folder = stored_watch_folder(typed)
         cfg.extra_watch_folders = [
@@ -4871,6 +4884,18 @@ class MainWindow(QMainWindow):
         Files are moved, never deleted, and every move is recorded so Undo can put
         it back. The work runs off the GUI thread.
         """
+        if self._action_running:
+            # Another file action is still running: try again shortly instead of dropping it.
+            tries = int(getattr(change, "_retries", 0) or 0)
+            if tries < 40:
+                try:
+                    change._retries = tries + 1  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                QTimer.singleShot(750, lambda c=change: self._run_folder_disk_change(c))
+            else:
+                logging.warning("Folder change on disk was skipped: another action kept running")
+            return
         moves = list(getattr(change, "disk_moves", []) or [])
         removals = list(getattr(change, "disk_removals", []) or [])
         fill = str(getattr(change, "fill_path", "") or "")
@@ -4910,6 +4935,11 @@ class MainWindow(QMainWindow):
             self._folder_disk_batches = list(res.get("batches", []))
             filled = int(res.get("filled", 0) or 0)
             self.refresh_all()
+            if hasattr(self, "folders_tab"):
+                QTimer.singleShot(0, self.folders_tab.scan_disk)
+            if not filled and fill and not getattr(change, "message", ""):
+                leaf = fill.replace("/", "\\").split("\\")[-1]
+                self._on_folders_notice(f"“{leaf}” is ready in Downloads", None)
             if filled:
                 leaf = fill.replace("/", "\\").split("\\")[-1]
                 self._on_folders_notice(

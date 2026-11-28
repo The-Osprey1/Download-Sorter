@@ -13,7 +13,7 @@ if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, Qt, QTimer
 from PySide6.QtGui import QCursor, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -44,19 +44,19 @@ from download_sorter.quick_switcher import (
 from download_sorter.ui.motion import make_vector_icon
 from download_sorter.ui.toasts import CATEGORY_BADGES, CATEGORY_COLORS
 
-# Theme Palette Tokens
-BG_COLOR = "#12151C"
-BORDER_COLOR = "#2A303B"
-BORDER_HOVER = "#3A4352"
+# Theme Palette Tokens (v4: Apple-style graphite with blue accents, as on the Folders screen)
+BG_COLOR = "#1C1C1E"
+BORDER_COLOR = "#2C2C2E"
+BORDER_HOVER = "#3A3A3C"
 TEXT_MAIN = "#F5F5F7"
 TEXT_MUTED = "#8E8E93"
-ACTION_COLOR = "#69E6AD"
-CLOSE_COLOR = "#657084"
-CLOSE_HOVER = "#FA7183"
-CLOSE_HOVER_BG = "#1A1013"
-HOVER_BG = "#1D222C"
-BTN_BG = "#171B24"
-BTN_HOVER = "#232936"
+ACTION_COLOR = "#0A84FF"
+CLOSE_COLOR = "#8E8E93"
+CLOSE_HOVER = "#FF453A"
+CLOSE_HOVER_BG = "#3A1D1B"
+HOVER_BG = "#232326"
+BTN_BG = "#2C2C2E"
+BTN_HOVER = "#3A3A3C"
 FONT_FAMILY = "Segoe UI"
 
 
@@ -402,7 +402,7 @@ class QuickSwitcherPill:
         border = self.hover_border if hovered else self.normal_border
         btn_bg = BTN_HOVER if hovered else BTN_BG
         self.root.setStyleSheet(
-            f"#qsRoot {{ background: {bg}; border: 1px solid {border}; border-radius: 8px; }}"
+            f"#qsRoot {{ background: {bg}; border: 1px solid {border}; border-radius: 12px; }}"
             f"QWidget#qsContainer, QWidget#qsCenter {{ background: transparent; border: none; }}"
             f"QLabel {{ background: transparent; border: none; font-family: '{FONT_FAMILY}'; }}"
         )
@@ -416,7 +416,7 @@ class QuickSwitcherPill:
         fg = self.accent_color if primary else TEXT_MAIN
         btn.setStyleSheet(
             f"QPushButton {{ background: {bg}; color: {fg}; border: 1px solid {BORDER_COLOR};"
-            f" border-radius: 6px; padding: 4px 10px; font-family: '{FONT_FAMILY}';"
+            f" border-radius: 8px; padding: 4px 10px; font-family: '{FONT_FAMILY}';"
             f" font-size: 11px; font-weight: 600; }}"
             f"QPushButton:hover {{ background: {BTN_HOVER}; border-color: {self.accent_color}; }}"
         )
@@ -830,7 +830,7 @@ class QuickSwitcherPill:
         try:
             button.setText(text)
             bg = self.accent_color if ok else CLOSE_HOVER
-            fg = "#082411" if ok else "#FFFFFF"
+            fg = "#FFFFFF"
             button.setStyleSheet(
                 f"QPushButton {{ background: {bg}; color: {fg}; border: none; border-radius: 6px;"
                 f" padding: 4px 10px; font-family: '{FONT_FAMILY}'; font-size: 11px; font-weight: 700; }}"
@@ -945,7 +945,15 @@ class QuickSwitcherPill:
 
     def run(self) -> None:
         self._running = True
+        # Fade in, like the sheets on the Folders screen.
+        self.root.setWindowOpacity(0.0)
         self.root.show()
+        self._fade = QPropertyAnimation(self.root, b"windowOpacity", self.root)
+        self._fade.setDuration(180)
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade.start()
         try:
             self.app.exec()
         finally:

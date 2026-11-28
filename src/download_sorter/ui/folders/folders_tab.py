@@ -734,6 +734,19 @@ class _FolderPage(QWidget):
         sc_lay.addWidget(self.also_host)
         lay.addWidget(self.sentence_card)
 
+        # Files that belong here but sit next door, or a folder not made on disk yet
+        self.stray, stray_lay = _card(body, "HintNote")
+        stray_row = QHBoxLayout()
+        self.stray_text = QLabel("", self.stray)
+        self.stray_text.setWordWrap(True)
+        stray_row.addWidget(self.stray_text, 1)
+        self.stray_btn = _quiet_button("Move them in", "Create this folder in Downloads and move those files in", self.stray, "Primary")
+        self.stray_btn.clicked.connect(lambda: self.tab.fill_now(self.path))
+        stray_row.addWidget(self.stray_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        stray_lay.addLayout(stray_row)
+        self.stray.hide()
+        lay.addWidget(self.stray)
+
         # Clash note
         self.clash, clash_lay = _card(body, "ClashNote")
         self.clash_text = QLabel("", self.clash)
@@ -1166,6 +1179,22 @@ class _FolderPage(QWidget):
         else:
             self.clash.hide()
 
+    def set_strays(self, strays: int, missing: bool) -> None:
+        parent = self.path.split("\\")[-2] if "\\" in self.path else "Downloads"
+        if strays:
+            self.stray_text.setText(
+                f"{strays} file{'s' if strays != 1 else ''} that belong here {'are' if strays != 1 else 'is'} "
+                f"sitting loose in {parent}."
+            )
+            self.stray_btn.setText("Move them in" if strays != 1 else "Move it in")
+            self.stray.show()
+        elif missing:
+            self.stray_text.setText("This folder isn't in Downloads yet. It's made when the first file arrives.")
+            self.stray_btn.setText("Create it now")
+            self.stray.show()
+        else:
+            self.stray.hide()
+
     def set_hint(self, suggestion: dict | None) -> None:
         if suggestion:
             self.hint_text.setText(f"{suggestion.get('summary', '')}. Make that automatic?")
@@ -1438,6 +1467,9 @@ class FoldersTab(QWidget):
         self._run_service_action = run_service_action
         self._loose: list[FileCandidate] = []
         self._inside_counts: dict[str, int] = {}
+        self._strays: dict[str, int] = {}
+        self._missing: set[str] = set()
+        self._scanned = False
         self._decisions: list[tuple[FileCandidate, RouteDecision]] = []
         self._decisions_for: int = -1
         self._dupes: list[dict[str, Any]] = []
@@ -1723,22 +1755,44 @@ class FoldersTab(QWidget):
         self._scan_running = True
         root = self.service.watch_root
         folders = [fd.path_of(a, n) for a in [fd.working_architecture(self.config())] for n in a.nodes]
+        cfg = copy.deepcopy(self.config())
         svc = self.service
 
         def _work() -> dict[str, Any]:
             loose: list[FileCandidate] = []
             counts: dict[str, int] = {}
+            strays: dict[str, int] = {}
+            missing: set[str] = set()
             try:
                 if root.is_dir():
                     for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
                         if entry.is_file() and not entry.name.startswith("."):
                             loose.append(candidate_from_path(entry))
+                wanted = {rel.lower() for rel in folders}
+                parents_seen: set[str] = set()
                 for rel in folders:
                     d = root / rel
                     try:
                         counts[rel.lower()] = sum(1 for e in os.scandir(d) if e.is_file())
                     except OSError:
                         counts[rel.lower()] = 0
+                        missing.add(rel.lower())
+                    # Files sitting directly in a parent folder that belong in one of its folders.
+                    parent = "\\".join(rel.split("\\")[:-1])
+                    if not parent or parent.lower() in parents_seen:
+                        continue
+                    parents_seen.add(parent.lower())
+                    try:
+                        entries = [e for e in os.scandir(root / parent) if e.is_file() and not e.name.startswith(".")]
+                    except OSError:
+                        continue
+                    for e in entries:
+                        dec = evaluate(candidate_from_path(Path(e.path), lazy_zone=True), cfg, include_trace=False)
+                        if dec.action != "move" or dec.relative_dest is None:
+                            continue
+                        dest = str(dec.relative_dest.parent).replace("/", "\\").strip("\\").lower()
+                        if dest in wanted and dest != parent.lower() and dest.startswith(parent.lower() + "\\"):
+                            strays[dest] = strays.get(dest, 0) + 1
             except OSError:
                 pass
             try:
@@ -1749,7 +1803,14 @@ class FoldersTab(QWidget):
                 waiting = svc.list_held_3mf()
             except Exception:  # noqa: BLE001
                 waiting = []
-            return {"loose": loose, "counts": counts, "dupes": dupes, "waiting": waiting}
+            return {
+                "loose": loose,
+                "counts": counts,
+                "dupes": dupes,
+                "waiting": waiting,
+                "strays": strays,
+                "missing": missing,
+            }
 
         def _err(_msg: str) -> None:
             self._scan_running = False
@@ -1760,6 +1821,9 @@ class FoldersTab(QWidget):
         self._scan_running = False
         self._loose = list(state.get("loose", []))
         self._inside_counts = dict(state.get("counts", {}))
+        self._strays = dict(state.get("strays", {}))
+        self._missing = set(state.get("missing", set()))
+        self._scanned = True
         self._dupes = list(state.get("dupes", []))
         self._waiting = list(state.get("waiting", []))
         self._decisions_for = -1
@@ -1927,6 +1991,10 @@ class FoldersTab(QWidget):
         if self._page == PAGE_FOLDER and self._selected:
             self.page_folder.show_folder(self._selected)
             self.page_folder.set_hint(self._suggestion)
+            key = fd.norm_path(self._selected).lower()
+            self.page_folder.set_strays(
+                int(self._strays.get(key, 0)), self._scanned and key in self._missing
+            )
         elif self._page == PAGE_OTHER:
             self.page_other.refresh()
         elif self._page == PAGE_DUPES:
@@ -2019,6 +2087,12 @@ class FoldersTab(QWidget):
     # ------------------------------------------------------------------
     # Folder edits
     # ------------------------------------------------------------------
+    def fill_now(self, path: str) -> None:
+        """Create ``path`` in Downloads and move in the files that belong there, with Undo."""
+        change = fd.Change(copy.deepcopy(self.service.config), "", fill_path=fd.norm_path(path))
+        self.disk_change_requested.emit(change)
+        QTimer.singleShot(0, self.scan_disk)
+
     def _can_drop(self, src: str, target: str) -> bool:
         return not fd.why_cannot_move(self.config(), src, target)
 
