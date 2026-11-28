@@ -31,12 +31,14 @@ from download_sorter.config import (
 from download_sorter.db import StateDB
 from download_sorter.dest import is_under_watch_root, to_relative_dest
 from download_sorter.fs_ops import (
+    DUPLICATES_DIR,
     ProgressCallback,
     cleanup_orphaned_staging,
     delete_files_safely,
     execute_move,
     extract_zip_safely,
     is_slicer_running,
+    migrate_duplicates_folder,
     prune_empty_folders,
     resolve_duplicate_delete_new_locate_old,
     resolve_duplicate_keep_both,
@@ -463,7 +465,7 @@ class SorterService:
     # Native Duplicate & Watch-Folder Deletion Helpers
     # ------------------------------------------------------------------
     def list_duplicate_files(self, root: Path | None = None) -> list[dict[str, Any]]:
-        """Return quarantined duplicate files inside ``watch_root / '_Duplicates'``."""
+        """Return quarantined duplicate files inside ``watch_root / 'Duplicates'``."""
         watch_dir = (root or self.watch_root).resolve()
         return scan_duplicate_files(watch_dir, db=self.db)
 
@@ -581,9 +583,9 @@ class SorterService:
         use_recycle_bin: bool = True,
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
-        """Safely remove selected duplicate files confined strictly inside ``_Duplicates``."""
+        """Safely remove selected duplicate files confined strictly inside ``Duplicates``."""
         watch_dir = self.watch_root.resolve()
-        dup_root = watch_dir / "_Duplicates"
+        dup_root = watch_dir / DUPLICATES_DIR
         res = delete_files_safely(
             paths,
             watch_root=watch_dir,
@@ -594,7 +596,7 @@ class SorterService:
         if res["deleted"]:
             self.db.mark_orphaned_by_dest(res["deleted"])
             self.db.checkpoint()
-            # Clean up any empty monthly subfolders inside _Duplicates
+            # Clean up any empty monthly subfolders inside Duplicates
             if dup_root.is_dir():
                 for subdir in sorted(
                     [p for p in dup_root.rglob("*") if p.is_dir()],
@@ -706,7 +708,7 @@ class SorterService:
 
         def _add_path(raw: str) -> None:
             norm = str(raw or "").replace("/", "\\").strip("\\ ").lower()
-            if not norm or norm == "_duplicates":
+            if not norm or norm in ("duplicates", "_duplicates"):
                 return
             parts = [p.strip() for p in norm.split("\\") if p.strip()]
             for i in range(1, len(parts) + 1):
@@ -746,6 +748,7 @@ class SorterService:
 
         rels.discard("")
         rels.discard("_duplicates")
+        rels.discard("duplicates")
         return rels
 
     @staticmethod
@@ -772,6 +775,7 @@ class SorterService:
                             roots.add(nm)
         roots.discard("")
         roots.discard("_duplicates")
+        roots.discard("duplicates")
         return roots
 
     def preview_architecture_shift(
@@ -966,7 +970,7 @@ class SorterService:
             if on_progress is not None and total > 0:
                 on_progress(total, total, "Complete")
 
-            # Remove now-empty old managed directories cleanly (never touch _Duplicates or unmanaged dirs)
+            # Remove now-empty old managed directories cleanly (never touch Duplicates or unmanaged dirs)
             if watch_dir.is_dir():
                 for sub_root in list(watch_dir.iterdir()):
                     if not sub_root.is_dir() or sub_root.name.lower() not in managed_before:
@@ -1107,6 +1111,103 @@ class SorterService:
             "batch_id": batch_id if moved else "",
             "moved": moved,
             "moved_count": len(moved),
+        }
+
+    def fill_folder_on_disk(
+        self,
+        folder_rel: str,
+        *,
+        root: Path | None = None,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Create ``folder_rel`` in Downloads and move in the loose files that now belong there.
+
+        Looks at files sitting loose at the top of Downloads and, for a folder inside
+        another, the files sitting directly in its parent. A file moves only when the
+        current settings send it into this folder. Held 3D print files and files still
+        being written are left alone. Every move is recorded so it can be undone.
+        """
+        with self._lock:
+            cfg = self.config
+        watch_dir = (root or self.watch_root).resolve()
+        clean = to_relative_dest(folder_rel, fallback="")
+        if not clean or not watch_dir.is_dir():
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+        folder_dir = (watch_dir / clean).resolve()
+        if folder_dir == watch_dir or not is_under_watch_root(folder_dir, watch_dir):
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+        created = not folder_dir.exists()
+        try:
+            folder_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logging.warning("Could not create folder %s: %s", folder_dir, exc)
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+
+        want = Path(clean).as_posix().lower().strip("/")
+        look_in = [watch_dir]
+        parent_dir = folder_dir.parent
+        if parent_dir != watch_dir and is_under_watch_root(parent_dir, watch_dir):
+            look_in.append(parent_dir)
+        now = time.time()
+        plan: list[tuple[Path, RouteDecision, str]] = []
+        for base in look_in:
+            try:
+                entries = sorted((e for e in base.iterdir() if e.is_file()), key=lambda p: p.name.lower())
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if now - entry.stat().st_mtime < 5.0:
+                        continue  # probably still downloading
+                except OSError:
+                    continue
+                cand = candidate_from_path(entry)
+                decision = evaluate(cand, cfg, include_trace=False)
+                if decision.action != "move" or decision.relative_dest is None:
+                    continue
+                dest_folder = Path(decision.relative_dest).parent.as_posix().lower().strip("/")
+                if dest_folder != want and not dest_folder.startswith(want + "/"):
+                    continue
+                if self._is_3mf_held(entry, cfg):
+                    continue
+                plan.append((entry, decision, cand.source_url))
+
+        total = len(plan)
+        batch_id = f"fill-{uuid.uuid4().hex[:8]}"
+        moved: list[dict[str, Any]] = []
+        for idx, (entry, decision, url) in enumerate(plan, start=1):
+            if on_progress is not None:
+                on_progress(idx - 1, total, entry.name)
+            try:
+                rec = execute_move(
+                    entry,
+                    decision,
+                    batch_id=batch_id,
+                    db=self.db,
+                    watch_root=watch_dir,
+                    settle_seconds=0.0,
+                    source_url=url,
+                )
+            except OSError as exc:
+                logging.warning("Folder fill skipped %s: %s", entry, exc)
+                continue
+            if rec is not None:
+                moved.append(rec)
+        if on_progress is not None and total > 0:
+            on_progress(total, total, "Complete")
+        if moved:
+            self.db.checkpoint()
+            if self.on_moves_completed is not None:
+                try:
+                    self.on_moves_completed(batch_id, moved)
+                except Exception:
+                    logging.exception("Error in on_moves_completed callback")
+        return {
+            "ok": True,
+            "batch_id": batch_id if moved else "",
+            "moved": moved,
+            "moved_count": len(moved),
+            "created": created,
         }
 
     def inspect_folder_on_disk(
@@ -1293,6 +1394,7 @@ class SorterService:
                 cleanup_orphaned_staging(root)
             except Exception:
                 logging.exception("Could not clean up orphaned staging directories in %s", root)
+            migrate_duplicates_folder(root, self.db)
         try:
             self.db.prune_missing_hashes()
         except Exception:

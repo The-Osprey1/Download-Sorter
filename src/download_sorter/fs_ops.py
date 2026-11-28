@@ -22,6 +22,57 @@ from download_sorter.db import STAGING_DIR_NAME, StateDB
 from download_sorter.dest import is_under_watch_root
 from download_sorter.router import RouteDecision
 
+# Exact copies wait here until the user decides. Before 4.0.0-beta.2 the folder
+# was called "_Duplicates"; ``migrate_duplicates_folder`` renames it once.
+DUPLICATES_DIR = "Duplicates"
+LEGACY_DUPLICATES_DIR = "_Duplicates"
+
+
+def migrate_duplicates_folder(watch_root: Path, db: StateDB | None = None) -> int:
+    """Move ``_Duplicates`` to ``Duplicates`` inside ``watch_root``. Returns files moved.
+
+    Nothing is deleted. When both folders exist, files are moved across one by one
+    and a file whose name is already taken is left where it is. History rows that
+    point into the old folder are updated so Undo keeps working.
+    """
+    old = watch_root / LEGACY_DUPLICATES_DIR
+    new = watch_root / DUPLICATES_DIR
+    try:
+        if not old.is_dir():
+            return 0
+        moved = 0
+        if not new.exists():
+            old.rename(new)
+            moved = sum(1 for p in new.rglob("*") if p.is_file())
+        else:
+            for fp in sorted(old.rglob("*")):
+                if not fp.is_file():
+                    continue
+                target = new / fp.relative_to(old)
+                if target.exists():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(fp, target)
+                moved += 1
+            for d in sorted((p for p in old.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass
+            try:
+                old.rmdir()
+            except OSError:
+                pass
+    except OSError as exc:
+        logging.warning("Could not rename %s to %s: %s", old, new, exc)
+        return 0
+    if db is not None:
+        try:
+            db.rewrite_dest_prefix(str(old), str(new))
+        except Exception:  # noqa: BLE001 - history repair must never stop the app starting
+            logging.exception("Could not update move history after renaming the duplicates folder")
+    return moved
+
 ProgressCallback = Callable[[int, int, str], None]
 
 _CHUNK_BYTES = 1024 * 1024
@@ -387,7 +438,7 @@ def _identical_for_versions(
 def files_are_identical_cached(a: Path, b: Path) -> bool:
     """``files_are_identical``, remembered until either file's size or time changes.
 
-    Used where the same pair is asked about again and again (listing ``_Duplicates``
+    Used where the same pair is asked about again and again (listing ``Duplicates``
     on every refresh). Anything that acts on the answer should call
     ``files_are_identical`` instead.
     """
@@ -487,14 +538,14 @@ def resolve_destination(
 
     If an exact byte-identical file or a browser-numbered copy (e.g. ``report (1).pdf``)
     matching an existing file in the destination already sits at ``planned_dest``,
-    quarantine the incoming duplicate to ``watch_root/_Duplicates/<YYYY-MM>/<name>``.
+    quarantine the incoming duplicate to ``watch_root/Duplicates/<YYYY-MM>/<name>``.
     Otherwise add `` (2)`` / `` (3)`` numbering.
     """
     if not _counterpart_checked:
         counterpart = find_existing_counterpart(src, planned_dest)
     if counterpart is not None:
         month_dir = datetime.now().strftime("%Y-%m")
-        dup_target = watch_root / "_Duplicates" / month_dir / src.name
+        dup_target = watch_root / DUPLICATES_DIR / month_dir / src.name
         return _next_available_name(dup_target), True
     if not planned_dest.exists():
         return planned_dest, False
@@ -618,7 +669,7 @@ def execute_move(
         renamed_dup = find_renamed_duplicate(src, db=db, watch_root=watch_root)
         if renamed_dup is not None:
             month_dir = datetime.now().strftime("%Y-%m")
-            dup_target = watch_root / "_Duplicates" / month_dir / src.name
+            dup_target = watch_root / DUPLICATES_DIR / month_dir / src.name
             final_dest = _next_available_name(dup_target)
             is_dup = True
             existing_counterpart = renamed_dup
@@ -626,7 +677,7 @@ def execute_move(
         return None
     final_dest = final_dest.parent.resolve() / final_dest.name
 
-    reason = f"Duplicate -> _Duplicates ({decision.reason})" if is_dup else decision.reason
+    reason = f"Duplicate -> {DUPLICATES_DIR} ({decision.reason})" if is_dup else decision.reason
     move_id = db.record_move_intent(
         batch_id=batch_id,
         filename=src.name,
@@ -851,7 +902,7 @@ def _send_to_recycle_bin_win32(paths: list[str]) -> bool:
 
 
 def _cleanup_empty_dup_dirs(dup_root: Path) -> None:
-    """Remove empty monthly subfolders and ``_Duplicates`` if no quarantined files remain."""
+    """Remove empty monthly subfolders and ``Duplicates`` if no quarantined files remain."""
     if not dup_root.is_dir():
         return
     try:
@@ -881,7 +932,7 @@ def _index_watch_files(
     for cur_dir, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             d for d in dirnames
-            if not d.startswith(".") and d.lower() not in ("_duplicates", "_extracted")
+            if not d.startswith(".") and d.lower() not in ("duplicates", "_duplicates", "_extracted")
         ]
         base = Path(cur_dir)
         for fname in filenames:
@@ -929,10 +980,10 @@ def _best_existing_counterpart(
 
 
 def scan_duplicate_files(watch_root: Path, *, db: StateDB | None = None) -> list[dict[str, Any]]:
-    """Return quarantined files inside ``watch_root / '_Duplicates'``, newest first."""
+    """Return quarantined files inside ``watch_root / 'Duplicates'``, newest first."""
     _ = db
     root = watch_root.resolve()
-    dup_root = root / "_Duplicates"
+    dup_root = root / DUPLICATES_DIR
     if not dup_root.is_dir():
         return []
     dup_files = [p for p in dup_root.rglob("*") if p.is_file()]
@@ -981,12 +1032,12 @@ def resolve_duplicate_replace_old(
 ) -> dict[str, Any]:
     """Replace an existing file under ``watch_root`` with a quarantined duplicate copy."""
     root = watch_root.resolve()
-    dup_root = (root / "_Duplicates").resolve()
+    dup_root = (root / DUPLICATES_DIR).resolve()
     dup = Path(dup_path).resolve()
     existing = Path(existing_path).resolve()
 
     if not dup.is_file() or not is_under_watch_root(dup, dup_root):
-        return {"ok": False, "action": "replace_old", "error": "Duplicate file is no longer in _Duplicates."}
+        return {"ok": False, "action": "replace_old", "error": "Duplicate file is no longer in Duplicates."}
     if (
         not existing.is_file()
         or not is_under_watch_root(existing, root)
@@ -1036,12 +1087,12 @@ def resolve_duplicate_delete_new_locate_old(
 ) -> dict[str, Any]:
     """Send the quarantined duplicate to Recycle Bin and return the verified old file path."""
     root = watch_root.resolve()
-    dup_root = (root / "_Duplicates").resolve()
+    dup_root = (root / DUPLICATES_DIR).resolve()
     dup = Path(dup_path).resolve()
     existing = Path(existing_path).resolve() if str(existing_path or "").strip() else None
 
     if not dup.is_file() or not is_under_watch_root(dup, dup_root):
-        return {"ok": False, "action": "delete_locate_old", "error": "Duplicate file is no longer in _Duplicates."}
+        return {"ok": False, "action": "delete_locate_old", "error": "Duplicate file is no longer in Duplicates."}
     if is_file_locked(dup):
         return {"ok": False, "action": "delete_locate_old", "error": "The duplicate file is open in another program."}
 
@@ -1087,12 +1138,12 @@ def resolve_duplicate_keep_both(
 ) -> dict[str, Any]:
     """Move a quarantined duplicate beside the original using numbered naming (e.g. `` (2)``)."""
     root = watch_root.resolve()
-    dup_root = (root / "_Duplicates").resolve()
+    dup_root = (root / DUPLICATES_DIR).resolve()
     dup = Path(dup_path).resolve()
     existing = Path(existing_path).resolve() if str(existing_path or "").strip() else None
 
     if not dup.is_file() or not is_under_watch_root(dup, dup_root):
-        return {"ok": False, "action": "keep_both", "error": "Duplicate file is no longer in _Duplicates."}
+        return {"ok": False, "action": "keep_both", "error": "Duplicate file is no longer in Duplicates."}
     if is_file_locked(dup):
         return {"ok": False, "action": "keep_both", "error": "The duplicate file is open in another program."}
 
@@ -1412,7 +1463,7 @@ def scan_detox_candidates(
         cur = Path(dirpath)
         # Skip hidden and internal system/archive folders
         dirnames[:] = [
-            d for d in dirnames if not d.startswith(".") and d not in ("_Duplicates", "_Extracted")
+            d for d in dirnames if not d.startswith(".") and d not in (DUPLICATES_DIR, LEGACY_DUPLICATES_DIR, "_Extracted")
         ]
         for fname in filenames:
             if os.path.splitext(fname)[1].lower() not in _INSTALLER_EXTS:
@@ -1439,7 +1490,7 @@ def scan_detox_candidates(
         cur = Path(dirpath)
         if cur == root:
             continue
-        if cur.name.startswith(".") or cur.name in ("_Duplicates", "_Extracted"):
+        if cur.name.startswith(".") or cur.name in (DUPLICATES_DIR, LEGACY_DUPLICATES_DIR, "_Extracted"):
             continue
         try:
             if not any(cur.iterdir()):

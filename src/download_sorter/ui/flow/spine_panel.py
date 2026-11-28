@@ -1629,7 +1629,7 @@ class SpinePanel(QScrollArea):
         safety_row = QHBoxLayout()
         safety_row.setContentsMargins(scaled_px(38), 0, 0, 0)
         safety_row.setSpacing(6)
-        lbl_sec = QLabel("In-progress downloads wait · Exact copies go to _Duplicates · Every move has Undo")
+        lbl_sec = QLabel("In-progress downloads wait · Exact copies go to Duplicates · Every move has Undo")
         lbl_sec.setObjectName("MutedText")
         lbl_sec.setWordWrap(True)
         lbl_sec.setMinimumWidth(0)

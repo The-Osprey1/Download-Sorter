@@ -169,3 +169,84 @@ def test_tidy_review_dialog_groups_by_folder(v3_qapp) -> None:  # noqa: ANN001
     assert any(t.startswith("Downloads › Documents") and "(2)" in t for t in texts)
     assert any("c.png" in t for t in texts)
     dlg.close()
+
+
+def test_new_folder_is_created_on_disk_and_pulls_in_matching_loose_files(app_paths: AppPaths, v3_qapp) -> None:  # noqa: ANN001
+    import os
+    import time
+
+    old = time.time() - 120
+    for name in ("worksheet.xyzq", "notes.txt"):
+        f = app_paths.downloads_dir / name
+        f.write_bytes(b"x")
+        os.utime(f, (old, old))
+    win, svc = _window(app_paths, v3_qapp)
+    tab = win.folders_tab
+    try:
+        assert tab.apply(lambda cfg: fd.add_folder(cfg, "School"))
+        v3_qapp.processEvents()
+        assert (app_paths.downloads_dir / "School").is_dir()
+        assert (app_paths.downloads_dir / "worksheet.xyzq").exists()  # nothing asked for it yet
+        cues = fd.FolderCues(extensions=[".xyzq"])
+        assert tab.apply(lambda cfg: fd.set_cues(cfg, "School", cues))
+        v3_qapp.processEvents()
+        assert (app_paths.downloads_dir / "School" / "worksheet.xyzq").exists()
+        assert (app_paths.downloads_dir / "notes.txt").exists()
+        assert tab.last_undo is not None
+        tab.last_undo()
+        v3_qapp.processEvents()
+        assert (app_paths.downloads_dir / "worksheet.xyzq").exists()
+    finally:
+        win.close()
+        svc.stop(timeout=1.0)
+
+
+def test_sorty_tosses_a_file_card_for_each_file_sorted(app_paths: AppPaths, v3_qapp) -> None:  # noqa: ANN001
+    win, svc = _window(app_paths, v3_qapp)
+    try:
+        before = win._sorty_toss.tossed
+        win._sorty_tosses_file("report.pdf")
+        win._sorty_tosses_file("report.pdf")  # same progress label twice counts once
+        win._sorty_tosses_file("photo.png")
+        win._sorty_tosses_file("Complete")
+        assert win._sorty_toss.tossed == before + 2
+    finally:
+        win.close()
+        svc.stop(timeout=1.0)
+
+
+def test_startup_shows_counts_selects_a_folder_and_hides_repeated_buttons(app_paths: AppPaths, v3_qapp) -> None:  # noqa: ANN001
+    from PySide6.QtWidgets import QTreeWidgetItemIterator
+
+    from download_sorter.ui.folders.folders_tab import PAGE_FOLDER, ROLE_COUNT, ROLE_PATH
+
+    (app_paths.downloads_dir / "Documents").mkdir()
+    (app_paths.downloads_dir / "Documents" / "old.pdf").write_bytes(b"x")
+    win, svc = _window(app_paths, v3_qapp)
+    tab = win.folders_tab
+    try:
+        tab.scan_disk()
+        v3_qapp.processEvents()
+        counts = {}
+        it = QTreeWidgetItemIterator(tab.tree)
+        while it.value() is not None:
+            counts[str(it.value().data(0, ROLE_PATH))] = int(it.value().data(0, ROLE_COUNT) or 0)
+            it += 1
+        assert counts.get("Documents") == 1
+        assert tab._page == PAGE_FOLDER and tab.selected_path()
+        assert not win.btn_sort_now.isVisible()
+        assert not win.btn_file_held.isVisible()
+        win.tabs.setCurrentIndex(1)
+        v3_qapp.processEvents()
+        assert win.btn_sort_now.isVisible()
+    finally:
+        win.close()
+        svc.stop(timeout=1.0)
+
+
+def test_type_pill_label_stays_short() -> None:
+    from download_sorter.ui.folders.folders_tab import _short_type_label
+
+    assert _short_type_label(["Documents"], [".odt", ".xlsm", ".ods"]) == "Documents + 3 more"
+    assert _short_type_label([], [".a", ".b", ".c", ".d"]) == ".a .b .c + 1 more"
+    assert _short_type_label([], []) == "any kind of file"

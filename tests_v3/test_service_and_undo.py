@@ -59,7 +59,7 @@ def test_duplicate_isolation_and_batch_and_single_undo(app_paths: AppPaths) -> N
     assert len(res["moved"]) == 2
 
     moved_by_name = {m["filename"]: Path(m["dest_path"]) for m in res["moved"]}
-    assert "_Duplicates" in moved_by_name["dup.pdf"].parts
+    assert "Duplicates" in moved_by_name["dup.pdf"].parts
     assert moved_by_name["diff.pdf"].name == "diff (2).pdf"
 
     # Single-move undo restores just one file
@@ -149,3 +149,32 @@ def test_3mf_grace_hold_expired_and_file_held_now_undo(app_paths: AppPaths) -> N
     undo_res = svc.undo_last_batch()
     assert undo_res["restored"] == 1
     assert fresh_3mf.exists()
+
+
+def test_old_underscore_duplicates_folder_is_renamed_and_history_follows(app_paths) -> None:  # noqa: ANN001
+    from download_sorter.db import StateDB
+    from download_sorter.fs_ops import migrate_duplicates_folder
+
+    dl = app_paths.downloads_dir
+    old = dl / "_Duplicates" / "2026-11"
+    old.mkdir(parents=True)
+    (old / "report (1).pdf").write_bytes(b"x")
+    db = StateDB(app_paths.data_dir / "t.db")
+    db.record_move(
+        batch_id="b1",
+        filename="report (1).pdf",
+        src_path=dl / "report (1).pdf",
+        dest_path=old / "report (1).pdf",
+        reason="dup",
+        matched_rule="",
+        match_type="duplicate",
+        is_duplicate=True,
+    )
+    assert migrate_duplicates_folder(dl, db) == 1
+    assert (dl / "Duplicates" / "2026-11" / "report (1).pdf").is_file()
+    assert not (dl / "_Duplicates").exists()
+    rows = db.get_batch_moves("b1")
+    assert Path(rows[0]["dest_path"]) == dl / "Duplicates" / "2026-11" / "report (1).pdf"
+    # Running again is harmless
+    assert migrate_duplicates_folder(dl, db) == 0
+    db.close()

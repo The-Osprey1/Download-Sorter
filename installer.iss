@@ -25,9 +25,14 @@ SetupIconFile=DownloadSorter.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+DisableWelcomePage=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+WelcomeLabel2=This installs [name/ver] for you only. No administrator password is needed.%n%nIt keeps your Downloads folder tidy on its own. New downloads go to the right folder, you design your folders on one screen, and every move can be undone. Nothing is ever deleted, and everything stays on this PC.
+FinishedLabel=[name] is installed. When it opens, Sorty shows you around in three short steps. Then open the Folders screen and press + to make your first folder.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"

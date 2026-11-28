@@ -2130,6 +2130,7 @@ def apply_architecture_to_config(arch: FolderArchitecture, base_cfg: Config) -> 
 
 _SCAN_SKIP_DIRS = {
     "_duplicates",
+    "duplicates",
     "_extracted",
     "extracted",
     "_archive",

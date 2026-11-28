@@ -754,7 +754,7 @@ def test_p1_3_placeholder_collision_gets_numbered_name_not_quarantine(
     res = svc.scan_top_level_now(settle_seconds=0.0)
     assert len(res["moved"]) == 1 and res["moved"][0]["is_duplicate"] is False
     assert (existing.parent / "scan (2).pdf").read_bytes() == b"identical"
-    assert not (dl / "_Duplicates").exists()
+    assert not (dl / "Duplicates").exists()
 
 
 def _count_calls(monkeypatch: pytest.MonkeyPatch, name: str) -> list[Path]:
