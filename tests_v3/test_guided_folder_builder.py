@@ -245,13 +245,13 @@ def test_quick_fill_suggestions_ghost_chips_and_auto_normalized_inputs(v3_qapp) 
             # Full URL in Website Source -> normalized to domain chip
             dlg2.edit_domain_input.setText("https://dashboard.stripe.com/pay/inv_99")
             QTest.keyClick(dlg2.edit_domain_input, Qt.Key.Key_Return)
-            assert "stripe.com" in dlg2.result_data()["domains"]
+            assert {"stripe.com"} <= set(dlg2.result_data()["domains"])
 
             # Removable chips remove cleanly on click
             dlg2.remove_keyword("ultrawide")
             assert "ultrawide" not in dlg2.result_data()["keywords"]
             dlg2.remove_domain("stripe.com")
-            assert "stripe.com" not in dlg2.result_data()["domains"]
+            assert not {"stripe.com"} & set(dlg2.result_data()["domains"])
         finally:
             dlg2.close()
     finally:
@@ -309,7 +309,7 @@ def test_sample_file_drop_and_live_downloads_preview_with_align_now(
         data = dlg.result_data()
         assert ".pdf" in data["extensions"]
         assert "invoice" in data["keywords"]
-        assert "stripe.com" in data["domains"]
+        assert {"stripe.com"} <= set(data["domains"])
 
         # Both invoice PDFs match; benchy_plate.3mf does not
         matched_names = {p.name for p in dlg.matching_loose_files()}

@@ -86,7 +86,7 @@ def test_teach_cues_and_rule_builder(tmp_path: Path) -> None:
         domains=["stripe.com"],
     )
     assert rule.destination == "Finance\\Invoices"
-    assert "stripe.com" in rule.domains
+    assert {"stripe.com"} <= set(rule.domains)
     assert "invoice" in rule.keywords
 
 

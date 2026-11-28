@@ -389,7 +389,7 @@ def test_step2_sample_file_drop_populates_ext_keywords_and_zone_domain(
         assert "gridfinity" in learned["added_keywords"]
         assert learned["added_domain"] == "makerworld.com"
         assert ".3mf" in node.extensions
-        assert "makerworld.com" in node.domains
+        assert {"makerworld.com"} <= set(node.domains)
         assert dlg._node_status(node) == ("ready", "✓ Ready")
         dlg.close()
     finally:
