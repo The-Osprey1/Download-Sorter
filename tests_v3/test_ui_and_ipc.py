@@ -53,10 +53,10 @@ def test_main_window_live_tester_templates_and_simulator(v3_qapp, app_paths: App
 
 def test_ipc_roundtrip(v3_qapp) -> None:
     import os
-    from pathlib import Path
     import subprocess
     import sys
     import time
+    from pathlib import Path
 
     pipe = f"TestDownloadSorterV3_{uuid.uuid4().hex[:8]}"
     srv = IPCServer(lambda req: {"ok": True, "echo": req.get("cmd")}, server_name=pipe)
@@ -334,8 +334,10 @@ def test_top_right_side_ribbon_category_art_and_hover_pause(
 ) -> None:
     import time
     from pathlib import Path
+
     from PySide6.QtCore import QEvent, QPointF
     from PySide6.QtGui import QEnterEvent
+
     from download_sorter.ui.toasts import CategoryArtWidget, ToastManager, category_info
 
     # Category art resolves cleanly across file types
@@ -395,109 +397,6 @@ def test_top_right_side_ribbon_category_art_and_hover_pause(
     v3_qapp.processEvents()
 
 
-def test_folder_architecture_tiers_premade_custom_shift_undo_and_defaults(
-    v3_qapp,
-    app_paths: AppPaths,
-    monkeypatch,
-) -> None:
-    from download_sorter.architecture import (
-        ARCHITECTURE_PRESETS,
-        PREMADE_FOLDER_CATALOG,
-        apply_architecture_to_config,
-    )
-    from download_sorter.config import load_config
-
-    monkeypatch.setattr("download_sorter.ui.main_window.is_startup_enabled", lambda: False)
-    monkeypatch.setattr("download_sorter.ui.main_window.is_context_menu_enabled", lambda: False)
-
-    assert len(PREMADE_FOLDER_CATALOG) >= 40
-    assert len(ARCHITECTURE_PRESETS) >= 4
-
-    dl = app_paths.downloads_dir
-    assert dl is not None
-
-    # Create loose downloads, previously sorted managed files, and a private unmanaged folder
-    loose_pdf = dl / "Acme_Contract_2026.pdf"
-    loose_pdf.write_text("pdf", encoding="utf-8")
-    old_managed_dir = dl / "Documents" / "PDF"
-    old_managed_dir.mkdir(parents=True, exist_ok=True)
-    old_managed_pdf = old_managed_dir / "Quarterly_Contract_Signed.pdf"
-    old_managed_pdf.write_text("pdf", encoding="utf-8")
-
-    private_dir = dl / "MyPrivateTaxDocs"
-    private_dir.mkdir(parents=True, exist_ok=True)
-    private_file = private_dir / "tax_return_2025.pdf"
-    private_file.write_text("private", encoding="utf-8")
-
-    cfg = Config.with_starter_defaults()
-    cfg.settle_seconds = 0.0
-    cfg.hold_3mf_enabled = False
-    save_config(cfg, app_paths)
-
-    svc = SorterService(app_paths)
-    win = MainWindow(svc)
-    assert win.tabs.count() == 3
-    assert win.tabs.tabText(0) == "Folders"
-    assert not win.arch_tab.btn_arch_undo.isHidden()
-    assert not win.arch_tab.btn_arch_defaults.isHidden()
-
-    # Add a 3rd tier, a premade Tier 1 root ("Finance"), and a custom Tier 3 child folder with rules
-    win.arch_tab._on_add_tier()
-    assert win.arch_tab._arch.tier_count == 3
-
-    fin_node = win.arch_tab._arch.add_premade_node("t1_finance", tier=1)
-    assert fin_node is not None
-    contracts_node = win.arch_tab._arch.add_custom_node(
-        name="Contracts",
-        tier=2,
-        parent_id=fin_node.id,
-        extensions=[".pdf"],
-        keywords=["contract"],
-        domains=["acme.com"],
-    )
-    signed_tier3 = win.arch_tab._arch.add_custom_node(
-        name="Signed2026",
-        tier=3,
-        parent_id=contracts_node.id,
-        extensions=[".pdf"],
-        keywords=["contract"],
-    )
-    assert win.arch_tab._arch.node_relative_path(signed_tier3.id) == r"Finance\Contracts\Signed2026"
-
-    target_cfg = apply_architecture_to_config(win.arch_tab._arch, svc.config)
-    plan = svc.preview_architecture_shift(target_cfg)
-    planned_names = {m["src"].name for m in plan["moves_planned"]}
-    assert "Acme_Contract_2026.pdf" in planned_names
-    assert "Quarterly_Contract_Signed.pdf" in planned_names
-    assert "tax_return_2025.pdf" not in planned_names
-
-    # Apply architecture & automatically shift files into expected folders
-    res = svc.apply_architecture_and_shift(target_cfg, shift_files=True, create_empty_folders=True)
-    assert res["shifted_count"] >= 2
-    expected_dir = dl / "Finance" / "Contracts" / "Signed2026"
-    assert (expected_dir / "Acme_Contract_2026.pdf").exists()
-    assert (expected_dir / "Quarterly_Contract_Signed.pdf").exists()
-    assert not loose_pdf.exists()
-    assert not old_managed_pdf.exists()
-    # Unmanaged user folder must remain untouched
-    assert private_file.exists()
-
-    # Always-available Undo reverses both file shifts and architecture config snapshot
-    win._on_undo_last()
-    assert loose_pdf.exists()
-    assert old_managed_pdf.exists()
-    assert not (expected_dir / "Acme_Contract_2026.pdf").exists()
-    assert load_config(app_paths).architecture.get("tier_count", 2) == 2
-
-    # Re-apply then test Return to Defaults
-    svc.apply_architecture_and_shift(target_cfg, shift_files=True)
-    assert (expected_dir / "Acme_Contract_2026.pdf").exists()
-    reset_res = svc.reset_to_defaults_and_shift(shift_files=True)
-    assert reset_res["shifted_count"] >= 2
-    assert (dl / "Documents" / "PDF" / "Acme_Contract_2026.pdf").exists()
-    assert (dl / "Documents" / "PDF" / "Quarterly_Contract_Signed.pdf").exists()
-    assert private_file.exists()
-    win.close()
 
 
 def test_sorty_click_tips_and_cute_animation(
@@ -549,6 +448,7 @@ def test_upgrade_carry_over_and_export_setup(
     monkeypatch,
 ) -> None:
     import json
+
     from download_sorter.config import carry_over_setup, export_setup_file
     from download_sorter.ui.main_window import UpgradeCarryOverDialog
 
@@ -621,51 +521,6 @@ def test_upgrade_carry_over_and_export_setup(
     win.close()
 
 
-def test_top_to_bottom_architecture_and_auto_create_basic(v3_qapp, app_paths: AppPaths) -> None:
-    cfg = Config.with_starter_defaults()
-    cfg.settle_seconds = 0.0
-    save_config(cfg, app_paths)
-
-    dl = app_paths.downloads_dir
-    assert dl is not None
-    (dl / "report.pdf").write_text("pdf", encoding="utf-8")
-    (dl / "photo.png").write_text("png", encoding="utf-8")
-
-    svc = SorterService(app_paths)
-    win = MainWindow(svc)
-    win.show()
-    win.arch_tab.setGeometry(0, 0, 960, 660)
-    win.arch_tab.show()
-    win.arch_tab.canvas.resize(920, 620)
-    v3_qapp.processEvents()
-
-    canvas = win.arch_tab.canvas
-    assert 0 in canvas._tier_band_rects
-    assert 1 in canvas._tier_band_rects
-    # Expand a Tier 1 parent folder to reveal its Tier 2 band
-    t1_parent = next(n for n in win.arch_tab._arch.nodes_in_tier(1) if win.arch_tab._arch.children_of(n.id))
-    canvas.select_node(t1_parent.id)
-    v3_qapp.processEvents()
-    assert 2 in canvas._tier_band_rects
-    assert canvas._tier_band_rects[0].top() < canvas._tier_band_rects[1].top() < canvas._tier_band_rects[2].top()
-
-    # Tier 1 cards are arranged horizontally across rows inside Tier 1 band rather than stacked in 1 tall column
-    tier1_nodes = [n for n in win.arch_tab._arch.nodes if n.tier == 1]
-    tier1_rects = [canvas._node_rects[n.id] for n in tier1_nodes if n.id in canvas._node_rects]
-    assert len(tier1_rects) >= 4
-    unique_rows = {round(r.y()) for r in tier1_rects}
-    assert len(unique_rows) < len(tier1_rects)
-
-    # Auto-Create Basic builds a clean standard starter foundation + matching local file folders
-    win.arch_tab.btn_auto_create.click()
-    v3_qapp.processEvents()
-    assert win.arch_tab._dirty is True
-    assert win.arch_tab._arch.tier_count == 2
-    assert any(n.name == "Documents" and n.tier == 1 for n in win.arch_tab._arch.nodes)
-    assert any(n.name == "Images" and n.tier == 1 for n in win.arch_tab._arch.nodes)
-    assert "Auto-created" in win.lbl_footer.text()
-    win.close()
-    v3_qapp.processEvents()
 
 
 def test_ribbon_timer_setting_and_close_bug_fix(v3_qapp, app_paths: AppPaths) -> None:

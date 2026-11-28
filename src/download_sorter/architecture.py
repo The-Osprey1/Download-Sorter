@@ -2427,6 +2427,93 @@ def scan_folder_architecture(
     }
 
 
+# Folders already in Downloads that are never offered as sorting folders.
+_PROTECTED_DIR_NAMES: frozenset[str] = frozenset(
+    {
+        "_duplicates",
+        "duplicates",
+        "_extracted",
+        "extracted",
+        "_archive",
+        "games",
+        "portable apps",
+        "__pycache__",
+        "__macosx",
+        "node_modules",
+        ".git",
+        ".venv",
+    }
+)
+
+
+def scan_existing_folders(watch_root: Path) -> dict[str, Any]:
+    """Scan existing Downloads folders safely while separating protected untouched bundles."""
+    import os
+
+    from download_sorter.service import SorterService
+
+    protected: list[str] = []
+    has_user_subdirs = False
+
+    if watch_root.is_dir():
+        try:
+            with os.scandir(watch_root) as it:
+                entries = sorted(list(it), key=lambda e: e.name.lower())
+            for entry in entries:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                nm = entry.name
+                low = nm.lower()
+                if nm.startswith("."):
+                    continue
+                ep = Path(entry.path)
+                if low in _PROTECTED_DIR_NAMES or nm.startswith("_") or SorterService._is_project_or_bundle_dir(ep):
+                    if nm not in protected:
+                        protected.append(nm)
+                    continue
+                has_user_subdirs = True
+                # Check depth-1 children for protected bundles too (e.g. Extracted or git repos)
+                try:
+                    with os.scandir(ep) as sub_it:
+                        for sub in sorted(list(sub_it), key=lambda e: e.name.lower()):
+                            if not sub.is_dir(follow_symlinks=False) or sub.name.startswith("."):
+                                continue
+                            slow = sub.name.lower()
+                            sp = Path(sub.path)
+                            if (
+                                slow in _PROTECTED_DIR_NAMES
+                                or sub.name.startswith("_")
+                                or SorterService._is_project_or_bundle_dir(sp)
+                            ):
+                                rel_prot = f"{nm}\\{sub.name}"
+                                if rel_prot not in protected:
+                                    protected.append(rel_prot)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+    try:
+        raw_scan = scan_folder_architecture(watch_root)
+    except OSError:
+        raw_scan = {"architecture": FolderArchitecture(tier_count=2, nodes=[]), "folder_count": 0, "file_count": 0}
+
+    arch: FolderArchitecture = raw_scan["architecture"]
+    protected_top_lower = {p.split("\\")[0].lower() for p in protected}
+    if protected_top_lower:
+        for node in list(arch.nodes_in_tier(1)):
+            if node.name.lower() in protected_top_lower:
+                arch.remove_node(node.id)
+
+    return {
+        "architecture": arch,
+        "folder_count": len(arch.nodes),
+        "file_count": int(raw_scan.get("file_count", 0)),
+        "protected_folders": protected,
+        "has_user_subdirs": has_user_subdirs and len(arch.nodes) > 0,
+    }
+
+
 def merge_architectures(
     existing: FolderArchitecture,
     scanned: FolderArchitecture,

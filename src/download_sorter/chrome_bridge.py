@@ -146,7 +146,7 @@ def install_chrome_native_host(
 
     manifest_payload = {
         "name": NATIVE_HOST_NAME,
-        "description": "Download Sorter Native Messaging Host for direct Chrome download routing",
+        "description": "Lets the Download Sorter Chrome extension save downloads straight into your folders",
         "path": str(host_exe),
         "type": "stdio",
         "allowed_origins": [f"chrome-extension://{eid}/" for eid in ext_ids],

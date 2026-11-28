@@ -648,6 +648,68 @@ class TidyReviewDialog(QDialog):
         lay.addLayout(row)
 
 
+class PickListDialog(QDialog):
+    """A short list of suggestions to tick, with one button that adds the ticked ones."""
+
+    def __init__(
+        self,
+        title: str,
+        subtitle: str,
+        items: list[tuple[str, str]],
+        verb: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(520, 460)
+        self.setStyleSheet(_STYLE)
+        self._verb = verb
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setSpacing(10)
+        head = QLabel(title, self)
+        head.setStyleSheet("font-size: 18px; font-weight: 700;")
+        lay.addWidget(head)
+        sub = QLabel(subtitle, self)
+        sub.setObjectName("Muted")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        self.list = QListWidget(self)
+        self.list.setObjectName("PageList")
+        for label, key in items:
+            it = QListWidgetItem(label)
+            it.setData(Qt.ItemDataRole.UserRole, key)
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Checked)
+            self.list.addItem(it)
+        self.list.itemChanged.connect(lambda _it: self._sync())
+        lay.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        cancel = _quiet_button("Not now", "Close without changing anything", self)
+        cancel.clicked.connect(self.reject)
+        self.go = _quiet_button(verb, "Add the ticked folders", self, "Primary")
+        self.go.setDefault(True)
+        self.go.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(self.go)
+        lay.addLayout(row)
+        self._sync()
+
+    def _sync(self) -> None:
+        n = len(self.chosen())
+        self.go.setEnabled(n > 0)
+        self.go.setText(f"{self._verb} ({n})" if n else self._verb)
+
+    def chosen(self) -> list[str]:
+        out: list[str] = []
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            if it.checkState() == Qt.CheckState.Checked:
+                out.append(str(it.data(Qt.ItemDataRole.UserRole)))
+        return out
+
+
 # ---------------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------------
@@ -812,7 +874,7 @@ class _FolderPage(QWidget):
         btn_show = _quiet_button("Show in File Explorer", "Open this folder", self.more)
         btn_show.clicked.connect(lambda: self.tab.action_requested.emit("tree:open_explorer", self.path))
         btn_proj = _quiet_button("Find projects inside", "Group project files that belong together", self.more)
-        btn_proj.clicked.connect(lambda: self.tab.action_requested.emit("detect_projects", self.path))
+        btn_proj.clicked.connect(lambda: self.tab.find_projects(self.path))
         btn_rm = _quiet_button("Remove folder…", "Remove this folder. Files inside are kept", self.more, "Danger")
         btn_rm.clicked.connect(lambda: self.tab.remove_folder(self.path))
         for b in (btn_skip, btn_adv, btn_show, btn_proj, btn_rm):
@@ -1036,7 +1098,7 @@ class _FolderPage(QWidget):
         raw = self._ask("Add a website", "Files downloaded from this website land here (like irs.gov):")
         if not raw:
             return
-        from download_sorter.ui.flow.folder_builder import normalize_domain_tokens
+        from download_sorter.rule_text import registrable_domain_tokens as normalize_domain_tokens
 
         c = self._cues()
         c.domains = [*c.domains, *[d for d in normalize_domain_tokens(raw.split(",")) if d not in c.domains]]
@@ -1423,7 +1485,7 @@ class _EmptyPage(QWidget):
         self.b_start = _quiet_button(
             "Use my existing folders", "Add the folders already in your Downloads to this list", self, "Primary"
         )
-        self.b_start.clicked.connect(lambda: tab.action_requested.emit("tree_tool:scan_folders", ""))
+        self.b_start.clicked.connect(lambda: tab.use_existing_folders())
         self.b_new = _quiet_button("New folder", "Make an empty folder", self)
         self.b_new.clicked.connect(lambda: tab.new_folder(""))
         row.addWidget(self.b_new)
@@ -1713,7 +1775,7 @@ class FoldersTab(QWidget):
         """Save ``cfg`` and show ``message`` with Undo."""
         before = copy.deepcopy(self.service.config)
         self.config_committed.emit(cfg)
-        has_disk = bool(change and (change.disk_moves or change.disk_removals or change.fill_path))
+        has_disk = bool(change and (change.disk_moves or change.disk_removals or change.all_fill_paths()))
         if has_disk:
             self.disk_change_requested.emit(change)
 
@@ -2099,6 +2161,82 @@ class FoldersTab(QWidget):
     def move_folder(self, src: str, target: str) -> None:
         self.apply(lambda cfg: fd.move_folder(cfg, src, target))
 
+    def find_projects(self, path: str) -> None:
+        """Look inside a folder for groups of files that belong together and offer a folder for each."""
+        from download_sorter.project_detect import detect_projects_in_folder
+
+        folder = self.service.watch_root.joinpath(*fd.norm_path(path).split("\\"))
+        leaf = fd.norm_path(path).split("\\")[-1]
+        if not folder.is_dir():
+            self.notice.emit(f"“{leaf}” has no files on disk yet.", None)
+            return
+        taken = {n.name.lower() for a in [fd.working_architecture(self.config())] for n in a.nodes}
+
+        def _work() -> list[Any]:
+            found = detect_projects_in_folder(folder, min_files=3, exclude_subdirs=taken)
+            return found or detect_projects_in_folder(folder, min_files=2, exclude_subdirs=taken)
+
+        def _done(found: list[Any]) -> None:
+            found = [p for p in found if p.name.lower() not in taken]
+            if not found:
+                self.notice.emit(f"No groups of related files found in “{leaf}”.", None)
+                return
+            items = []
+            for p in found:
+                sample = ", ".join(p.sample_files[:2])
+                items.append((f"{p.name}   ·   {p.file_count} files   ·   e.g. {sample}", p.name))
+            dlg = PickListDialog(
+                f"Projects in {leaf}",
+                "Each ticked project gets its own folder, and its files move in. You can undo this.",
+                items,
+                "Add folders",
+                parent=self,
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            chosen = set(dlg.chosen())
+            picks = [(p.name, list(p.keywords), list(p.extensions)) for p in found if p.name in chosen]
+            if self.apply(lambda cfg: fd.add_project_folders(cfg, path, picks)):
+                self.show_page(PAGE_FOLDER)
+
+        run_async(_work, _done, lambda err: self.notice.emit(f"Could not look inside “{leaf}”: {err}", None), parent=self)
+
+    def use_existing_folders(self, when_none: str = "") -> None:
+        """Offer the folders already in Downloads as sorting folders. Nothing moves.
+
+        ``when_none`` replaces the message shown when there is nothing new to offer.
+        """
+        from download_sorter.architecture import scan_existing_folders
+
+        root = self.service.watch_root
+
+        def _done(res: dict[str, Any]) -> None:
+            scanned = res["architecture"]
+            new = fd.new_folders_in(self.config(), scanned)
+            if not new:
+                self.notice.emit(when_none or "Every folder in your Downloads is already listed here.", None)
+                return
+            dlg = PickListDialog(
+                "Use my existing folders",
+                "These folders are already in your Downloads. Tick the ones to keep sorted. Nothing moves.",
+                [(_crumb(p), p) for p in new],
+                "Add folders",
+                parent=self,
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            chosen = dlg.chosen()
+            if self.apply(lambda cfg: fd.adopt_existing_folders(cfg, scanned, chosen)):
+                self._selected = chosen[0]
+                self.show_page(PAGE_FOLDER)
+
+        run_async(
+            lambda: scan_existing_folders(root),
+            _done,
+            lambda err: self.notice.emit(f"Could not read your Downloads: {err}", None),
+            parent=self,
+        )
+
     def new_folder(self, parent_path: str = "") -> None:
         arch = fd.working_architecture(self.config())
         where = parent_path.split("\\")[-1] if parent_path else "Downloads"
@@ -2186,7 +2324,7 @@ class FoldersTab(QWidget):
             act.triggered.connect(lambda _=False, t=tgt: self._confirm_merge(path, t))
         merge_menu.setEnabled(bool(merges))
         menu.addSeparator()
-        menu.addAction("Find projects inside").triggered.connect(lambda: self.action_requested.emit("detect_projects", path))
+        menu.addAction("Find projects inside").triggered.connect(lambda: self.find_projects(path))
         menu.addAction("Show in File Explorer").triggered.connect(lambda: self.action_requested.emit("tree:open_explorer", path))
         menu.addSeparator()
         menu.addAction(make_vector_icon("trash", "#FF453A", 14), f"Remove “{_elide(leaf, 24)}”…").triggered.connect(

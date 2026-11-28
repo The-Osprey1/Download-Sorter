@@ -83,8 +83,6 @@ from download_sorter.router import candidate_from_path, evaluate
 from download_sorter.service import SorterService
 from download_sorter import update_check, updater
 from download_sorter.ui.accessibility import name_controls_for_screen_readers
-from download_sorter.ui.architecture_canvas import ArchitectureTab
-from download_sorter.ui.flow import SortingFlowTab
 from download_sorter.ui.folders import FoldersTab
 from download_sorter.ui.text_scale import scaled_px
 from download_sorter.ui.chrome_walkthrough import ChromeExtensionWalkthroughDialog
@@ -137,12 +135,12 @@ class UpgradeCarryOverDialog(QDialog):
 
         sub = QLabel(
             "Bring over your custom keyword rules, extension overrides, subfolder names, "
-            "MakerWorld / G-Code / Haas CNC destinations, hold timer, and Folder Architecture.",
+            "MakerWorld / G-Code / Haas CNC destinations, hold timer, and your folders.",
             self,
         )
         sub.setVisible(False)
         self.setToolTip(
-            "Bring over custom rules, extension overrides, folder destinations, and Folder Architecture from a v2.8 config or exported v3 setup."
+            "Bring over rules, extension overrides, folder destinations and folders from a v2.8 config or an exported setup."
         )
 
         src_row = QHBoxLayout()
@@ -206,7 +204,7 @@ class UpgradeCarryOverDialog(QDialog):
             make_vector_icon("folder", "#F5F5F7", 14),
         )
         self.btn_export.setObjectName("GhostButton")
-        self.btn_export.setToolTip("Export your current rules, settings, and Folder Architecture to a portable JSON file")
+        self.btn_export.setToolTip("Save your rules, settings and folders to a file you can import later")
         self.btn_export.clicked.connect(self._on_export_inline)
         btn_row.addWidget(self.btn_export)
         btn_row.addStretch(1)
@@ -262,8 +260,8 @@ class UpgradeCarryOverDialog(QDialog):
                 f"{summary['categories_imported']} extension rule(s) · "
                 f"{summary['subfolders_imported']} type subfolder(s)\n"
                 f"Protected .3MF Hold: {hold_txt} · Watch folder: {display_watch_folder(str(summary['watch_folder']))}\n"
-                f"Resulting Folder Architecture: {summary['tier_count']} tier(s), "
-                f"{summary['arch_nodes']} folder node(s)."
+                f"Folders now: {summary['arch_nodes']}, "
+                f"up to {summary['tier_count']} level(s) deep."
             )
             self.btn_apply.setEnabled(True)
         except Exception as exc:
@@ -273,7 +271,7 @@ class UpgradeCarryOverDialog(QDialog):
     def _on_export_inline(self) -> None:
         out_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Export Complete Setup & Folder Architecture",
+            "Export your setup",
             str(Path.home() / "DownloadSorter-Setup-Backup.json"),
             "JSON Files (*.json)",
         )
@@ -284,7 +282,7 @@ class UpgradeCarryOverDialog(QDialog):
             QMessageBox.information(
                 self,
                 "Setup Exported",
-                f"Saved your rules, preferences, and Folder Architecture to:\n{out_path}",
+                f"Saved your rules, settings and folders to:\n{out_path}",
             )
         except Exception as exc:
             QMessageBox.critical(self, "Export Failed", str(exc))
@@ -326,7 +324,7 @@ class RuleEditorDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         from download_sorter.ui.emblems import TokenChipBar
-        from download_sorter.ui.flow.spine_panel import (
+        from download_sorter.rule_text import (
             NEW_FOLDER_SENTINEL,
             QUICK_FILE_TYPE_CHIPS,
             describe_rule_plain_english,
@@ -351,9 +349,12 @@ class RuleEditorDialog(QDialog):
         self.setMinimumWidth(520)
         self._base_id = rule.id if rule else ""
 
-        if folder_choices is None and parent is not None and hasattr(parent, "flow_tab"):
+        if folder_choices is None and parent is not None and hasattr(parent, "service"):
             try:
-                folder_choices = parent.flow_tab._all_folder_choices(parent.service.config)
+                from download_sorter import folder_designer as fd
+
+                arch = fd.working_architecture(parent.service.config)
+                folder_choices = sorted((fd.path_of(arch, n) for n in arch.nodes), key=str.lower)
             except Exception:
                 folder_choices = None
         if not folder_choices:
@@ -373,7 +374,7 @@ class RuleEditorDialog(QDialog):
         lbl_name_tag.setStyleSheet("color: #AEAEB2; font-size: 12px; font-weight: 600;")
         self.edit_name = QLineEdit(rule.name if rule else "")
         self.edit_name.setPlaceholderText("e.g. Stripe Invoices (optional — auto-named from cues)")
-        self.edit_name.setToolTip("Rule title shown in Sorting Flow (auto-generated if left blank)")
+        self.edit_name.setToolTip("Rule name shown on the Folders screen (filled in for you if left blank)")
         self.chk_enabled = QCheckBox("Active")
         self.chk_enabled.setChecked(rule.enabled if rule else True)
         self.chk_enabled.setToolTip("Turn this sorting rule on or off")
@@ -726,12 +727,12 @@ class RuleEditorDialog(QDialog):
 
     def _open_new_folder_from_dialog(self) -> None:
         win = self.parentWidget()
-        while win is not None and not hasattr(win, "open_guided_folder_dialog"):
+        while win is not None and not hasattr(win, "create_folder"):
             win = win.parentWidget()
         if win is None:
             return
         parent_hint = self._last_valid_dest.split("\\")[0] if self._last_valid_dest else ""
-        created = win.open_guided_folder_dialog(default_parent_path=parent_hint, parent_widget=self)
+        created = win.create_folder(parent_hint, parent_widget=self)
         if created:
             self._suppress_sync = True
             try:
@@ -880,7 +881,7 @@ class DetoxDialog(QDialog):
         from download_sorter.ui.emblems import DetoxEmblemWidget
 
         self.service = service
-        self.setWindowTitle("Downloads Detox — Age-Based Housekeeping")
+        self.setWindowTitle("Old files in Downloads")
         self.setMinimumSize(620, 440)
 
         root = QVBoxLayout(self)
@@ -912,7 +913,7 @@ class DetoxDialog(QDialog):
         self.btn_prune.setToolTip("Remove empty subfolders discovered inside Downloads")
         self.btn_prune.clicked.connect(self._on_prune_folders)
         btn_close = QPushButton("Close")
-        btn_close.setToolTip("Close the Downloads Detox dialog")
+        btn_close.setToolTip("Close this window")
         btn_close.clicked.connect(self.accept)
         btn_row.addWidget(self.btn_recycle)
         btn_row.addWidget(self.btn_prune)
@@ -1782,7 +1783,7 @@ def _confirm_clear_ai_memory(parent: QWidget, data_dir: Path, *, confirm: bool =
         ans = QMessageBox.question(
             parent,
             "Reset Experimental AI Memory",
-            "Clear all locally learned routing patterns and rule suggestions? Your Custom Rules and files stay untouched.",
+            "Clear all locally learned routing patterns and rule suggestions? Your rules and files stay untouched.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1829,7 +1830,7 @@ class ExperimentalAIInsightsDialog(QDialog):
         lbl_title = QLabel("Experimental AI Insights")
         lbl_title.setObjectName("CardTitle")
         lbl_sub = QLabel(
-            "Local statistical learning (smoothed Naive Bayes & TF-IDF) trained only on your sorting history. Zero cloud calls."
+            "Learns only from where your own files were sorted. Nothing leaves your PC."
         )
         lbl_sub.setObjectName("MutedText")
         lbl_sub.setWordWrap(True)
@@ -2049,8 +2050,7 @@ class MainWindow(QMainWindow):
 
         self._tab_icon_names = ["folder", "home", "settings"]
         self.tabs = QTabWidget()
-        # The one-screen Folders designer is the main view. The older Sorting Flow
-        # view is kept, hidden, for the actions and dialogs that still use it.
+        # The one-screen Folders designer is the main view.
         self.folders_tab = FoldersTab(self.service, self, run_service_action=self._run_service_action)
         self.folders_tab.config_committed.connect(self._on_flow_config_committed)
         self.folders_tab.action_requested.connect(self._on_flow_action)
@@ -2059,21 +2059,6 @@ class MainWindow(QMainWindow):
         self.folders_tab.notice.connect(self._on_folders_notice)
         self.folders_tab.tidy_requested.connect(self._on_sort_now)
         self._folder_disk_batches: list[str] = []
-
-        self.flow_tab = SortingFlowTab(self.service, self)
-        self.flow_tab.hide()
-        self.flow_tab.config_committed.connect(self._on_flow_config_committed)
-        self.flow_tab.action_requested.connect(self._on_flow_action)
-        self.flow_tab.teach_move_requested.connect(self._on_flow_teach_move)
-
-        self.arch_tab = ArchitectureTab(self.service, self)
-        self.arch_tab.hide()
-        self.arch_tab.architecture_applied.connect(self._on_architecture_applied)
-        self.arch_tab.undo_requested.connect(self.refresh_all)
-        self.arch_tab.carry_over_requested.connect(self.open_carry_over_dialog)
-        self.arch_tab.action_started.connect(self._on_arch_action_started)
-        self.arch_tab.action_progress.connect(self._on_arch_action_progress)
-        self.arch_tab.action_finished.connect(self._on_arch_action_finished)
 
         self._home_tab = self._build_home_tab()
         self._rules_tab = self._build_rules_tab()
@@ -2219,7 +2204,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_walkthrough)
 
         self.btn_sort_now = InteractiveRibbonBtn(
-            "Clean Up Now",
+            "Tidy",
             make_vector_icon("bolt", "#FFFFFF", 14),
         )
         self.btn_sort_now.setObjectName("PrimaryButton")
@@ -2312,7 +2297,7 @@ class MainWindow(QMainWindow):
         cards_row.addWidget(
             self._build_step_card(
                 "2. Your Rules Always Win",
-                "Add custom rules by filename or website in Sorting Flow. Matching files follow your rules before default sorting runs.",
+                "Teach a folder by filename or website on the Folders screen. Your folders win over sorting by type.",
             ),
             1,
         )
@@ -2362,7 +2347,7 @@ class MainWindow(QMainWindow):
         self.btn_sort_tiers.clicked.connect(self._on_sort_tiers_now)
 
         self.btn_detox = CollapsibleRibbonBtn(
-            "Detox",
+            "Old Files",
             make_vector_icon("trash", "#8E8E93", 14),
         )
         self.btn_detox.setToolTip("Review old installers (>30 days) and empty folders inside Downloads")
@@ -2419,7 +2404,7 @@ class MainWindow(QMainWindow):
 
         # Card B: Recent Activity
         self.lbl_activity_empty = QLabel(
-            "No files moved yet — click 'Clean Up Now' above or drop a file in Downloads."
+            "No files moved yet. Click Tidy above, or save a file to Downloads."
         )
         self.lbl_activity_empty.setObjectName("MutedText")
         act_right = QWidget()
@@ -2436,7 +2421,7 @@ class MainWindow(QMainWindow):
 
         self.tbl_activity = QTableWidget(0, 5)
         self.tbl_activity.setHorizontalHeaderLabels(["When", "File", "Moved Into Folder", "Why It Moved", "Undo"])
-        self.tbl_activity.setToolTip("Double-click any move to trace why it sorted in Sorting Flow")
+        self.tbl_activity.setToolTip("Double-click a move to see why it went there")
         self.tbl_activity.doubleClicked.connect(self._on_activity_trace_row)
         _style_table(self.tbl_activity)
         header = self.tbl_activity.horizontalHeader()
@@ -2483,7 +2468,7 @@ class MainWindow(QMainWindow):
         packs_row.addWidget(btn_import)
 
         rules_card, rules_layout = _make_surface_card(
-            "Custom Rules",
+            "Rules",
             "Checked top-to-bottom — first match wins. Standard file types sort automatically.",
             right_widget=packs_wrap,
         )
@@ -2703,7 +2688,7 @@ class MainWindow(QMainWindow):
         self.chk_auto_align_existing = MacToggle()
         card_watch.add_row(
             SettingRow(
-                "Keep Existing Loose Files Aligned",
+                "Tidy Existing Files When Folders Change",
                 "Automatically organize existing loose files in Downloads whenever your rules change.",
                 controls=self.chk_auto_align_existing,
             )
@@ -2815,22 +2800,13 @@ class MainWindow(QMainWindow):
         # ==================================================================
         page_sorting, lay_sort = _make_scroll_page(
             "Sorting & Holds",
-            "Optional file holds, multi-file grouping, ZIP extraction, and on-device smart sorting.",
+            "Optional file holds, ZIP files, and on-device smart sorting.",
         )
 
         card_holds = SettingCard(
-            "Holds & Grouping (Optional)",
-            "Off by default. Turn these on only if you want to delay or bundle downloads before sorting.",
+            "Holds (Optional)",
+            "Off by default. Turn this on only if you want to keep new 3D print files in place for a while.",
         )
-        self.chk_project_grouping = MacToggle()
-        card_holds.add_row(
-            SettingRow(
-                "Group multi-file downloads",
-                "Show project-burst grouping in Sorting Flow so related downloads can bundle into one folder.",
-                controls=self.chk_project_grouping,
-            )
-        )
-
         self.chk_hold_3mf = MacToggle()
         card_holds.add_row(
             SettingRow(
@@ -2879,7 +2855,16 @@ class MainWindow(QMainWindow):
                 compact=True,
             )
         )
-        card_archives.add_row(zip_sub, with_divider=False)
+        card_archives.add_row(zip_sub)
+        self.chk_zip_peek = MacToggle()
+        card_archives.add_row(
+            SettingRow(
+                "Sort .zip files by what is inside",
+                "A .zip full of STL files goes with your 3D models instead of Archives. The .zip is only looked into, never unpacked.",
+                controls=self.chk_zip_peek,
+            ),
+            with_divider=False,
+        )
         lay_sort.addWidget(card_archives)
 
         self.lbl_ai_badge = _make_badge("ON-DEVICE", "primary")
@@ -2893,7 +2878,7 @@ class MainWindow(QMainWindow):
         card_ai.add_row(
             SettingRow(
                 "Smart Folder Hints",
-                "Show suggested folders for ambiguous filenames in previews and Sorting Flow.",
+                "Show a suggested folder for unclear filenames in the Activity preview.",
                 controls=self.chk_ai_smart_hints,
             )
         )
@@ -3070,15 +3055,6 @@ class MainWindow(QMainWindow):
             "Tools, Updates & Backup",
             "Optional power tools and configuration portability.",
         )
-        self.chk_show_advanced = MacToggle()
-        card_adv.add_row(
-            SettingRow(
-                "Show Advanced Tools",
-                "Show 'Tidy Files Inside Folders' and extra canvas utilities for custom multi-tier layouts.",
-                controls=self.chk_show_advanced,
-            )
-        )
-
         self.chk_check_updates = MacToggle()
         self.chk_check_updates.setToolTip("Checks GitHub once a day for newer versions. Nothing about your files is sent.")
         self.btn_check_updates = InteractiveRibbonBtn("Check Now", make_vector_icon("refresh", "#F5F5F7", 13))
@@ -3141,7 +3117,7 @@ class MainWindow(QMainWindow):
             self.chk_auto_align_existing,
             self.chk_sort_subfolders,
             self.chk_type_subfolders,
-            self.chk_project_grouping,
+            self.chk_zip_peek,
             self.chk_hold_3mf,
             self.chk_auto_unzip_all,
             self.chk_zip_keep_original,
@@ -3150,7 +3126,6 @@ class MainWindow(QMainWindow):
             self.chk_ai_scan_keywords,
             self.chk_notifications,
             self.chk_quick_switcher,
-            self.chk_show_advanced,
             self.chk_startup,
             self.chk_context_menu,
             self.chk_check_updates,
@@ -3175,10 +3150,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Refresh & Actions
     # ------------------------------------------------------------------
-    def _apply_advanced_tools_visibility(self, show: bool) -> None:
-        """Keep Tidy Files Inside Folders aligned with the advanced tools toggle."""
-        self.btn_sort_tiers.setVisible(show)
-
     def _on_tab_changed(self, index: int) -> None:
         for i, icon_name in enumerate(self._tab_icon_names):
             col = "#F5F5F7" if i == index else "#8E8E93"
@@ -3277,8 +3248,6 @@ class MainWindow(QMainWindow):
         self._refresh_rules()
         self._refresh_settings_fields()
         self._update_live_tester()
-        if hasattr(self, "arch_tab"):
-            self.arch_tab.sync_from_service()
 
         if then is not None:
             self._refresh_callbacks.append(then)
@@ -3370,10 +3339,6 @@ class MainWindow(QMainWindow):
 
         self._run_simulation(snap["simulation"], hold_days=int(snap["hold_days"]))
         self._refresh_activity(snap["activity"], watch_dir=snap["watch_dir"])
-        if hasattr(self, "flow_tab"):
-            self.flow_tab.set_watch_label(Path(str(snap["watch_dir"])).name or "Downloads")
-            self.flow_tab._trigger_disk_scan()
-            self.flow_tab.refresh()
         if hasattr(self, "folders_tab"):
             self.folders_tab.refresh()
             self.folders_tab.scan_disk()
@@ -3520,21 +3485,6 @@ class MainWindow(QMainWindow):
         self.header_mascot.set_working(False)
         self.header_mascot.set_pose("sleeping" if self.service.paused else ("safe" if self._held_count > 0 else "smart"))
 
-    def _on_arch_action_started(self, title: str) -> None:
-        self.header_mascot.set_working(True, mode="scanning")
-        self.progress_hud.start(title, detail="Preparing...", total=0)
-        self.lbl_footer.setText(title)
-
-    def _on_arch_action_progress(self, done: int, total: int, label: str) -> None:
-        if total > 0:
-            self.header_mascot.set_working(True, mode="working")
-            self._sorty_tosses_file(label)
-        self.progress_hud.update_progress(done, total, label)
-
-    def _on_arch_action_finished(self, summary: str, kind: str) -> None:
-        self._restore_mascot_resting()
-        self.progress_hud.finish(summary, kind="warning" if kind == "warning" else "success")
-
     def _run_service_action(
         self,
         work: Callable[..., Any],
@@ -3658,8 +3608,6 @@ class MainWindow(QMainWindow):
                 text += f"  ({more} more suggestion{'s' if more != 1 else ''})"
             self.lbl_rule_suggestion.setText(text)
             self.btn_rule_suggestion_compact.setToolTip(text)
-        if hasattr(self, "flow_tab"):
-            self.flow_tab.set_suggestion(self._current_suggestion)
         if hasattr(self, "folders_tab"):
             self.folders_tab.set_suggestion(self._current_suggestion)
         self._place_rule_suggestion()
@@ -3737,8 +3685,6 @@ class MainWindow(QMainWindow):
         self.chk_type_subfolders.setChecked(cfg.use_type_subfolders)
         self.chk_notifications.setChecked(cfg.notifications_enabled)
         self.chk_check_updates.setChecked(cfg.check_for_updates)
-        self.chk_show_advanced.setChecked(cfg.show_advanced_tools)
-        self._apply_advanced_tools_visibility(cfg.show_advanced_tools)
         self.spin_ribbon_timeout.setValue(max(1.0, min(30.0, float(cfg.ribbon_timeout_seconds))))
         self.spin_ribbon_timeout.setEnabled(cfg.notifications_enabled)
         self.chk_quick_switcher.setChecked(cfg.quick_switcher_enabled)
@@ -3748,7 +3694,7 @@ class MainWindow(QMainWindow):
         self.spin_qs_timeout.setEnabled(cfg.quick_switcher_enabled)
         self.spin_qs_3d_hours.setEnabled(cfg.quick_switcher_enabled)
         self.edit_qs_hotkey.setEnabled(cfg.quick_switcher_enabled)
-        self.chk_project_grouping.setChecked(bool(cfg.project_grouping_enabled))
+        self.chk_zip_peek.setChecked(bool(cfg.zip_peek_enabled))
         self.chk_hold_3mf.setChecked(cfg.hold_3mf_enabled)
         self.spin_hold_days.setValue(max(1, int(cfg.hold_3mf_days)))
         self.spin_hold_days.setEnabled(cfg.hold_3mf_enabled)
@@ -3826,7 +3772,7 @@ class MainWindow(QMainWindow):
     def _on_install_chrome_host(self) -> None:
         info = install_chrome_native_host(self.service.paths.data_dir)
         self._refresh_chrome_status()
-        msg = f"Chrome Native Messaging host registered ({Path(info['host_target']).name})."
+        msg = f"Chrome extension connected ({Path(info['host_target']).name})."
         self.banner.show_message(msg, kind="success")
         self.lbl_footer.setText(msg)
 
@@ -4022,9 +3968,9 @@ class MainWindow(QMainWindow):
         self._run_service_action(
             lambda report: self.service.sort_managed_tiers_now(on_progress=report),
             lambda res: self.refresh_all(then=lambda: self._after_sort_tiers_now(res)),
-            busy_text="Sorting lower tiers...",
+            busy_text="Tidying files inside folders…",
             pass_progress=True,
-            finish_text="Lower Tiers Organized",
+            finish_text="Files Inside Folders Tidied",
         )
 
     def _after_sort_tiers_now(self, res: dict[str, Any]) -> None:
@@ -4036,13 +3982,13 @@ class MainWindow(QMainWindow):
                 list(range(min(moved_n, self.tbl_activity.rowCount()))),
                 "#30D158",
             )
-            msg = f"Sorted lower tiers: moved {moved_n} file(s) into their target folders."
+            msg = f"Tidied files inside folders: moved {moved_n} file(s) to where they belong."
             self.progress_hud.finish(msg, kind="success")
             self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
             self.lbl_footer.setText(msg)
         else:
-            msg = "Lower tiers are already organized — nothing needed moving."
-            self.progress_hud.finish("Lower tiers are already organized", kind="success")
+            msg = "Files inside folders are already tidy. Nothing needed moving."
+            self.progress_hud.finish("Files inside folders are already tidy", kind="success")
             self.banner.show_message(msg, kind="info")
             self.lbl_footer.setText(msg)
 
@@ -4096,8 +4042,6 @@ class MainWindow(QMainWindow):
             return self.service.undo_architecture_or_last_batch(on_progress=report)
 
         def _done(res: dict[str, Any]) -> None:
-            if hasattr(self, "arch_tab"):
-                self.arch_tab._dirty = False
             self.refresh_all(then=lambda: self._after_undo_last(res))
 
         self._run_service_action(
@@ -4115,7 +4059,7 @@ class MainWindow(QMainWindow):
         if restored or cfg_restored:
             flash_rows(self.tbl_sim, list(range(min(5, self.tbl_sim.rowCount()))), "#0A84FF")
             if cfg_restored and not restored:
-                msg = "Undid last Folder Architecture change and restored your previous rules."
+                msg = "Undid the last folder change and restored your previous rules."
             elif cfg_restored:
                 msg = f"Undid architecture change and restored {restored} shifted file(s)."
             else:
@@ -4256,33 +4200,6 @@ class MainWindow(QMainWindow):
         finally:
             self._in_easter_egg = False
 
-    def _on_architecture_applied(self, summary_msg: str) -> None:
-        self.refresh_all(then=lambda: self._after_architecture_applied(summary_msg))
-
-    def _after_architecture_applied(self, summary_msg: str) -> None:
-        if (
-            "Nothing to undo" in summary_msg
-            or summary_msg.startswith("Auto-created")
-            or summary_msg.startswith("Scanned ")
-            or summary_msg.startswith("Loaded ")
-            or summary_msg.startswith("Restored ")
-            or (summary_msg.startswith("Removed ") and "moved " not in summary_msg)
-        ):
-            self.banner.show_message(summary_msg, kind="info")
-        elif summary_msg.startswith("Undid"):
-            flash_rows(self.tbl_sim, list(range(min(5, self.tbl_sim.rowCount()))), "#0A84FF")
-            self.banner.show_message(summary_msg, kind="info")
-        else:
-            self.header_mascot.celebrate()
-            flash_rows(self.tbl_sim, list(range(min(5, self.tbl_sim.rowCount()))), "#30D158")
-            self.banner.show_message(
-                summary_msg,
-                kind="success",
-                action_text="Undo",
-                action=self._on_undo_last,
-            )
-        self.lbl_footer.setText(summary_msg)
-
     def open_carry_over_dialog(self) -> None:
         dlg = UpgradeCarryOverDialog(self.service, self)
         if dlg.exec() != QDialog.DialogCode.Accepted or dlg.carried_config is None:
@@ -4312,9 +4229,6 @@ class MainWindow(QMainWindow):
             self.lbl_footer.setText(msg)
 
         def _done(res: dict[str, Any]) -> None:
-            if hasattr(self, "arch_tab"):
-                self.arch_tab._dirty = False
-                self.arch_tab.sync_from_service(force=True)
             self.refresh_all(then=lambda: _announce(res))
 
         self._run_service_action(
@@ -4328,7 +4242,7 @@ class MainWindow(QMainWindow):
     def _export_current_setup(self) -> None:
         out_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Export Complete Setup & Folder Architecture",
+            "Export your setup",
             str(Path.home() / "DownloadSorter-Setup-Backup.json"),
             "JSON Files (*.json)",
         )
@@ -4336,7 +4250,7 @@ class MainWindow(QMainWindow):
             return
         try:
             export_setup_file(self.service.config, Path(out_path))
-            msg = f"Exported complete setup & Folder Architecture to {Path(out_path).name}."
+            msg = f"Exported your setup to {Path(out_path).name}."
             self.banner.show_message(msg, kind="success")
             self.lbl_footer.setText(msg)
         except Exception as exc:
@@ -4399,7 +4313,6 @@ class MainWindow(QMainWindow):
         cfg.use_type_subfolders = self.chk_type_subfolders.isChecked()
         cfg.notifications_enabled = self.chk_notifications.isChecked()
         cfg.check_for_updates = self.chk_check_updates.isChecked()
-        cfg.show_advanced_tools = self.chk_show_advanced.isChecked()
         cfg.ribbon_timeout_seconds = float(self.spin_ribbon_timeout.value())
         self._preview_toast_mgr.default_duration_ms = int(cfg.ribbon_timeout_seconds * 1000)
         cfg.quick_switcher_enabled = self.chk_quick_switcher.isChecked()
@@ -4415,7 +4328,7 @@ class MainWindow(QMainWindow):
         else:
             cfg.quick_switcher_hotkey = normalize_hotkey(typed_hotkey, "Ctrl+G")
         self.edit_qs_hotkey.setText(cfg.quick_switcher_hotkey)
-        cfg.project_grouping_enabled = self.chk_project_grouping.isChecked()
+        cfg.zip_peek_enabled = self.chk_zip_peek.isChecked()
         cfg.hold_3mf_enabled = self.chk_hold_3mf.isChecked()
         cfg.hold_3mf_days = int(self.spin_hold_days.value())
         cfg.auto_unzip_all = self.chk_auto_unzip_all.isChecked()
@@ -4669,23 +4582,17 @@ class MainWindow(QMainWindow):
         self.complete_walkthrough()
 
     def open_first_run_setup(self) -> bool:
-        """First launch: go straight into the guided Folder Setup Studio instead of a slideshow.
+        """First launch: open the Folders screen and offer the folders already in Downloads.
 
-        Finishing, skipping or closing all count as the first run being seen, because
-        automatic sorting waits for ``tutorial_completed``. Returns True when a setup was applied.
+        Opening the app counts as the first run being seen, because automatic sorting
+        waits for ``tutorial_completed``. Always returns True.
         """
-        applied = False
-        try:
-            applied = bool(self.open_folder_setup_studio(initial_mode="auto"))
-        finally:
-            self.complete_walkthrough()
-        if not applied and hasattr(self, "banner"):
-            self.banner.show_message(
-                "No changes made. Set up your folders anytime with Folder Setup in Sorting Flow, "
-                "or reopen the Guide from the toolbar.",
-                kind="info",
-            )
-        return applied
+        self.complete_walkthrough()
+        self.tabs.setCurrentWidget(self.folders_tab)
+        self.folders_tab.use_existing_folders(
+            when_none="New downloads are sorted by type. Add your own folders here, or open the Guide."
+        )
+        return True
 
     def _maybe_show_first_run_walkthrough(self) -> None:
         if self._first_run_prompted or os.environ.get("PYTEST_CURRENT_TEST"):
@@ -4820,7 +4727,6 @@ class MainWindow(QMainWindow):
         moves = self.service.db.list_active_moves(limit=150)
         if 0 <= row < len(moves):
             rec = moves[row]
-            self.flow_tab.trace_from_activity(str(rec["filename"]), str(rec.get("source_url") or ""))
             self.folders_tab.trace_from_activity(str(rec["filename"]), str(rec.get("source_url") or ""))
             self.tabs.setCurrentWidget(self.folders_tab)
 
@@ -4835,11 +4741,9 @@ class MainWindow(QMainWindow):
             if p.is_file():
                 from download_sorter.router import read_zone_url
 
-                self.flow_tab.tester_bar.set_test_file(p.name, read_zone_url(p), path=p)
                 self.folders_tab.trace_from_activity(p.name, read_zone_url(p))
                 self.tabs.setCurrentWidget(self.folders_tab)
                 return
-        self.flow_tab.trace_from_activity(item.text(), "")
         self.folders_tab.trace_from_activity(item.text(), "")
         self.tabs.setCurrentWidget(self.folders_tab)
 
@@ -4898,10 +4802,13 @@ class MainWindow(QMainWindow):
             return
         moves = list(getattr(change, "disk_moves", []) or [])
         removals = list(getattr(change, "disk_removals", []) or [])
-        fill = str(getattr(change, "fill_path", "") or "")
+        fills = list(change.all_fill_paths()) if hasattr(change, "all_fill_paths") else []
+        if not fills and getattr(change, "fill_path", ""):
+            fills = [str(change.fill_path)]
+        fill = fills[0] if fills else ""
         root = self.service.watch_root
         if (
-            not fill
+            not fills
             and not any((root / old).is_dir() for old, _new in moves)
             and not any((root / old).is_dir() for old, _t in removals)
         ):
@@ -4924,9 +4831,9 @@ class MainWindow(QMainWindow):
                 moved += int(res.get("moved_count", 0))
                 if res.get("batch_id"):
                     batches.append(str(res["batch_id"]))
-            if fill:
-                res = svc.fill_folder_on_disk(fill, on_progress=report)
-                filled = int(res.get("moved_count", 0))
+            for one in fills:
+                res = svc.fill_folder_on_disk(one, on_progress=report)
+                filled += int(res.get("moved_count", 0))
                 if res.get("batch_id"):
                     batches.append(str(res["batch_id"]))
             return {"batches": batches, "moved": moved, "filled": filled}
@@ -4942,8 +4849,9 @@ class MainWindow(QMainWindow):
                 self._on_folders_notice(f"“{leaf}” is ready in Downloads", None)
             if filled:
                 leaf = fill.replace("/", "\\").split("\\")[-1]
+                where = f"“{leaf}”" if len(fills) == 1 else f"{len(fills)} folders"
                 self._on_folders_notice(
-                    f"Moved {filled} matching file{'s' if filled != 1 else ''} into “{leaf}”",
+                    f"Moved {filled} matching file{'s' if filled != 1 else ''} into {where}",
                     getattr(self.folders_tab, "last_undo", None),
                 )
 
@@ -4981,20 +4889,10 @@ class MainWindow(QMainWindow):
             self._undo_folder_disk_change()
         elif action == "folders:new_advanced_rule" and arg:
             self._open_new_advanced_rule(arg)
-        elif action == "apply_pack" and arg:
-            self._apply_template(arg)
-        elif action == "smart_order":
-            self._sort_rules_by_specificity()
-        elif action == "carry_over":
-            self.open_carry_over_dialog()
         elif action == "accept_suggestion":
             self._accept_rule_suggestion()
         elif action == "dismiss_suggestion":
             self._dismiss_rule_suggestion()
-        elif action == "ai_insights":
-            self.open_ai_insights_dialog()
-        elif action == "detect_projects":
-            self._open_legacy_arch_dialog("detect_projects")
         elif action == "open_full_rule_editor" and arg:
             for idx, r in enumerate(self.service.config.rules):
                 if r.id == arg:
@@ -5004,469 +4902,36 @@ class MainWindow(QMainWindow):
                         cfg.rules[idx] = dlg.build_rule()
                         self._commit_config(cfg)
                     break
-        elif action == "new_folder_for_rule":
-            created = self.open_guided_folder_dialog(default_parent_path=arg)
-            if created:
-                self.flow_tab.apply_new_folder_to_active_rule(created)
-        elif action == "tree_tool:new_folder":
-            parent_hint = ""
-            if self.flow_tab._focused_folder:
-                parent_hint = self.flow_tab._focused_folder.split("\\")[0]
-            self.open_guided_folder_dialog(default_parent_path=parent_hint)
-        elif action == "tree_tool:setup_studio":
-            self.open_folder_setup_studio(initial_mode="auto")
-        elif action == "tree_tool:align_downloads":
-            self._open_align_preview_dialog()
-        elif action == "tree_tool:apply_shift":
-            self._apply_flow_pending_folder_shift()
-        elif action == "flow_notice" and arg:
-            self.banner.show_message(arg, kind="info", timeout_ms=3200)
-            self.lbl_footer.setText(arg)
         elif action == "open_prefs_section":
             self.tabs.setCurrentWidget(self._settings_tab)
             if hasattr(self, "select_preferences_section"):
                 self.select_preferences_section(arg or "sorting")
-        elif action == "tree_tool:scan_folders":
-            self.open_folder_setup_studio(initial_mode="scan")
-        elif action == "tree_tool:sort_lower_tiers":
-            self._on_sort_tiers_now()
-        elif action == "tree_tool:snapshots":
-            self._open_legacy_arch_dialog("snapshots")
-        elif action == "tree_tool:open_canvas":
-            self._open_legacy_arch_dialog("")
-        elif action == "tree_tool:defaults":
-            self.arch_tab.sync_from_service(force=True)
-            self.arch_tab._on_return_to_defaults()
-        elif action == "tree:guided_subfolder":
-            self.open_guided_folder_dialog(default_parent_path=arg)
-        elif action == "tree:edit_folder" and arg:
-            self.open_guided_folder_dialog(folder_path=arg, edit_existing=True)
         elif action == "tree:open_explorer" and arg:
             target = self.service.watch_root / arg.replace("/", "\\").strip("\\")
             if target.exists() and sys.platform == "win32" and hasattr(os, "startfile"):
                 os.startfile(str(target))
-        elif action in ("tree:rename", "tree:merge", "tree:delete") and arg:
-            self._open_legacy_arch_dialog(action, folder_path=arg)
 
-    def _ensure_manual_folders_on_disk(self, rel_paths: list[str]) -> None:
-        """Safely create manual-only directories inside ``service.watch_root`` and refresh disk scan."""
-        from download_sorter.dest import is_under_watch_root, to_relative_dest
+    def create_folder(self, parent_hint: str = "", parent_widget: QWidget | None = None) -> str | None:
+        """Ask for a folder name, add it, and return its path (None when cancelled)."""
+        from download_sorter import folder_designer as fd
+        from download_sorter.ui.folders.folders_tab import NameDialog
 
-        watch_root = self.service.watch_root.resolve()
-        if not watch_root.is_dir():
-            return
-        created_any = False
-        for raw_rel in rel_paths:
-            clean_rel = to_relative_dest(raw_rel, watch_root=watch_root, fallback="")
-            if not clean_rel:
-                continue
-            target_dir = (watch_root / clean_rel).resolve()
-            if target_dir != watch_root and is_under_watch_root(target_dir, watch_root):
-                try:
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                    created_any = True
-                except OSError:
-                    pass
-        if created_any and hasattr(self, "flow_tab"):
-            self.flow_tab._trigger_disk_scan()
-
-    def open_guided_folder_dialog(
-        self,
-        *,
-        default_parent_path: str = "",
-        folder_path: str = "",
-        edit_existing: bool = False,
-        parent_widget: QWidget | None = None,
-    ) -> str | None:
-        """Open GuidedFolderDialog to create or edit a custom folder and optionally align matching loose files."""
-        import uuid
-
-        from download_sorter.architecture import architecture_from_config
-        from download_sorter.ui.flow.folder_builder import GuidedFolderDialog
-
-        base_cfg = copy.deepcopy(self.service.config)
-        arch = architecture_from_config(base_cfg)
-        target_node = None
-        if edit_existing and folder_path:
-            norm_fp = folder_path.replace("/", "\\").strip("\\")
-            for n in arch.nodes:
-                if arch.node_relative_path(n.id).replace("/", "\\").strip("\\").lower() == norm_fp.lower():
-                    target_node = n
-                    break
-            if target_node is None and norm_fp:
-                target_node = arch.ensure_path_chain(norm_fp, is_custom=True)
-
-        dlg = GuidedFolderDialog(
-            arch,
-            config=base_cfg,
-            watch_root=self.service.watch_root,
-            node=target_node,
-            default_parent_path=default_parent_path.replace("/", "\\").strip("\\"),
+        arch = fd.working_architecture(self.service.config)
+        where = parent_hint.split("\\")[-1] if parent_hint else "Downloads"
+        dlg = NameDialog(
+            "New folder",
+            lambda text: fd.check_folder_name(arch, text, parent_hint),
+            hint=f"It goes inside {where}.",
             parent=parent_widget or self,
         )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return None
+        try:
+            change = fd.add_folder(copy.deepcopy(self.service.config), dlg.value(), parent_hint)
+        except fd.DesignerError as exc:
+            self.banner.show_message(str(exc), kind="warning")
+            return None
+        self._commit_config(change.config)
+        self._run_folder_disk_change(change)
+        return change.selected_path or None
 
-        res_data = dlg.result_data()
-        _new_arch, new_cfg, rel_path = dlg.apply_to_architecture(arch, base_cfg)
-        norm_rel = rel_path.replace("/", "\\").strip("\\")
-        if "\\" in norm_rel and hasattr(self, "flow_tab"):
-            self.flow_tab.tree._expanded_parents.add(norm_rel.split("\\", 1)[0])
-
-        prev_cfg = copy.deepcopy(self.service.config)
-        if bool(res_data.get("align_now")):
-            self._apply_guided_folder_with_align(prev_cfg, new_cfg, norm_rel)
-        else:
-            self.service._config_undo_stack.append((f"folder-{uuid.uuid4().hex[:8]}", prev_cfg))
-            self._commit_config(new_cfg)
-            if bool(res_data.get("manual_only")):
-                self._ensure_manual_folders_on_disk([norm_rel])
-            if hasattr(self, "arch_tab"):
-                self.arch_tab._dirty = False
-                self.arch_tab.sync_from_service(force=True)
-            crumb = norm_rel.replace("\\", " › ")
-            msg = f"Saved folder 'Downloads › {crumb}'."
-            self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
-            self.lbl_footer.setText(msg)
-        return norm_rel
-
-    def _apply_guided_folder_with_align(self, prev_cfg: Config, new_cfg: Config, norm_rel: str) -> None:
-        """Persist ``new_cfg`` and move matching loose top-level files into ``norm_rel`` with full Undo."""
-        import uuid
-
-        from download_sorter.fs_ops import execute_move
-
-        batch_id = f"folder-align-{uuid.uuid4().hex[:8]}"
-        self.service._config_undo_stack.append((batch_id, prev_cfg))
-        self.service.update_config(new_cfg)
-        watch_root = self.service.watch_root
-        target_low = norm_rel.lower()
-
-        def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
-            moved: list[dict[str, Any]] = []
-            if not watch_root.is_dir():
-                return {"batch_id": "", "moved": moved}
-            ignored_exts = {".crdownload", ".part", ".tmp", ".download", ".opdownload", ".filepart", ".!qb"}
-            top_files = [
-                p
-                for p in sorted(watch_root.iterdir(), key=lambda x: x.name.lower())
-                if p.is_file() and not p.name.startswith(".") and p.suffix.lower() not in ignored_exts
-            ]
-            matching: list[tuple[Path, Any, str]] = []
-            for fp in top_files:
-                cand = candidate_from_path(fp)
-                dec = evaluate(cand, new_cfg)
-                if dec.action != "move" or dec.relative_dest is None:
-                    continue
-                dest_parent = str(dec.relative_dest.parent).replace("/", "\\").strip("\\").lower()
-                if dest_parent == target_low or dest_parent.startswith(target_low + "\\"):
-                    matching.append((fp, dec, cand.source_url))
-
-            total = len(matching)
-            for idx, (fp, dec, src_url) in enumerate(matching, start=1):
-                report(idx - 1, max(1, total), fp.name)
-                try:
-                    rec = execute_move(
-                        fp,
-                        dec,
-                        batch_id=batch_id,
-                        db=self.service.db,
-                        watch_root=watch_root,
-                        settle_seconds=0.0,
-                        source_url=src_url,
-                    )
-                    if rec is not None:
-                        moved.append(rec)
-                except OSError:
-                    continue
-            if total > 0:
-                report(total, total, "Complete")
-            if moved:
-                self.service.db.checkpoint()
-            return {"batch_id": batch_id if moved else "", "moved": moved}
-
-        def _done(res: dict[str, Any]) -> None:
-            if hasattr(self, "arch_tab"):
-                self.arch_tab._dirty = False
-                self.arch_tab.sync_from_service(force=True)
-            moved_n = len(res.get("moved", []))
-            crumb = norm_rel.replace("\\", " › ")
-            if moved_n:
-                self.header_mascot.celebrate()
-                msg = f"Created 'Downloads › {crumb}' and moved {moved_n} matching file(s)."
-            else:
-                msg = f"Saved folder 'Downloads › {crumb}'."
-            self.refresh_all(
-                then=lambda: self.banner.show_message(
-                    msg,
-                    kind="success",
-                    action_text="Undo",
-                    action=self._on_undo_last,
-                )
-            )
-            self.lbl_footer.setText(msg)
-
-        self._run_service_action(
-            _work,
-            _done,
-            busy_text=f"Aligning matching files into {norm_rel.split(chr(92))[-1]}...",
-            pass_progress=True,
-            finish_text="Folder Saved & Aligned",
-        )
-
-    def open_folder_setup_studio(self, *, initial_mode: str = "auto") -> bool:
-        """Open the 3-step Folder Setup Studio and apply target_config() with optional file shift & Undo."""
-        import uuid
-
-        from download_sorter.ui.flow.setup_studio import FolderSetupStudioDialog
-
-        dlg = FolderSetupStudioDialog(self.service, initial_mode=initial_mode, parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return False
-
-        studio_arch = dlg.target_architecture()
-        manual_rels = [
-            p
-            for p in (
-                studio_arch.node_relative_path(n.id).replace("/", "\\").strip("\\")
-                for n in studio_arch.nodes
-                if getattr(n, "premade_key", "") == "__manual__"
-            )
-            if p
-        ]
-        target_cfg = dlg.target_config()
-        shift_now = bool(dlg.should_shift_files())
-        summary = str(dlg.summary_text() or "").strip()
-        if hasattr(self, "flow_tab"):
-            self.flow_tab.discard_pending_folder_shift()
-
-        if shift_now:
-            def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
-                return self.service.apply_architecture_and_shift(
-                    target_cfg,
-                    shift_files=True,
-                    create_empty_folders=False,
-                    batch_prefix="studio",
-                    on_progress=report,
-                )
-
-            def _announce(res: dict[str, Any]) -> None:
-                shifted = int(res.get("shifted_count", 0))
-                base_msg = summary or "Applied custom folder setup"
-                msg = f"{base_msg} · Organized {shifted} file(s)." if shifted else f"{base_msg}."
-                self.header_mascot.celebrate()
-                self.progress_hud.finish("Folder Setup Complete", detail=msg, kind="success")
-                self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
-                self.lbl_footer.setText(msg)
-
-            def _done(res: dict[str, Any]) -> None:
-                if manual_rels:
-                    self._ensure_manual_folders_on_disk(manual_rels)
-                if hasattr(self, "arch_tab"):
-                    self.arch_tab._dirty = False
-                    self.arch_tab.sync_from_service(force=True)
-                self.refresh_all(then=lambda: _announce(res))
-
-            self._run_service_action(
-                _work,
-                _done,
-                busy_text="Applying folder setup & organizing files...",
-                pass_progress=True,
-                finish_text="Folder Setup Complete",
-            )
-        else:
-            prev_cfg = copy.deepcopy(self.service.config)
-            self.service._config_undo_stack.append((f"studio-{uuid.uuid4().hex[:8]}", prev_cfg))
-            self._commit_config(target_cfg)
-            if manual_rels:
-                self._ensure_manual_folders_on_disk(manual_rels)
-            if hasattr(self, "arch_tab"):
-                self.arch_tab._dirty = False
-                self.arch_tab.sync_from_service(force=True)
-            msg = summary or "Folder setup saved."
-            self.banner.show_message(msg, kind="success", action_text="Undo", action=self._on_undo_last)
-            self.lbl_footer.setText(msg)
-        return True
-
-    def _apply_flow_pending_folder_shift(self) -> None:
-        """Apply pending drag-and-drop folder moves from Sorting Flow with full Undo support."""
-        from download_sorter.fs_ops import move_file_safely
-        import uuid
-
-        target_cfg = self.flow_tab._pending_cfg
-        renames = list(self.flow_tab._pending_folder_renames)
-        if target_cfg is None:
-            self.flow_tab.discard_pending_folder_shift()
-            return
-
-        watch_root = self.service.watch_root
-        batch_id = f"flow-arch-{uuid.uuid4().hex[:8]}"
-
-        def _work(report: Callable[[int, int, str], None]) -> dict[str, Any]:
-            moved_direct = 0
-            for old_rel, new_rel in renames:
-                src_dir = watch_root / old_rel
-                dst_dir = watch_root / new_rel
-                if not src_dir.is_dir():
-                    continue
-                files = [p for p in src_dir.rglob("*") if p.is_file()]
-                total = max(1, len(files))
-                for idx, fp in enumerate(files, start=1):
-                    report(idx, total, fp.name)
-                    rel_tail = fp.relative_to(src_dir)
-                    dest_file = dst_dir / rel_tail
-                    dest_file.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        res = move_file_safely(
-                            fp,
-                            dest_file,
-                            db=self.service.db,
-                            watch_root=watch_root,
-                            reason=f"Moved folder {old_rel} -> {new_rel}",
-                            matched_rule="Sorting Flow Folder Move",
-                            match_type="architecture",
-                            batch_id=batch_id,
-                        )
-                        if res is not None:
-                            moved_direct += 1
-                    except OSError:
-                        continue
-                # Prune empty leftover directories bottom-up
-                for sub in sorted([d for d in src_dir.rglob("*") if d.is_dir()], key=lambda p: len(p.parts), reverse=True):
-                    try:
-                        sub.rmdir()
-                    except OSError:
-                        pass
-                try:
-                    src_dir.rmdir()
-                except OSError:
-                    pass
-
-            shift_res = self.service.apply_architecture_and_shift(
-                target_cfg,
-                shift_files=True,
-                create_empty_folders=False,
-                on_progress=report,
-            )
-            shift_res["moved_direct"] = moved_direct
-            return shift_res
-
-        def _done(res: dict[str, Any]) -> None:
-            self.flow_tab.discard_pending_folder_shift()
-            total_shifted = int(res.get("shifted_count", 0)) + int(res.get("moved_direct", 0))
-            msg = f"Updated folder structure and moved {total_shifted} file(s)."
-            self.refresh_all(
-                then=lambda: self.banner.show_message(
-                    msg,
-                    kind="success",
-                    action_text="Undo",
-                    action=self._on_undo_last,
-                )
-            )
-            self.lbl_footer.setText(msg)
-
-        self._run_service_action(
-            _work,
-            _done,
-            busy_text="Moving folder & updating Sorting Flow...",
-            pass_progress=True,
-            finish_text="Folder Structure Updated",
-        )
-
-    def _open_align_preview_dialog(self) -> None:
-        """Simulate loose root files off the UI thread, show AlignPreviewDialog, and move checked items."""
-        from download_sorter.fs_ops import move_file_safely
-        from download_sorter.ui.flow.align_dialog import AlignPreviewDialog
-        import uuid
-
-        watch_root = self.service.watch_root
-
-        def _on_sim_ready(plan: list[tuple[Path, Any]]) -> None:
-            movable = [(p, d) for p, d in plan if getattr(d, "action", "") == "move" and d.relative_dest is not None]
-            if not movable:
-                self.banner.show_message("Downloads is already aligned with Sorting Flow.", kind="info")
-                self.flow_tab._trigger_disk_scan()
-                return
-            dlg = AlignPreviewDialog(watch_root, movable, parent=self)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                return
-            chosen = dlg.selected_items()
-            if not chosen:
-                return
-
-            batch_id = f"align-{uuid.uuid4().hex[:10]}"
-
-            def _do_align(report) -> dict[str, Any]:
-                moved: list[dict[str, Any]] = []
-                total = len(chosen)
-                for idx, (src_path, dec) in enumerate(chosen, start=1):
-                    report(idx, total, src_path.name)
-                    if not src_path.is_file():
-                        continue
-                    dest = watch_root / dec.relative_dest
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        res = move_file_safely(
-                            src_path,
-                            dest,
-                            db=self.service.db,
-                            reason=dec.reason,
-                            matched_rule=dec.matched_rule,
-                            match_type=dec.match_type,
-                            batch_id=batch_id,
-                        )
-                        if res is not None:
-                            moved.append({"src": str(src_path), "dest": str(res)})
-                    except OSError:
-                        continue
-                return {"moved": moved, "held": 0, "left": max(0, total - len(moved))}
-
-            self._run_service_action(
-                _do_align,
-                lambda res: self.refresh_all(then=lambda: self._after_sort_now(res)),
-                busy_text="Aligning Downloads...",
-                pass_progress=True,
-                finish_text="Downloads Aligned",
-            )
-
-        run_async(
-            self.service.simulate_top_level,
-            _on_sim_ready,
-            lambda err: self.banner.show_message(f"Could not preview Downloads: {err}", kind="warning"),
-            parent=self,
-        )
-
-    def _open_legacy_arch_dialog(self, trigger: str = "", *, folder_path: str = "") -> None:
-        self.arch_tab.sync_from_service(force=True)
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Folder Architecture Canvas")
-        dlg.resize(1120, 740)
-        dlg.setStyleSheet(STYLESHEET)
-        dl = QVBoxLayout(dlg)
-        dl.setContentsMargins(12, 12, 12, 12)
-        dl.addWidget(self.arch_tab, 1)
-        self.arch_tab.setVisible(True)
-        matched_node_id = ""
-        if folder_path:
-            norm_fp = folder_path.replace("/", "\\").strip("\\").lower()
-            for node in self.arch_tab._arch.nodes:
-                if self.arch_tab._arch.node_relative_path(node.id).replace("/", "\\").strip("\\").lower() == norm_fp:
-                    matched_node_id = node.id
-                    self.arch_tab.canvas.select_node(node.id)
-                    break
-        if trigger == "detect_projects":
-            QTimer.singleShot(60, self.arch_tab._on_detect_projects_for_selected)
-        elif trigger == "scan_folders":
-            QTimer.singleShot(60, self.arch_tab._on_scan_folders)
-        elif trigger == "snapshots":
-            QTimer.singleShot(60, self.arch_tab._open_snapshots_dialog)
-        elif trigger == "tree:merge":
-            QTimer.singleShot(60, self.arch_tab._on_merge_selected_clicked)
-        elif trigger == "tree:delete" and matched_node_id:
-            QTimer.singleShot(60, lambda nid=matched_node_id: self.arch_tab._delete_node_by_id(nid, confirm=True))
-        elif trigger == "tree:rename" and matched_node_id:
-            QTimer.singleShot(60, lambda nid=matched_node_id: self.arch_tab._edit_node_by_id(nid))
-        dlg.exec()
-        self.arch_tab.setParent(self)
-        self.arch_tab.setVisible(False)
-        self.refresh_all()

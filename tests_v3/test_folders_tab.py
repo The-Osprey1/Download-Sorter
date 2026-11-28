@@ -34,14 +34,16 @@ def _tree_paths(tab) -> list[str]:  # noqa: ANN001
     return out
 
 
+
+
 def test_folders_is_the_first_tab_and_lists_folders(app_paths: AppPaths, v3_qapp) -> None:  # noqa: ANN001
     win, svc = _window(app_paths, v3_qapp)
     try:
         assert win.tabs.widget(0) is win.folders_tab
         assert win.tabs.tabText(0) == "Folders"
-        paths = _tree_paths(win.folders_tab)
-        assert "Documents" in paths
-        assert win.flow_tab.isHidden()
+        assert "Documents" in _tree_paths(win.folders_tab)
+        # The v3 screens are gone for good.
+        assert not hasattr(win, "flow_tab") and not hasattr(win, "arch_tab")
     finally:
         win.close()
         svc.stop(timeout=1.0)
@@ -218,7 +220,11 @@ def test_sorty_tosses_a_file_card_for_each_file_sorted(app_paths: AppPaths, v3_q
 def test_startup_shows_counts_selects_a_folder_and_hides_repeated_buttons(app_paths: AppPaths, v3_qapp) -> None:  # noqa: ANN001
     from PySide6.QtWidgets import QTreeWidgetItemIterator
 
-    from download_sorter.ui.folders.folders_tab import PAGE_FOLDER, ROLE_COUNT, ROLE_PATH
+    from download_sorter.ui.folders.folders_tab import (
+        PAGE_FOLDER,
+        ROLE_COUNT,
+        ROLE_PATH,
+    )
 
     (app_paths.downloads_dir / "Documents").mkdir()
     (app_paths.downloads_dir / "Documents" / "old.pdf").write_bytes(b"x")
@@ -286,6 +292,76 @@ def test_saved_folder_missing_on_disk_offers_to_move_its_files_in(app_paths: App
         if os.name == "nt":  # off Windows the router's "\\" destinations are literal names
             assert (models / "CNC Files" / "Wolf.nc").exists()
             assert (models / "CNC Files" / "TopClamp.nc").exists()
+    finally:
+        win.close()
+        svc.stop(timeout=1.0)
+
+
+def test_find_projects_adds_a_folder_per_project_and_moves_its_files(app_paths: AppPaths, v3_qapp, monkeypatch) -> None:  # noqa: ANN001
+    import os
+    import time
+
+    from PySide6.QtWidgets import QDialog
+
+    from download_sorter.ui.folders import folders_tab as ft
+
+    win, svc = _window(app_paths, v3_qapp)
+    tab = win.folders_tab
+    models = app_paths.downloads_dir / "3D Models"
+    models.mkdir()
+    old = time.time() - 120
+    for name in ("WolfBracket_top.stl", "WolfBracket_base.stl", "WolfBracket_lid.stl", "random.stl"):
+        (models / name).write_bytes(b"solid x")
+        os.utime(models / name, (old, old))
+    picked: list[list[str]] = []
+    monkeypatch.setattr(ft.PickListDialog, "exec", lambda self: (picked.append(self.chosen()), QDialog.DialogCode.Accepted)[1])
+    try:
+        tab.find_projects("3D Models")
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and (models / "WolfBracket_top.stl").exists():
+            v3_qapp.processEvents()
+            time.sleep(0.02)
+        assert picked and picked[0], "a project was offered"
+        new_path = "3D Models\\" + picked[0][0]
+        assert new_path in [fd.path_of(a, n) for a in [fd.working_architecture(svc.config)] for n in a.nodes]
+        assert not (models / "WolfBracket_top.stl").exists()
+        assert (models / "random.stl").exists()
+    finally:
+        win.close()
+        svc.stop(timeout=1.0)
+
+
+def test_use_existing_folders_adds_the_ticked_folders_without_moving_files(app_paths: AppPaths, v3_qapp, monkeypatch) -> None:  # noqa: ANN001
+    import time
+
+    from PySide6.QtWidgets import QDialog
+
+    from download_sorter.ui.folders import folders_tab as ft
+
+    (app_paths.downloads_dir / "School" / "Math").mkdir(parents=True)
+    (app_paths.downloads_dir / "School" / "Math" / "hw1.pdf").write_bytes(b"x")
+    (app_paths.downloads_dir / "_dupes").mkdir()
+    win, svc = _window(app_paths, v3_qapp)
+    tab = win.folders_tab
+    offered: list[list[str]] = []
+
+    def _exec(self) -> int:  # noqa: ANN001
+        offered.append(self.chosen())
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ft.PickListDialog, "exec", _exec)
+    try:
+        tab.use_existing_folders()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not offered:
+            v3_qapp.processEvents()
+            time.sleep(0.02)
+        v3_qapp.processEvents()
+        assert offered and "School" in offered[0] and "School\\Math" in offered[0]
+        assert not any("_dupes" in p for p in offered[0])
+        paths = [fd.path_of(a, n) for a in [fd.working_architecture(svc.config)] for n in a.nodes]
+        assert "School" in paths and "School\\Math" in paths
+        assert (app_paths.downloads_dir / "School" / "Math" / "hw1.pdf").exists()
     finally:
         win.close()
         svc.stop(timeout=1.0)

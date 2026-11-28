@@ -102,17 +102,6 @@ def test_header_buttons_fold_to_icons_sooner_with_bigger_text(service_instance, 
     big.close()
 
 
-def test_folder_template_filter_pills_are_scaled_once(v3_qapp) -> None:
-    from download_sorter.ui.architecture_canvas import TemplateShelfWidget
-
-    text_scale.install_text_scaling(1.5)
-    shelf = TemplateShelfWidget()
-    pill = shelf._filter_btns["all"]
-    # The pill's 11.5px at 150% is 17px; reading the style back and setting it
-    # again scaled it a second time, to 26px.
-    assert "font-size: 17px" in pill.styleSheet()
-    assert "font-size: 26px" not in pill.styleSheet()
-    shelf.close()
 
 
 def test_table_columns_and_rows_grow_with_the_text(service_instance, v3_qapp) -> None:

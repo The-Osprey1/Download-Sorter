@@ -90,7 +90,7 @@ CHROME_GUIDE_STEPS: tuple[ChromeGuideStep, ...] = (
             "sorted subfolders while keeping Chrome's download bubble draggable."
         ),
         image_name="step4_connected.png",
-        footnote=f"Extension ID: {CHROME_EXTENSION_ID} · Native Messaging Host stays synced automatically.",
+        footnote=f"Extension ID: {CHROME_EXTENSION_ID} · The connection updates itself.",
     ),
 )
 

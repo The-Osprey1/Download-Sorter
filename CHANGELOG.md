@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0-beta.3] - 2026-11-28
+
+Phase 1 of the v4.0 launch plan: no click lands in an old v3 screen any more, and each feature has one plain name.
+
+### Added
+- **Find projects inside (`ui/folders/folders_tab.py`).** A folder's ⋯ menu and its page look for groups of files that belong together (for example several `WolfBracket_*.stl` files) and offer a folder for each. The ticked projects get their own folder and their files move in, as one Undo.
+- **Use my existing folders, on the Folders screen.** Lists the folders already in Downloads (project and bundle folders, and names starting with `_` or `.`, are left out), and adds the ticked ones. Nothing moves.
+- **Sort .zip files by what is inside** is now a switch in Settings › Sorting (it was a hidden setting).
+- A test fails the build if an old feature name comes back in text people see (`tests_v3/test_plain_words.py`).
+
+### Changed
+- **First run opens the Folders screen** and offers the folders already in Downloads, instead of the Folder Setup dialog.
+- **One name per feature.** "Clean Up Now" is now **Tidy**, "Detox" is **Old Files**, "Custom Rules" is **Rules**, and the words Sorting Flow, Folder Architecture, Tier, Align and Shift Files are gone from the app. Jargon such as "Naive Bayes & TF-IDF" and "Native Messaging Host" is replaced with plain words.
+- **Tidy Files Inside Folders is always in Settings.** The "Show Advanced Tools" switch only hid that one button, so it is gone.
+- A folder change can now create and fill several folders in one step (`folder_designer.Change.fill_paths`).
+
+### Removed
+- The hidden Sorting Flow screen (`ui/flow/`), the Folder Architecture canvas (`ui/architecture_canvas.py`) and the dialogs only they used: Guided Folder, Folder Setup Studio and Align Preview. About 16,000 lines of app code. Downloads is now scanned once per refresh instead of three times.
+- The "Group multi-file downloads" switch, which changed nothing outside the hidden screen. Use **Find projects inside** instead.
+- Shared helpers moved out of the removed screens into `rule_text.py` (token cleanup and plain-English rule text) and `architecture.scan_existing_folders`.
+
 ## [4.0.0-beta.2] - 2026-11-27
 
 A simpler, single-screen way to design your folders, built from feedback that 4.0.0-beta.1 had too many overlapping panels and too much jargon.
