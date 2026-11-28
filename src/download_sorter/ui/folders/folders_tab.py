@@ -216,6 +216,20 @@ def _clear_layout(layout: QLayout) -> None:
             _clear_layout(item.layout())
 
 
+def _short_type_label(names: list[str], extra: list[str]) -> str:
+    """A short pill label: whole type names first, then a count, never a wall of endings."""
+    if not names and not extra:
+        return "any kind of file"
+    if names:
+        shown = names[:2]
+        rest = len(names) - len(shown) + len(extra)
+    else:
+        shown = extra[:3]
+        rest = len(extra) - len(shown)
+    label = " & ".join(shown) if names else " ".join(shown)
+    return f"{label} + {rest} more" if rest else label
+
+
 def _elide(text: str, limit: int = 30) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
@@ -863,14 +877,20 @@ class _FolderPage(QWidget):
             self.sentence_note.setText("Nothing is moved here on its own. Drag files in, or pick what should land here.")
             return
         names, extra = fd.type_names_for(cues.extensions)
-        type_text = " & ".join(names + extra) if (names or extra) else "any kind of file"
+        type_text = _short_type_label(names, extra)
+        type_full = " & ".join(names + extra) if (names or extra) else ""
         name_text = (
             "named " + " or ".join(f"“{k}”" for k in cues.keywords) if cues.keywords else "with any name"
         )
         from_text = "from " + " or ".join(cues.domains) if cues.domains else "from anywhere"
         self.sentence.addWidget(self._word("Put"))
         self.sentence.addWidget(
-            self._token(type_text, "Choose which kinds of files go here", self._types_menu, empty=not cues.extensions)
+            self._token(
+                type_text,
+                f"{type_full}\n\nChoose which kinds of files go here" if type_full != type_text else "Choose which kinds of files go here",
+                self._types_menu,
+                empty=not cues.extensions,
+            )
         )
         self.sentence.addWidget(
             self._token(name_text, "Only files with these words in the name", self._words_menu, empty=not cues.keywords)
@@ -887,7 +907,7 @@ class _FolderPage(QWidget):
         elif cues.keywords and cues.domains:
             self.sentence_note.setText("A file lands here when its name or its website matches.")
         else:
-            self.sentence_note.setText("Click a blue part to change it.")
+            self.sentence_note.setText("Click any pill to change it.")
 
     def _cues(self) -> fd.FolderCues:
         return fd.folder_cues(self.tab.config(), self.path)
@@ -1582,6 +1602,7 @@ class FoldersTab(QWidget):
 
         self._scan_ready.connect(self._on_scan_ready)
         self.refresh()
+        self._select_first_folder()
         QTimer.singleShot(40, self.scan_disk)
 
     # ------------------------------------------------------------------
@@ -1742,12 +1763,25 @@ class FoldersTab(QWidget):
         self._dupes = list(state.get("dupes", []))
         self._waiting = list(state.get("waiting", []))
         self._decisions_for = -1
+        self._refresh_tree_counts()
         self._refresh_handled_rows()
         self._refresh_tray()
         self._refresh_page()
         if self._scan_again:
             self._scan_again = False
             QTimer.singleShot(0, self.scan_disk)
+
+    def _refresh_tree_counts(self) -> None:
+        """Put the scanned file counts on the folder rows without rebuilding the tree."""
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value() is not None:
+            item = it.value()
+            path = str(item.data(0, ROLE_PATH) or "")
+            n = self.files_inside(path)
+            if int(item.data(0, ROLE_COUNT) or 0) != n:
+                item.setData(0, ROLE_COUNT, n)
+            it += 1
+        self.tree.viewport().update()
 
     def reload_handled(self) -> None:
         self.scan_disk()
@@ -1828,7 +1862,6 @@ class FoldersTab(QWidget):
             if item.isExpanded():
                 expanded.add(str(item.data(0, ROLE_PATH)).lower())
             it += 1
-        first_build = self.tree.topLevelItemCount() == 0
         self.tree.blockSignals(True)
         self.tree.clear()
         by_id: dict[str, QTreeWidgetItem] = {}
@@ -1863,7 +1896,8 @@ class FoldersTab(QWidget):
         while it.value() is not None:
             item = it.value()
             path = str(item.data(0, ROLE_PATH)).lower()
-            if first_build or path in expanded or self._selected.lower().startswith(path + "\\"):
+            # Start collapsed so the list stays short; open the way to the selected folder.
+            if path in expanded or self._selected.lower().startswith(path + "\\"):
                 item.setExpanded(True)
             it += 1
         if selected_item is not None and self._page == PAGE_FOLDER:
@@ -1917,6 +1951,15 @@ class FoldersTab(QWidget):
         self._page = PAGE_FOLDER
         self._rebuild_tree()
         self.show_page(PAGE_FOLDER if self._page == PAGE_FOLDER else PAGE_EMPTY)
+
+    def _select_first_folder(self) -> None:
+        """Open on the first folder, so the right side is never a blank page."""
+        if self._page != PAGE_EMPTY or self.tree.topLevelItemCount() == 0:
+            return
+        first = self.tree.topLevelItem(0)
+        path = str(first.data(0, ROLE_PATH) or "") if first is not None else ""
+        if path:
+            self.select_path(path)
 
     def selected_path(self) -> str:
         return self._selected if self._page == PAGE_FOLDER else ""

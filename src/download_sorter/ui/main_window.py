@@ -2084,6 +2084,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._home_tab, make_vector_icon("home", "#8E8E93", 15), "Activity")
         self.tabs.addTab(self._settings_tab, make_vector_icon("settings", "#8E8E93", 15), "Settings")
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self._sync_header_for_tab()  # the header is built before the tabs; sync it now too
         root_layout.addWidget(self.tabs, 1)
 
         footer_row = QHBoxLayout()
@@ -2185,6 +2186,7 @@ class MainWindow(QMainWindow):
         )
         self.btn_file_held.setToolTip("Immediately move held .3mf slicer project files into their 3D Printing folders")
         self.btn_file_held.clicked.connect(self._on_file_held_now)
+        self.btn_file_held.setVisible(False)  # Folders › Waiting has "File them now"
         row.addWidget(self.btn_file_held)
 
         div_left = QFrame()
@@ -2622,7 +2624,7 @@ class MainWindow(QMainWindow):
         sb_layout.setContentsMargins(8, 10, 8, 10)
         sb_layout.setSpacing(4)
 
-        lbl_nav = QLabel("PREFERENCES")
+        lbl_nav = QLabel("SETTINGS")
         lbl_nav.setStyleSheet(
             "color: #636366; font-size: 10.5px; font-weight: 700; letter-spacing: 0.6px; padding: 2px 8px 6px 8px;"
         )
