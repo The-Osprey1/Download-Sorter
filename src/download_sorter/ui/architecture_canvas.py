@@ -339,8 +339,17 @@ class CustomFolderNodeDialog(QDialog):
         self._selected_tier = max(1, min(arch.tier_count, node.tier if node else default_tier))
         self._selected_kind = node.kind if node else "doc"
         self._preferred_parent_id = node.parent_id if node else default_parent_id
+        self.setObjectName("CustomFolderNodeDialog")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        from download_sorter.ui.accessibility import name_controls_for_screen_readers
+        from download_sorter.ui.theme import STYLESHEET
+
+        self.setStyleSheet(
+            STYLESHEET
+            + "\nQDialog#CustomFolderNodeDialog { background-color: #111113; color: #F5F5F7; }"
+        )
         self.setWindowTitle("Edit Folder & Rules" if node else "New Custom Folder & Rules")
-        self.setMinimumWidth(540)
+        self.setMinimumWidth(560)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -352,6 +361,7 @@ class CustomFolderNodeDialog(QDialog):
 
         self.edit_name = QLineEdit(node.name if node else "")
         self.edit_name.setPlaceholderText("e.g. Lab Reports, Invoices, Guitar Tabs")
+        self.edit_name.setToolTip("Folder name inside Downloads")
 
         # Clickable Tier Pill Selector
         tier_wrap = QWidget()
@@ -360,7 +370,11 @@ class CustomFolderNodeDialog(QDialog):
         tier_row.setSpacing(6)
         self._tier_btns: dict[int, QPushButton] = {}
         for t in range(1, arch.tier_count + 1):
-            btn = _make_pill_button(f"Tier {t}", checkable=True)
+            btn = _make_pill_button(
+                f"Tier {t}",
+                checkable=True,
+                tooltip=("Top-level folder in Downloads" if t == 1 else f"Nested level {t} subfolder"),
+            )
             btn.clicked.connect(lambda _chk, tier=t: self._select_tier(tier))
             self._tier_btns[t] = btn
             tier_row.addWidget(btn)
@@ -369,7 +383,8 @@ class CustomFolderNodeDialog(QDialog):
         # Clickable Parent Folder List
         self.list_parents = QListWidget()
         self.list_parents.setMaximumHeight(92)
-        self.list_parents.currentRowChanged.connect(lambda _row: self._refresh_suggestions())
+        self.list_parents.setToolTip("Select the parent folder for this subfolder")
+        self.list_parents.currentRowChanged.connect(lambda _row: self._on_parent_row_changed())
 
         # Tier 2 Suggested Subfolders Picker (By File Type vs. By Classification, zero QComboBox)
         self._sugg_mode = "all"
@@ -389,6 +404,7 @@ class CustomFolderNodeDialog(QDialog):
             mb = _make_pill_button(
                 mlabel,
                 checkable=True,
+                tooltip=f"Filter suggested folders ({mlabel})",
                 extra_css="QPushButton#ArchPillBtn { padding: 2px 8px; font-size: 10.5px; }",
             )
             mb.clicked.connect(lambda _chk, m=mkey: self._set_suggestion_mode(m))
@@ -417,6 +433,7 @@ class CustomFolderNodeDialog(QDialog):
             col_hex = KIND_COLORS.get(k_key, KIND_COLORS["default"])
             btn = QPushButton(label)
             btn.setCheckable(True)
+            btn.setToolTip(f"Set category accent to {label}")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(
                 f"""
@@ -445,19 +462,21 @@ class CustomFolderNodeDialog(QDialog):
             kind_grid.addWidget(btn, idx // 4, idx % 4)
 
         self.edit_exts = QLineEdit(", ".join(node.extensions) if node else "")
-        self.edit_exts.setPlaceholderText("e.g. .pdf, .docx, .zip (leave blank for any file type)")
+        self.edit_exts.setPlaceholderText("e.g. .pdf, .docx, .zip (dots added automatically)")
         self.edit_exts.setToolTip("Comma-separated file extensions that belong in this folder (e.g. .pdf, .docx)")
+        self.edit_exts.editingFinished.connect(self._normalize_exts_field)
 
         self.edit_keywords = QLineEdit(", ".join(node.keywords) if node else "")
         self.edit_keywords.setPlaceholderText("e.g. syllabus, lab_report, invoice (optional)")
         self.edit_keywords.setToolTip("Comma-separated filename keywords to match (e.g. invoice, syllabus)")
 
         self.edit_domains = QLineEdit(", ".join(node.domains) if node else "")
-        self.edit_domains.setPlaceholderText("e.g. canvas.edu, makerworld.com (optional)")
-        self.edit_domains.setToolTip("Comma-separated source website domains extracted from Windows Zone.Identifier")
+        self.edit_domains.setPlaceholderText("Paste URLs or domains (e.g. https://stripe.com/pay → stripe.com)")
+        self.edit_domains.setToolTip("Comma-separated source website domains or full URLs (auto-normalized)")
+        self.edit_domains.editingFinished.connect(self._normalize_domains_field)
 
         form.addRow("Folder Name:", self.edit_name)
-        form.addRow("Layer / Tier:", tier_wrap)
+        form.addRow("Location Level:", tier_wrap)
         form.addRow("Parent Folder:", self.list_parents)
         form.addRow(self._sugg_label, self._sugg_wrap)
         form.addRow("Category Color:", kind_wrap)
@@ -465,6 +484,24 @@ class CustomFolderNodeDialog(QDialog):
         form.addRow("Filename Keywords:", self.edit_keywords)
         form.addRow("Website Domains:", self.edit_domains)
         layout.addLayout(form)
+
+        # Live Plain-English Routing Summary & Completeness Guidance Card
+        self.summary_card = QFrame(self)
+        self.summary_card.setStyleSheet(
+            "QFrame { background-color: #161618; border: 1px solid #2C2C2E; border-radius: 10px; }"
+        )
+        sum_lay = QVBoxLayout(self.summary_card)
+        sum_lay.setContentsMargins(12, 9, 12, 9)
+        sum_lay.setSpacing(4)
+        self.lbl_plain_summary = QLabel("", self.summary_card)
+        self.lbl_plain_summary.setWordWrap(True)
+        self.lbl_plain_summary.setStyleSheet("border: none; color: #F5F5F7; font-size: 12px; font-weight: 600;")
+        self.lbl_completeness_guidance = QLabel("", self.summary_card)
+        self.lbl_completeness_guidance.setWordWrap(True)
+        self.lbl_completeness_guidance.setStyleSheet("border: none; color: #FFB340; font-size: 11.5px;")
+        sum_lay.addWidget(self.lbl_plain_summary)
+        sum_lay.addWidget(self.lbl_completeness_guidance)
+        layout.addWidget(self.summary_card)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -480,9 +517,81 @@ class CustomFolderNodeDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+        for field in (self.edit_name, self.edit_exts, self.edit_keywords, self.edit_domains):
+            field.textChanged.connect(lambda _t: self._refresh_routing_summary())
+
         self._select_kind(self._selected_kind)
         self._set_suggestion_mode("all")
         self._select_tier(self._selected_tier)
+        self._refresh_routing_summary()
+        name_controls_for_screen_readers(self)
+
+    def _on_parent_row_changed(self) -> None:
+        self._refresh_suggestions()
+        self._refresh_routing_summary()
+
+    def _normalize_exts_field(self) -> None:
+        from download_sorter.ui.flow.folder_builder import normalize_ext_tokens
+
+        norm = normalize_ext_tokens(self.edit_exts.text())
+        joined = ", ".join(norm)
+        if self.edit_exts.text() != joined:
+            self.edit_exts.setText(joined)
+
+    def _normalize_domains_field(self) -> None:
+        from download_sorter.ui.flow.folder_builder import normalize_domain_tokens
+
+        norm = normalize_domain_tokens(self.edit_domains.text())
+        joined = ", ".join(norm)
+        if self.edit_domains.text() != joined:
+            self.edit_domains.setText(joined)
+
+    def plain_english_summary(self) -> str:
+        """Return the live plain-English routing summary shown on the dialog card."""
+        return self.lbl_plain_summary.text()
+
+    def _refresh_routing_summary(self) -> None:
+        from download_sorter.ui.flow.folder_builder import (
+            build_plain_english_summary,
+            normalize_domain_tokens,
+            normalize_ext_tokens,
+            normalize_keyword_tokens,
+        )
+
+        raw_name = self.edit_name.text().strip().replace("/", "").replace("\\", "") or "Your Folder"
+        cur_parent = self.list_parents.currentItem()
+        parent_id = (
+            str(cur_parent.data(Qt.ItemDataRole.UserRole))
+            if (self._selected_tier > 1 and cur_parent and cur_parent.data(Qt.ItemDataRole.UserRole))
+            else None
+        )
+        parent_rel = self.arch.node_relative_path(parent_id) if parent_id else ""
+        rel_path = f"{parent_rel}\\{raw_name}" if parent_rel else raw_name
+
+        exts = normalize_ext_tokens(self.edit_exts.text())
+        kws = normalize_keyword_tokens(self.edit_keywords.text())
+        doms = normalize_domain_tokens(self.edit_domains.text())
+        has_cues = bool(exts or kws or doms)
+
+        self.lbl_plain_summary.setText(
+            build_plain_english_summary(
+                rel_path=rel_path,
+                extensions=exts,
+                keywords=kws,
+                domains=doms,
+            )
+        )
+        if has_cues:
+            self.lbl_completeness_guidance.setText(
+                "● Ready — Download Sorter has clear rules to route matching files into this folder."
+            )
+            self.lbl_completeness_guidance.setStyleSheet("border: none; color: #30D158; font-size: 11.5px;")
+        else:
+            self.lbl_completeness_guidance.setText(
+                "Tip: Add at least one file extension, filename keyword, or website above so Download Sorter "
+                "can sort files here automatically (or leave blank for a manual-only folder)."
+            )
+            self.lbl_completeness_guidance.setStyleSheet("border: none; color: #FFB340; font-size: 11.5px;")
 
     def _set_suggestion_mode(self, mode: str) -> None:
         self._sugg_mode = mode
@@ -537,6 +646,7 @@ class CustomFolderNodeDialog(QDialog):
         kind_val = str(s.get("kind", "") or "")
         if kind_val in self._kind_btns:
             self._select_kind(kind_val)
+        self._refresh_routing_summary()
 
     def _select_kind(self, kind_key: str) -> None:
         self._selected_kind = kind_key
@@ -549,6 +659,7 @@ class CustomFolderNodeDialog(QDialog):
             btn.setChecked(t == self._selected_tier)
         self._populate_parents(self._preferred_parent_id)
         self._refresh_suggestions()
+        self._refresh_routing_summary()
 
     def _populate_parents(self, preferred_id: str | None) -> None:
         tier = self._selected_tier
@@ -577,6 +688,8 @@ class CustomFolderNodeDialog(QDialog):
             self.list_parents.setCurrentRow(selected_row)
 
     def _on_save(self) -> None:
+        self._normalize_exts_field()
+        self._normalize_domains_field()
         name = self.edit_name.text().strip().replace("/", "").replace("\\", "")
         if not name:
             QMessageBox.warning(self, "Missing Name", "Please enter a folder name.")
@@ -591,7 +704,12 @@ class CustomFolderNodeDialog(QDialog):
         self.accept()
 
     def values(self) -> dict[str, Any]:
-        split = lambda s: [x.strip() for x in s.split(",") if x.strip()]
+        from download_sorter.ui.flow.folder_builder import (
+            normalize_domain_tokens,
+            normalize_ext_tokens,
+            normalize_keyword_tokens,
+        )
+
         cur_parent = self.list_parents.currentItem()
         parent_id = (
             str(cur_parent.data(Qt.ItemDataRole.UserRole))
@@ -603,9 +721,9 @@ class CustomFolderNodeDialog(QDialog):
             "tier": self._selected_tier,
             "parent_id": parent_id,
             "kind": self._selected_kind or "default",
-            "extensions": split(self.edit_exts.text()),
-            "keywords": split(self.edit_keywords.text()),
-            "domains": split(self.edit_domains.text()),
+            "extensions": normalize_ext_tokens(self.edit_exts.text()),
+            "keywords": normalize_keyword_tokens(self.edit_keywords.text()),
+            "domains": normalize_domain_tokens(self.edit_domains.text()),
         }
 
 

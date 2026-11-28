@@ -55,7 +55,7 @@ def test_browser_copy_suffix_and_counterpart_quarantine(app_paths: AppPaths, mon
     assert len(res["moved"]) == 1
     rec = res["moved"][0]
     assert rec["is_duplicate"] is True
-    assert "_Duplicates" in Path(rec["dest_path"]).parts
+    assert "Duplicates" in Path(rec["dest_path"]).parts
     assert Path(rec["existing_path"]).resolve() == dest_pdf.resolve()
 
 
@@ -69,7 +69,7 @@ def test_duplicate_actions_replace_delete_locate_and_keep_both(
     old_doc.parent.mkdir(parents=True, exist_ok=True)
     old_doc.write_bytes(b"old-content-v1")
 
-    dup_dir = dl / "_Duplicates" / "2026-11"
+    dup_dir = dl / "Duplicates" / "2026-11"
     dup_dir.mkdir(parents=True, exist_ok=True)
     new_dup = dup_dir / "manual (1).pdf"
     new_dup.write_bytes(b"new-content-v2")
@@ -85,7 +85,7 @@ def test_duplicate_actions_replace_delete_locate_and_keep_both(
     assert rep["ok"] is True
     assert old_doc.read_bytes() == b"new-content-v2"
     assert not new_dup.exists()
-    assert not (dl / "_Duplicates").exists()
+    assert not (dl / "Duplicates").exists()
 
     # Action B: Delete New & Locate Old
     dup2 = dup_dir / "manual (2).pdf"
@@ -124,7 +124,7 @@ def test_duplicate_toast_and_dialog_ui_actions(
         on_keep_both=lambda d, o: calls.append(("keep_both", d, o)),
     )
     old_file = app_paths.downloads_dir / "Documents" / "PDF" / "spec.pdf"
-    dup_file = app_paths.downloads_dir / "_Duplicates" / "2026-11" / "spec (1).pdf"
+    dup_file = app_paths.downloads_dir / "Duplicates" / "2026-11" / "spec (1).pdf"
     old_file.parent.mkdir(parents=True, exist_ok=True)
     dup_file.parent.mkdir(parents=True, exist_ok=True)
     old_file.write_bytes(b"v1")

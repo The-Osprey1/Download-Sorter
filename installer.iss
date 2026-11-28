@@ -2,7 +2,7 @@
 ; Local-first automated file organizer for Windows
 
 #define MyAppName "Download Sorter"
-#define MyAppVersion "3.6.1"
+#define MyAppVersion "4.0.0-beta.2"
 #define MyAppPublisher "Devyn Fidel"
 #define MyAppURL "https://github.com/The-Osprey1/Download-Sorter"
 #define MyAppExeName "DownloadSorter.exe"
@@ -25,9 +25,14 @@ SetupIconFile=DownloadSorter.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+DisableWelcomePage=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+WelcomeLabel2=This installs [name/ver] for you only. No administrator password is needed.%n%nIt keeps your Downloads folder tidy on its own. New downloads go to the right folder, you design your folders on one screen, and every move can be undone. Nothing is ever deleted, and everything stays on this PC.
+FinishedLabel=[name] is installed. When it opens, Sorty shows you around in three short steps. Then open the Folders screen and press + to make your first folder.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"

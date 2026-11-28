@@ -348,9 +348,11 @@ def test_architecture_tab_zero_button_clipping_at_900x560(v3_qapp, app_paths: Ap
             for _ in range(3):
                 win.resize(w, h)
                 QApplication.processEvents()
-            win.tabs.setCurrentWidget(win.arch_tab)
+            win.arch_tab.setGeometry(0, 0, w, h)
+            win.arch_tab.show()
             for _ in range(3):
                 win.resize(w, h)
+                win.arch_tab.setGeometry(0, 0, w, h)
                 QApplication.processEvents()
             assert (win.width(), win.height()) == (w, h)
             for preset in ("standard", "maker_pro", "flat"):

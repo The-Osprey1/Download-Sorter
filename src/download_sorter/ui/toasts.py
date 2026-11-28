@@ -1,4 +1,4 @@
-"""Top-right animated Side Ribbon notifications for Download Sorter v3."""
+"""Top-right animated Side Ribbon notifications for Download Sorter."""
 
 from __future__ import annotations
 
@@ -433,11 +433,29 @@ class ToastNotification(QFrame):
         eyebrow_row.setSpacing(6)
 
         eyebrow_prefix = "DUPLICATE" if self.is_duplicate else "SORTED"
-        self.eyebrow_lbl = QLabel(f"● {eyebrow_prefix} · {badge_label.upper()}")
+        # CAD and 3D print files are usually inserted into another app next: say it is ready.
+        self.ready_to_insert = (not self.is_duplicate) and kind in ("cad", "cnc", "print")
+        eyebrow = f"● {eyebrow_prefix} · {badge_label.upper()}"
+        if self.ready_to_insert:
+            eyebrow += " · READY TO INSERT"
+        self.eyebrow_lbl = QLabel(eyebrow)
+        if self.ready_to_insert:
+            self.eyebrow_lbl.setToolTip(
+                "Open a file dialog in Fusion, your slicer or any app, and this file is offered next to it."
+            )
         self.eyebrow_lbl.setStyleSheet(
             f"color: {accent_hex}; font-size: 10px; font-weight: 700; "
             "letter-spacing: 0.6px; background: transparent;"
         )
+        from download_sorter.ui.motion import SortyMascotWidget
+
+        # A tiny Sorty cheers each sort, the same character as in the main window.
+        self.sorty = SortyMascotWidget(size=18, parent=self)
+        self.sorty.setToolTip("Sorty filed this for you")
+        self.sorty.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        if self.is_duplicate:
+            self.sorty.set_pose("safe")
+        eyebrow_row.addWidget(self.sorty, 0, Qt.AlignmentFlag.AlignVCenter)
         eyebrow_row.addWidget(self.eyebrow_lbl, 1)
 
         self.close_btn = QPushButton("✕")
@@ -473,7 +491,7 @@ class ToastNotification(QFrame):
         self.subtitle_lbl.setText(fm_sub.elidedText(subtitle, Qt.TextElideMode.ElideRight, sub_max_w))
         self.subtitle_lbl.setToolTip(subtitle)
 
-        self.open_btn = QPushButton("Jump to File ›")
+        self.open_btn = QPushButton("Show in Folder ›")
         self.open_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.open_btn.setToolTip("Open destination folder in File Explorer")
@@ -587,19 +605,30 @@ class ToastNotification(QFrame):
         target = self._anchor_top_right(self._slot)
         start = QPoint(target.x() + 140, target.y())
         self.move(start)
-        self.setWindowOpacity(1.0)
+        self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
 
         self.art_widget.start_entrance()
+        if not self.is_duplicate:
+            self.sorty.celebrate(1800)
 
         group = QParallelAnimationGroup(self)
         pos_anim = QPropertyAnimation(self, b"pos", group)
-        pos_anim.setDuration(220)
+        pos_anim.setDuration(380)
         pos_anim.setStartValue(start)
         pos_anim.setEndValue(target)
-        pos_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        # A soft spring, like the sheets on the Folders screen.
+        curve = QEasingCurve(QEasingCurve.Type.OutBack)
+        curve.setOvershoot(1.1)
+        pos_anim.setEasingCurve(curve)
         group.addAnimation(pos_anim)
+        fade = QPropertyAnimation(self, b"windowOpacity", group)
+        fade.setDuration(200)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        group.addAnimation(fade)
         self._slide_group = group
         group.start()
 

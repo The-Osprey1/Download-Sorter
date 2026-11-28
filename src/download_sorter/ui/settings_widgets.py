@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from PySide6.QtCore import (
+    QAbstractAnimation,
     QEasingCurve,
     QPoint,
     QRectF,
@@ -31,18 +32,30 @@ from download_sorter.ui.theme import PALETTE, set_widget_prop
 class MacToggle(QCheckBox):
     """Drop-in QCheckBox rendered as a macOS Dark Mode toggle switch."""
 
-    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+    def __init__(self, text: str = "", parent: QWidget | None = None, *, quiet: bool = False) -> None:
         super().__init__(text, parent)
+        self._quiet = quiet
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(38, 22)
+        self.setFixedSize(30, 18) if quiet else self.setFixedSize(38, 22)
         self._thumb_pos: float = 1.0 if self.isChecked() else 0.0
         self.toggled.connect(self._animate_thumb)
 
     def sizeHint(self) -> QSize:
-        return QSize(38, 22)
+        return QSize(30, 18) if self._quiet else QSize(38, 22)
 
     def hitButton(self, pos: QPoint) -> bool:
         return self.rect().contains(pos)
+
+    def checkStateSet(self) -> None:  # noqa: N802
+        super().checkStateSet()
+        if self.signalsBlocked() or not animations_enabled():
+            if prev := getattr(self, "_motion_mac_toggle", None):
+                try:
+                    prev.stop()
+                except RuntimeError:
+                    pass
+            self._thumb_pos = 1.0 if self.isChecked() else 0.0
+            self.update()
 
     def _animate_thumb(self, checked: bool) -> None:
         target = 1.0 if checked else 0.0
@@ -54,8 +67,8 @@ class MacToggle(QCheckBox):
         anim = QVariantAnimation(self)
         anim.setStartValue(self._thumb_pos)
         anim.setEndValue(target)
-        anim.setDuration(200)
-        anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        anim.setDuration(160)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.valueChanged.connect(self._set_thumb_pos)
         _keep(self, "_motion_mac_toggle", anim)
         anim.start()
@@ -65,14 +78,22 @@ class MacToggle(QCheckBox):
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:
+        anim = getattr(self, "_motion_mac_toggle", None)
+        if anim is None or anim.state() != QAbstractAnimation.State.Running:
+            self._thumb_pos = 1.0 if self.isChecked() else 0.0
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = QRectF(1, 1, self.width() - 2, self.height() - 2)
         radius = rect.height() / 2.0
 
-        off_c = QColor("#39393D")
-        on_c = QColor(PALETTE["accent_green"])
+        if self._quiet:
+            off_c = QColor(44, 44, 46)
+            on_c = QColor(92, 92, 98)
+        else:
+            off_c = QColor("#39393D")
+            on_c = QColor(PALETTE["accent_green"])
         t = max(0.0, min(1.0, self._thumb_pos))
         track_color = QColor(
             int(off_c.red() + (on_c.red() - off_c.red()) * t),
@@ -83,7 +104,8 @@ class MacToggle(QCheckBox):
             track_color.setAlphaF(0.4)
 
         painter.setBrush(track_color)
-        painter.setPen(QPen(QColor(255, 255, 255, 22), 1.0))
+        border_alpha = 45 if (self._quiet and t > 0.5) else 22
+        painter.setPen(QPen(QColor(255, 255, 255, border_alpha), 1.0))
         painter.drawRoundedRect(rect, radius, radius)
 
         thumb_d = rect.height() - 4.0

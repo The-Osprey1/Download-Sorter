@@ -59,7 +59,7 @@ def test_duplicate_isolation_and_batch_and_single_undo(app_paths: AppPaths) -> N
     assert len(res["moved"]) == 2
 
     moved_by_name = {m["filename"]: Path(m["dest_path"]) for m in res["moved"]}
-    assert "_Duplicates" in moved_by_name["dup.pdf"].parts
+    assert "Duplicates" in moved_by_name["dup.pdf"].parts
     assert moved_by_name["diff.pdf"].name == "diff (2).pdf"
 
     # Single-move undo restores just one file
@@ -149,3 +149,85 @@ def test_3mf_grace_hold_expired_and_file_held_now_undo(app_paths: AppPaths) -> N
     undo_res = svc.undo_last_batch()
     assert undo_res["restored"] == 1
     assert fresh_3mf.exists()
+
+
+def test_old_underscore_duplicates_folder_is_renamed_and_history_follows(app_paths) -> None:  # noqa: ANN001
+    from download_sorter.db import StateDB
+    from download_sorter.fs_ops import migrate_duplicates_folder
+
+    dl = app_paths.downloads_dir
+    old = dl / "_Duplicates" / "2026-11"
+    old.mkdir(parents=True)
+    (old / "report (1).pdf").write_bytes(b"x")
+    db = StateDB(app_paths.data_dir / "t.db")
+    db.record_move(
+        batch_id="b1",
+        filename="report (1).pdf",
+        src_path=dl / "report (1).pdf",
+        dest_path=old / "report (1).pdf",
+        reason="dup",
+        matched_rule="",
+        match_type="duplicate",
+        is_duplicate=True,
+    )
+    assert migrate_duplicates_folder(dl, db) == 1
+    assert (dl / "Duplicates" / "2026-11" / "report (1).pdf").is_file()
+    assert not (dl / "_Duplicates").exists()
+    rows = db.get_batch_moves("b1")
+    assert Path(rows[0]["dest_path"]) == dl / "Duplicates" / "2026-11" / "report (1).pdf"
+    # Running again is harmless
+    assert migrate_duplicates_folder(dl, db) == 0
+    db.close()
+
+
+def test_new_file_in_a_subfolder_is_rerouted_but_hand_moves_and_own_folders_stay(app_paths) -> None:  # noqa: ANN001
+    from types import SimpleNamespace
+
+    from download_sorter.config import Config, save_config
+    from download_sorter.service import SorterService, _TopLevelEventHandler
+
+    cfg = Config.with_starter_defaults()
+    cfg.settle_seconds = 0.0
+    save_config(cfg, app_paths)
+    svc = SorterService(app_paths)
+    dl = app_paths.downloads_dir
+    (dl / "Images").mkdir()
+    stray = dl / "Images" / "bracket.step"
+    stray.write_bytes(b"ISO-10303-21;")
+    (dl / "My Project").mkdir()
+    mine = dl / "My Project" / "bolt.step"
+    mine.write_bytes(b"ISO-10303-21;")
+    (dl / "Documents" / "Career").mkdir(parents=True)
+    chosen = dl / "Documents" / "Career" / "cover_letter.pdf"
+    chosen.write_bytes(b"%PDF-1.4")
+
+    res = svc._process_paths([stray, mine, chosen], settle_seconds=0.0)
+    assert len(res["moved"]) == 1
+    assert not stray.exists()
+    assert mine.exists()  # a folder of your own: left alone
+    assert chosen.exists()  # same kind of folder: you put it there on purpose
+    dest = Path(res["moved"][0]["dest_path"].replace("\\", "/"))
+    assert dest.name == "bracket.step" and "Images" not in dest.parts
+
+    # Turned off: nothing in subfolders moves.
+    off = Config.with_starter_defaults()
+    off.sort_new_files_in_subfolders = False
+    svc.update_config(off)
+    again = dl / "Images" / "again.step"
+    again.write_bytes(b"ISO-10303-21;")
+    assert svc._process_paths([again], settle_seconds=0.0)["moved"] == []
+
+    # The watcher queues files created or renamed in place, never files moved between folders.
+    top, nested = [], []
+    handler = _TopLevelEventHandler(dl, top.append, nested.append)
+    handler.on_created(SimpleNamespace(is_directory=False, src_path=str(dl / "Images" / "new.step")))
+    handler.on_moved(
+        SimpleNamespace(
+            is_directory=False, src_path=str(dl / "Images" / "a.crdownload"), dest_path=str(dl / "Images" / "a.step")
+        )
+    )
+    handler.on_moved(
+        SimpleNamespace(is_directory=False, src_path=str(dl / "x.step"), dest_path=str(dl / "Images" / "x.step"))
+    )
+    assert [p.name for p in nested] == ["new.step", "a.step"]
+    assert top == []

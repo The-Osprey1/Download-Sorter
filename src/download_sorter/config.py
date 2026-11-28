@@ -509,6 +509,9 @@ NEW_INSTALL_TEMPLATES: tuple[str, ...] = ()
 # A new install starts with the simpler window (no Folder Architecture page).
 NEW_INSTALL_SHOW_ADVANCED = False
 
+# File holds (.3mf) and project burst grouping are strictly opt-in on a new install.
+NEW_INSTALL_HOLD_3MF = False
+
 
 @dataclass
 class Config:
@@ -526,6 +529,11 @@ class Config:
     ribbon_timeout_seconds: float = 6.0
     hold_3mf_enabled: bool = True
     hold_3mf_days: int = 7
+    project_grouping_enabled: bool = False
+    auto_align_existing: bool = False
+    # Also sort brand-new files that land in a folder inside Downloads (for example a
+    # STEP file Fusion saved into Images). Files you move yourself are never touched.
+    sort_new_files_in_subfolders: bool = True
     auto_unzip_all: bool = False
     zip_keep_original: bool = True
     zip_peek_enabled: bool = False
@@ -635,6 +643,8 @@ class Config:
         """The settings a new install (or Return to Defaults) starts from."""
         cfg = cls.with_starter_defaults(NEW_INSTALL_TEMPLATES)
         cfg.show_advanced_tools = NEW_INSTALL_SHOW_ADVANCED
+        cfg.hold_3mf_enabled = NEW_INSTALL_HOLD_3MF
+        cfg.project_grouping_enabled = False
         return cfg
 
     def resolved_watch_folder(self, paths: AppPaths | None = None) -> Path:
@@ -683,6 +693,9 @@ class Config:
             "ribbon_timeout_seconds": self.ribbon_timeout_seconds,
             "hold_3mf_enabled": self.hold_3mf_enabled,
             "hold_3mf_days": self.hold_3mf_days,
+            "project_grouping_enabled": self.project_grouping_enabled,
+            "auto_align_existing": self.auto_align_existing,
+            "sort_new_files_in_subfolders": self.sort_new_files_in_subfolders,
             "auto_unzip_all": self.auto_unzip_all,
             "zip_keep_original": self.zip_keep_original,
             "zip_peek_enabled": self.zip_peek_enabled,
@@ -723,6 +736,9 @@ class Config:
             ribbon_timeout_seconds=data.get("ribbon_timeout_seconds", 6.0),
             hold_3mf_enabled=data.get("hold_3mf_enabled", True),
             hold_3mf_days=data.get("hold_3mf_days", 7),
+            project_grouping_enabled=bool(data.get("project_grouping_enabled", False)),
+            auto_align_existing=bool(data.get("auto_align_existing", False)),
+            sort_new_files_in_subfolders=bool(data.get("sort_new_files_in_subfolders", True)),
             auto_unzip_all=bool(data.get("auto_unzip_all", False)),
             zip_keep_original=bool(data.get("zip_keep_original", True)),
             zip_peek_enabled=bool(data.get("zip_peek_enabled", False)),

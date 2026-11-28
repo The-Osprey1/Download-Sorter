@@ -31,12 +31,14 @@ from download_sorter.config import (
 from download_sorter.db import StateDB
 from download_sorter.dest import is_under_watch_root, to_relative_dest
 from download_sorter.fs_ops import (
+    DUPLICATES_DIR,
     ProgressCallback,
     cleanup_orphaned_staging,
     delete_files_safely,
     execute_move,
     extract_zip_safely,
     is_slicer_running,
+    migrate_duplicates_folder,
     prune_empty_folders,
     resolve_duplicate_delete_new_locate_old,
     resolve_duplicate_keep_both,
@@ -52,35 +54,61 @@ from download_sorter.router import FileCandidate, RouteDecision, RouteStep, cand
 
 
 class _TopLevelEventHandler(FileSystemEventHandler):
-    """Queue only immediate child file events inside ``watch_root``."""
+    """Queue new files in ``watch_root``.
 
-    def __init__(self, watch_root: Path, on_candidate: Callable[[Path], None]) -> None:
+    Files directly in the folder are always queued. With ``on_nested`` set, a file
+    that is *new* inside a subfolder is queued too: one that was created there, or
+    renamed in place (a browser finishing a download). A file moved from one folder
+    to another is someone tidying by hand, so it is left alone.
+    """
+
+    def __init__(
+        self,
+        watch_root: Path,
+        on_candidate: Callable[[Path], None],
+        on_nested: Callable[[Path], None] | None = None,
+    ) -> None:
         self.watch_root = watch_root.resolve()
         self.on_candidate = on_candidate
+        self.on_nested = on_nested
 
-    def _enqueue_if_top_level(self, raw_path: str | bytes) -> None:
+    @staticmethod
+    def _path(raw_path: str | bytes) -> Path | None:
         if not raw_path:
-            return
+            return None
         text = raw_path.decode("utf-8", errors="ignore") if isinstance(raw_path, bytes) else raw_path
-        path = Path(text)
+        return Path(text)
+
+    def _parent(self, path: Path) -> Path:
         try:
-            parent = path.resolve().parent
+            return path.resolve().parent
         except OSError:
-            parent = path.parent
+            return path.parent
+
+    def _enqueue_if_top_level(self, raw_path: str | bytes, *, new_file: bool = False) -> None:
+        path = self._path(raw_path)
+        if path is None:
+            return
+        parent = self._parent(path)
         if parent == self.watch_root:
             self.on_candidate(path)
+        elif new_file and self.on_nested is not None and self.watch_root in parent.parents:
+            self.on_nested(path)
 
     def on_created(self, event) -> None:  # type: ignore[no-untyped-def]
         if not event.is_directory:
-            self._enqueue_if_top_level(event.src_path)
+            self._enqueue_if_top_level(event.src_path, new_file=True)
 
     def on_modified(self, event) -> None:  # type: ignore[no-untyped-def]
         if not event.is_directory:
             self._enqueue_if_top_level(event.src_path)
 
     def on_moved(self, event) -> None:  # type: ignore[no-untyped-def]
-        if not event.is_directory:
-            self._enqueue_if_top_level(event.dest_path)
+        if event.is_directory:
+            return
+        src, dest = self._path(event.src_path), self._path(event.dest_path)
+        renamed_in_place = src is not None and dest is not None and self._parent(src) == self._parent(dest)
+        self._enqueue_if_top_level(event.dest_path, new_file=renamed_in_place)
 
 
 def _overlaps(a: Path, b: Path) -> bool:
@@ -463,7 +491,7 @@ class SorterService:
     # Native Duplicate & Watch-Folder Deletion Helpers
     # ------------------------------------------------------------------
     def list_duplicate_files(self, root: Path | None = None) -> list[dict[str, Any]]:
-        """Return quarantined duplicate files inside ``watch_root / '_Duplicates'``."""
+        """Return quarantined duplicate files inside ``watch_root / 'Duplicates'``."""
         watch_dir = (root or self.watch_root).resolve()
         return scan_duplicate_files(watch_dir, db=self.db)
 
@@ -581,9 +609,9 @@ class SorterService:
         use_recycle_bin: bool = True,
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
-        """Safely remove selected duplicate files confined strictly inside ``_Duplicates``."""
+        """Safely remove selected duplicate files confined strictly inside ``Duplicates``."""
         watch_dir = self.watch_root.resolve()
-        dup_root = watch_dir / "_Duplicates"
+        dup_root = watch_dir / DUPLICATES_DIR
         res = delete_files_safely(
             paths,
             watch_root=watch_dir,
@@ -594,7 +622,7 @@ class SorterService:
         if res["deleted"]:
             self.db.mark_orphaned_by_dest(res["deleted"])
             self.db.checkpoint()
-            # Clean up any empty monthly subfolders inside _Duplicates
+            # Clean up any empty monthly subfolders inside Duplicates
             if dup_root.is_dir():
                 for subdir in sorted(
                     [p for p in dup_root.rglob("*") if p.is_dir()],
@@ -661,13 +689,40 @@ class SorterService:
         }
     )
 
+    _BUNDLE_COMPANION_EXTS: frozenset[str] = frozenset(
+        {".dll", ".pak", ".xp3", ".pck", ".asar", ".unity3d", ".rpa", ".rgss3a", ".winmd", ".sig"}
+    )
+    _BUNDLE_COMPANION_DIRS: frozenset[str] = frozenset(
+        {"data", "savedata", "save", "saves", "locales", "resources", "www", "mono", "assets"}
+    )
+
     @classmethod
     def _is_project_or_bundle_dir(cls, dir_path: Path) -> bool:
         try:
+            folder_stem = dir_path.name.lower()
+            parent_name = dir_path.parent.name.lower() if dir_path.parent else ""
+            if parent_name in ("games", "portable apps", "extracted"):
+                return True
+            has_exe = False
+            has_bundle_companion = False
             with os.scandir(dir_path) as it:
                 for entry in it:
-                    if entry.name.lower() in cls._PROJECT_MARKER_NAMES:
+                    ename = entry.name.lower()
+                    if ename in cls._PROJECT_MARKER_NAMES:
                         return True
+                    if entry.is_file(follow_symlinks=False):
+                        # Arduino sketch folder requires <Folder>/<Folder>.ino to stay together
+                        if ename == f"{folder_stem}.ino":
+                            return True
+                        ext = Path(ename).suffix.lower()
+                        if ext in (".exe", ".app"):
+                            has_exe = True
+                        elif ext in cls._BUNDLE_COMPANION_EXTS or ename in ("readme.txt", "config.ini", "settings.ini"):
+                            has_bundle_companion = True
+                    elif entry.is_dir(follow_symlinks=False) and ename in cls._BUNDLE_COMPANION_DIRS:
+                        has_bundle_companion = True
+            if has_exe and has_bundle_companion:
+                return True
         except OSError:
             return False
         return False
@@ -679,7 +734,7 @@ class SorterService:
 
         def _add_path(raw: str) -> None:
             norm = str(raw or "").replace("/", "\\").strip("\\ ").lower()
-            if not norm or norm == "_duplicates":
+            if not norm or norm in ("duplicates", "_duplicates"):
                 return
             parts = [p.strip() for p in norm.split("\\") if p.strip()]
             for i in range(1, len(parts) + 1):
@@ -719,6 +774,7 @@ class SorterService:
 
         rels.discard("")
         rels.discard("_duplicates")
+        rels.discard("duplicates")
         return rels
 
     @staticmethod
@@ -745,6 +801,7 @@ class SorterService:
                             roots.add(nm)
         roots.discard("")
         roots.discard("_duplicates")
+        roots.discard("duplicates")
         return roots
 
     def preview_architecture_shift(
@@ -761,6 +818,10 @@ class SorterService:
 
         arch = architecture_from_config(target_config)
         all_folders = arch.all_target_folders()
+        surviving_arch_lower = {f.replace("/", "\\").strip("\\").lower() for f in all_folders}
+        format_sub_names_lower = {sub.lower() for sub in DEFAULT_TYPE_SUBFOLDERS.values()} | {
+            sub.lower() for sub in target_config.type_subfolders.values()
+        }
         planned: list[dict[str, Any]] = []
         folders_needed: list[str] = []
 
@@ -815,24 +876,41 @@ class SorterService:
                 continue
             seen_paths.add(key_path)
 
-            cand = candidate_from_path(fpath, lazy_zone=True)
-            dec = evaluate(cand, target_config, include_trace=False)
-            if dec.action != "move" or dec.relative_dest is None:
-                continue
-            if is_top_level and self._is_3mf_held(fpath, target_config):
-                continue
+            try:
+                cand = candidate_from_path(fpath, lazy_zone=True)
+                dec = evaluate(cand, target_config, include_trace=False)
+                if dec.action != "move" or dec.relative_dest is None:
+                    continue
+                if is_top_level and self._is_3mf_held(fpath, target_config):
+                    continue
 
-            dest_candidate = watch_dir / dec.relative_dest
-            if os.path.normcase(str(dest_candidate)) == key_path:
-                continue
+                dest_candidate = watch_dir / dec.relative_dest
+                if os.path.normcase(str(dest_candidate)) == key_path:
+                    continue
 
-            resolved = fpath.resolve()
-            dest_full = dest_candidate.resolve()
-            if dest_full == resolved:
-                continue
+                resolved = fpath.resolve()
+                dest_full = dest_candidate.resolve()
+                if dest_full == resolved:
+                    continue
 
-            src_rel = str(resolved.relative_to(watch_dir))
-            dest_rel = str(dec.relative_dest)
+                src_rel = str(resolved.relative_to(watch_dir))
+                dest_rel = str(dec.relative_dest)
+
+                # Protect files already inside a surviving curated topic/project subfolder
+                # (e.g. "Documents\School & Coursework" or "Documents\Bills & Receipts")
+                # from being demoted back into a generic extension bucket ("Documents\PDF").
+                if not is_top_level and dec.match_type != "rule":
+                    cur_rel_dir = str(Path(src_rel).parent).replace("/", "\\").strip("\\")
+                    cur_parts = [p for p in cur_rel_dir.split("\\") if p and p != "."]
+                    if (
+                        len(cur_parts) >= 2
+                        and cur_rel_dir.lower() in surviving_arch_lower
+                        and cur_parts[-1].lower() not in format_sub_names_lower
+                    ):
+                        continue
+            except (OSError, ValueError) as exc:
+                logging.warning("Architecture preview skipped %s: %s", fpath, exc)
+                continue
             rel_parent = str(dec.relative_dest.parent)
             if rel_parent and rel_parent != "." and rel_parent not in folders_needed:
                 folders_needed.append(rel_parent)
@@ -918,16 +996,16 @@ class SorterService:
             if on_progress is not None and total > 0:
                 on_progress(total, total, "Complete")
 
-            # Remove now-empty old managed directories cleanly (never touch _Duplicates or unmanaged dirs)
+            # Remove now-empty old managed directories cleanly (never touch Duplicates or unmanaged dirs)
             if watch_dir.is_dir():
                 for sub_root in list(watch_dir.iterdir()):
                     if not sub_root.is_dir() or sub_root.name.lower() not in managed_before:
                         continue
-                    for dirpath in sorted(
-                        [p for p in sub_root.rglob("*") if p.is_dir()] + [sub_root],
-                        key=lambda p: len(p.parts),
-                        reverse=True,
-                    ):
+                    try:
+                        subdirs = [p for p in sub_root.rglob("*") if p.is_dir()] + [sub_root]
+                    except OSError:
+                        continue
+                    for dirpath in sorted(subdirs, key=lambda p: len(p.parts), reverse=True):
                         try:
                             if not any(dirpath.iterdir()):
                                 dirpath.rmdir()
@@ -1059,6 +1137,111 @@ class SorterService:
             "batch_id": batch_id if moved else "",
             "moved": moved,
             "moved_count": len(moved),
+        }
+
+    def fill_folder_on_disk(
+        self,
+        folder_rel: str,
+        *,
+        root: Path | None = None,
+        on_progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Create ``folder_rel`` in Downloads and move in the loose files that now belong there.
+
+        Looks at files sitting loose at the top of Downloads and, for a folder inside
+        another, the files sitting directly in its parent. A file moves only when the
+        current settings send it into this folder. Held 3D print files and files still
+        being written are left alone. Every move is recorded so it can be undone.
+        """
+        with self._lock:
+            cfg = self.config
+        watch_dir = (root or self.watch_root).resolve()
+        clean = to_relative_dest(folder_rel, fallback="")
+        if not clean or not watch_dir.is_dir():
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+        rel_parts = [p for p in str(clean).replace("\\", "/").split("/") if p]
+        folder_dir = watch_dir.joinpath(*rel_parts).resolve()
+        if folder_dir == watch_dir or not is_under_watch_root(folder_dir, watch_dir):
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+        created = not folder_dir.exists()
+        try:
+            folder_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logging.warning("Could not create folder %s: %s", folder_dir, exc)
+            return {"ok": False, "batch_id": "", "moved": [], "moved_count": 0, "created": False}
+
+        want = "/".join(rel_parts).lower()
+        look_in = [watch_dir]
+        parent_dir = folder_dir.parent
+        if parent_dir != watch_dir and is_under_watch_root(parent_dir, watch_dir):
+            look_in.append(parent_dir)
+        now = time.time()
+        plan: list[tuple[Path, RouteDecision, str]] = []
+        for base in look_in:
+            try:
+                entries = sorted((e for e in base.iterdir() if e.is_file()), key=lambda p: p.name.lower())
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if now - entry.stat().st_mtime < 5.0:
+                        continue  # probably still downloading
+                except OSError:
+                    continue
+                cand = candidate_from_path(entry)
+                decision = evaluate(cand, cfg, include_trace=False)
+                if decision.action != "move" or decision.relative_dest is None:
+                    continue
+                dest_folder = str(Path(decision.relative_dest).parent).replace("\\", "/").lower().strip("/")
+                if dest_folder != want and not dest_folder.startswith(want + "/"):
+                    continue
+                if self._is_3mf_held(entry, cfg):
+                    continue
+                plan.append((entry, decision, cand.source_url))
+
+        total = len(plan)
+        batch_id = f"fill-{uuid.uuid4().hex[:8]}"
+        moved: list[dict[str, Any]] = []
+        for idx, (entry, decision, url) in enumerate(plan, start=1):
+            if on_progress is not None:
+                on_progress(idx - 1, total, entry.name)
+            try:
+                rec = execute_move(
+                    entry,
+                    decision,
+                    batch_id=batch_id,
+                    db=self.db,
+                    watch_root=watch_dir,
+                    settle_seconds=0.0,
+                    source_url=url,
+                )
+            except OSError as exc:
+                logging.warning("Folder fill skipped %s: %s", entry, exc)
+                continue
+            if rec is not None:
+                moved.append(rec)
+        if on_progress is not None and total > 0:
+            on_progress(total, total, "Complete")
+        logging.info(
+            "Folder fill %s: %s, %d of %d matching files moved",
+            clean,
+            "created" if created else "already there",
+            len(moved),
+            total,
+        )
+        if moved:
+            self.db.checkpoint()
+            if self.on_moves_completed is not None:
+                try:
+                    self.on_moves_completed(batch_id, moved)
+                except Exception:
+                    logging.exception("Error in on_moves_completed callback")
+        return {
+            "ok": True,
+            "batch_id": batch_id if moved else "",
+            "moved": moved,
+            "moved_count": len(moved),
+            "created": created,
         }
 
     def inspect_folder_on_disk(
@@ -1245,6 +1428,7 @@ class SorterService:
                 cleanup_orphaned_staging(root)
             except Exception:
                 logging.exception("Could not clean up orphaned staging directories in %s", root)
+            migrate_duplicates_folder(root, self.db)
         try:
             self.db.prune_missing_hashes()
         except Exception:
@@ -1310,6 +1494,50 @@ class SorterService:
             except Exception:
                 pass
             self.quick_switcher_monitor = None
+
+    _NESTED_SKIP_PARTS = frozenset({".staging", "duplicates", "_duplicates", "$recycle.bin"})
+
+    def _enqueue_nested(self, path: Path) -> None:
+        """A new file inside a subfolder: queue it only when that is switched on."""
+        if not self.config.sort_new_files_in_subfolders:
+            return
+        if any(part.lower() in self._NESTED_SKIP_PARTS or part.startswith(".") for part in path.parts[-6:-1]):
+            return
+        self._enqueue(path)
+
+    def _nested_decision(self, path: Path, root: Path, cfg: Config) -> RouteDecision | None:
+        """Where a new file inside a subfolder of ``root`` should go, or None to leave it.
+
+        It moves only when it landed in one of your designed folders for a different
+        kind of file (a STEP file saved into Images). Folders of your own, project
+        folders, and any folder of the same kind (a PDF saved into Documents\\Career)
+        are left alone.
+        """
+        try:
+            rel_parent = path.resolve().parent.relative_to(root)
+        except (OSError, ValueError):
+            return None
+        parts = rel_parent.parts
+        if not parts or any(p.startswith((".", "_")) or p.lower() in self._NESTED_SKIP_PARTS for p in parts):
+            return None
+        rel_key = "\\".join(parts).lower()
+        designed = {f.replace("/", "\\").strip("\\").lower() for f in self._managed_relative_folders(cfg)}
+        if rel_key not in designed:
+            return None  # a folder of your own, such as a project or an unzipped archive
+        cur = root
+        for part in parts:
+            cur = cur / part
+            if self._is_project_or_bundle_dir(cur):
+                return None
+        decision = evaluate(candidate_from_path(path), cfg, include_trace=False)
+        if decision.action != "move" or decision.relative_dest is None or decision.match_type == "fallback":
+            return None
+        dest_key = str(decision.relative_dest.parent).replace("/", "\\").strip("\\").lower()
+        if not dest_key or dest_key == rel_key or rel_key.startswith(dest_key + "\\"):
+            return None  # already in the right folder, or a more specific one inside it
+        if dest_key.split("\\")[0] == rel_key.split("\\")[0]:
+            return None  # same kind of folder (a PDF saved into Documents\\Career stays there)
+        return decision
 
     def _enqueue(self, path: Path) -> None:
         with self._lock:
@@ -1385,7 +1613,9 @@ class SorterService:
             return
         observer = Observer()
         for root in roots:
-            observer.schedule(_TopLevelEventHandler(root, self._enqueue), str(root), recursive=False)
+            observer.schedule(
+                _TopLevelEventHandler(root, self._enqueue, self._enqueue_nested), str(root), recursive=True
+            )
         observer.start()
         with self._lock:
             displaced = self._observer
@@ -1477,12 +1707,26 @@ class SorterService:
             except OSError:
                 self._clear_busy(path)
                 continue
+            nested = False
             if root not in roots:
-                self._clear_busy(path)
-                continue
+                base = next((r for r in roots if r in root.parents), None)
+                nested_decision = (
+                    self._nested_decision(path, base, cfg if base == primary else extra_cfg)
+                    if base is not None and cfg.sort_new_files_in_subfolders
+                    else None
+                )
+                if nested_decision is None:
+                    self._clear_busy(path)
+                    continue
+                nested = True
+                root = base
 
             cand = candidate_from_path(path)
-            decision = evaluate(cand, cfg if root == primary else extra_cfg, include_trace=False)
+            decision = (
+                nested_decision
+                if nested
+                else evaluate(cand, cfg if root == primary else extra_cfg, include_trace=False)
+            )
             if decision.match_type == "fallback" and root == primary and cfg.ai_auto_route_fallback:
                 if ai_learner is None:
                     ai_learner = self.get_route_learner()
